@@ -141,7 +141,7 @@ jobs:
           fi
 
   windows-on-demand:
-    runs-on: ${{ github.ref == 'refs/heads/main' && fromJSON('["self-hosted","Windows","X64","packer-windows"]') || 'windows-latest' }}
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@v6
 
