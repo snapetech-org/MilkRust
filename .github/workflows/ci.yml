@@ -141,7 +141,7 @@ jobs:
           fi
 
   windows-on-demand:
-    runs-on: [self-hosted, Windows, X64, packer-windows]
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@v6
 
