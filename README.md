@@ -125,3 +125,7 @@ npm run content:validate
 ```
 
 Third-party packs live in [`content/catalog.json`](content/catalog.json). Vetted redistributable content goes in `content/third-party`; aggressive public community imports with unclear/no explicit licenses go in [`content/community-unlicensed`](content/community-unlicensed) and are excluded from default builds unless a distribution opts in. The repo currently vendors the MIT-licensed [`butterchurn-presets@2.4.7`](content/third-party/butterchurn-presets-2.4.7) converted preset package plus public projectM community preset/texture packs.
+
+## Local security scanning
+
+Run `./scripts/security-scan-local.sh` for local Semgrep CE and the Trivy scanners that fit this repository. The installed pre-commit hook runs Semgrep on staged source/config files only; Trivy runs on demand or in CI. This public repository also runs Semgrep CE in GitHub Actions on changes and weekly. See [security-scanning.md](docs/security-scanning.md). Use `./scripts/update-security-tools.sh` to refresh local scanner data and the Trivy database.
