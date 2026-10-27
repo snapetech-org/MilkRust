@@ -15,6 +15,6 @@ Confidence:
 | --- | --- |
 | Proven | Reproduced by test, script, crash, or direct static proof. |
 | Likely | Strong static evidence with a clear exploit/failure path. |
-| Speculative | Suspicious shape that needs more proof before implementation. |
+| Unverified | Scanner or report output needs triage; keep it out of the confirmed-finding ledger until verified. |
 
 Accepted findings must be sibling-searched, fixed with behavior coverage, and pinned in a durable gate.

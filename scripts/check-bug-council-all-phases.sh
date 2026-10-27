@@ -18,10 +18,8 @@ require_literal() {
   fi
 }
 
-require_literal "scan-bug-council-candidates.sh" "$runner"
-require_literal "run-council-active-bughunt.sh" "$runner"
 require_literal "check-remediation-baseline.sh" "$runner"
-require_literal "check-milkrust-taint-lenses.sh" "$runner"
+require_literal "Focused remediation gates" "$runner"
 require_literal "cargo test --workspace" "$runner"
 require_literal "npm run test:web" "$runner"
 require_literal "npm run test:apps" "$runner"

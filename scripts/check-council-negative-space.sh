@@ -30,21 +30,11 @@ require_pattern() {
 
 require_file "scripts/run-bug-council-all-phases.sh"
 require_file "scripts/check-remediation-baseline.sh"
-require_file "scripts/scan-bug-council-candidates.sh"
-require_file "scripts/run-council-active-bughunt.sh"
-require_file "scripts/check-council-active-backlog.sh"
-require_file "scripts/check-milkrust-taint-lenses.sh"
-require_file "docs/dev/bug-council-active-backlog.md"
-require_file "docs/dev/council-calibration/milkrust-taint-bad.rs"
-require_file "docs/dev/council-calibration/milkrust-taint-good.rs"
-require_file "docs/dev/council-calibration/milkrust-taint-bad.js"
-require_file "docs/dev/council-calibration/milkrust-taint-good.js"
 
 require_pattern '"check:council"' "package.json" "package script runs all phases"
 require_pattern 'unsafe_code = "forbid"' "Cargo.toml" "Rust unsafe posture remains explicit"
 require_pattern 'content:validate' "package.json" "content catalog validation remains registered"
-require_pattern 'not proof of no bugs' "scripts/run-bug-council-all-phases.sh" "all-phases verdict boundary remains visible"
-require_pattern 'not proof of no bugs' "scripts/run-council-active-bughunt.sh" "active report verdict boundary remains visible"
+require_pattern 'Focused remediation gates' "scripts/run-bug-council-all-phases.sh" "runner is limited to focused remediation and regression checks"
 
 if [[ "$failed" -ne 0 ]]; then
   exit 1

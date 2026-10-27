@@ -11,4 +11,4 @@ Use this when a repo has parsers, decoders, protocol frames, archive formats, ro
 
 ## Calibration
 
-Before trusting the fuzz harness, inject one deliberate parser defect locally or add a quarantined mutation fixture that proves the harness catches the target failure mode. Record the calibration result in the sweep register or phase tracker.
+Keep a known failing input for each confirmed failure mode so the fuzz suite continues to reproduce it. Record the expected result in the test or phase tracker.

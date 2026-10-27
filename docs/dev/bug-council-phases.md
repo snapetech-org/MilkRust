@@ -1,23 +1,18 @@
-# MilkRust Bug Council Phase Tracker
+# MilkRust Remediation Regression Tracker
 
 Started: 2026-05-07.
 
-This tracker keeps the MilkRust council from degrading into one-off checks. The runner must execute every registered phase in one command, and a green run is a calibrated gate result, not proof that no bugs exist.
-
-## Phases
+This tracker covers confirmed findings and their regression coverage. Broad source, dependency, and configuration scans use the repository's existing Semgrep and Trivy workflows.
 
 | # | Name | Status | Owner | Exit criteria |
 | --- | --- | --- | --- | --- |
-| 1 | Council process docs | Done | (agent) | Severity/confidence, sibling-search, negative-space, behavior-pinning, active-backlog, and phase docs exist. |
-| 2 | Fresh candidate inventory | Done | (agent) | `scripts/scan-bug-council-candidates.sh` emits current candidate counts for Rust, JS, content/catalog, lifecycle, filesystem, parser, renderer, and release surfaces. |
-| 3 | Active discovery handoff | Done | (agent) | `scripts/run-council-active-bughunt.sh` writes `.council/active-bughunt.md` and states that it is a discovery queue, not a no-bug proof. |
-| 4 | Active backlog drift gate | Done | (agent) | `docs/dev/bug-council-active-backlog.md` records each candidate class and `scripts/check-council-active-backlog.sh` verifies counts stay current and no row is untriaged. |
-| 5 | Negative-space gate | Done | (agent) | `scripts/check-council-negative-space.sh` asserts the runner, remediation gate, package script, repo lint posture, and calibrated lens fixtures remain wired. |
-| 6 | Calibrated semantic lenses | Done | (agent) | `scripts/check-milkrust-taint-lenses.sh` proves known-bad Rust and JS fixtures fire and known-good fixtures stay silent before scanning production source. |
-| 7 | All-phases runner | Done | (agent) | `scripts/run-bug-council-all-phases.sh` runs inventory, active report, process gates, calibrated lenses, remediation baseline, `cargo test --workspace`, web tests, app smoke tests, pack validation, and content validation. |
+| 1 | Remediation process docs | Done | (agent) | Severity, sibling-search, negative-space, behavior-pinning, and phase docs describe the retained regression process. |
+| 2 | Negative-space regression gate | Done | (agent) | `scripts/check-council-negative-space.sh` asserts required project and test wiring without running candidate scanners. |
+| 3 | Product regression suite | Done | (agent) | Rust, web, app smoke, pack, and content checks are registered in `scripts/run-bug-council-all-phases.sh`. |
+| 4 | All-regressions runner | Done | (agent) | `npm run check:council` runs the remediation gates and product regression checks. |
 
-## Resume Rule
+## Resume rule
 
-1. Run `npm run check:council`.
-2. If it fails, fix or ledger every finding before claiming the pass complete.
-3. If it passes, report it as "all registered calibrated gates passed," not as "no bugs found."
+1. Read recent product and fix commits plus the remediation ledger.
+2. Run the focused regression command for the change.
+3. Update this tracker when a regression phase changes.

@@ -2,6 +2,6 @@
 
 | ID | Status | Severity | Confidence | Area | Finding | Resolution |
 | --- | --- | --- | --- | --- | --- | --- |
-| RM-001 | Guarded | High | Proven | Council loop | MilkRust had no repo-native all-phases bughunt runner, so future agents could confuse ad hoc checks with a full council pass. | Added all-phases runner, active inventory, backlog drift gate, negative-space gate, and calibrated Rust/JS semantic lenses. |
+| RM-001 | Guarded | High | Proven | Regression checks | The broad candidate scanner and active backlog were retired; focused remediation and product regression checks remain. | Removed candidate inventory, generated bughunt reports, and scanner-specific gates. |
 
 Status values: `New`, `Accepted`, `Fixed`, `Guarded`, `False positive`, `Out of scope`.
