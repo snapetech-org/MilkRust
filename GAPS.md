@@ -22,11 +22,13 @@ This audit replaces the older roadmap snapshot, which no longer matched the crat
 - Multi-state `.milk2` files are also marked unsupported by the current subset until saved blend patterns and transition state are implemented; the generic two-frame crossfade remains an intermediate representation.
 - Compatibility JSON now reports per-file read/parse/subset status, per-preset diagnostics, and explicit `renderStatus: not-run` / `fidelityStatus: not-assessed`; geometry statistics are labeled as non-render output. The community-report generator labels static-subset results and records a deterministic SHA-256 fingerprint for each source pack. The checked-in May 2026 report remains a historical snapshot until regenerated on the current branch.
 - npm scripts now call the filenames that actually exist under `tools/`.
-- Logical `&&` / `||` now preserve MilkDrop short-circuit behavior while parsing skipped right operands without executing them; regression cases cover mixed precedence, skipped unknown calls and suppressed assignment side effects. The test source is committed but unrun.
+- Both Rust expression evaluators now preserve MilkDrop `&&` / `||` short-circuiting and lazy `if()` / ternary branches, use the reference evaluator's 1e-5 boolean threshold, treat `band` / `bor` / `bnot` as boolean helpers, and reserve `&` / `|` for integer bitwise operations. The `^` operator is left-associative exponentiation above multiplication, `invsqrt` follows projectM's double-precision fast inverse-square-root routine, `%` / `mod` use integer remainder, and the standard `^=` / `%=` / `&=` / `|=` assignments are parsed. `if()` lvalue passthrough covers simple variable and megabuf targets. `memset` and projectM's no-op `freembuf` are implemented with bounded memory ranges, and `bxor` is no longer advertised as a MilkDrop built-in. Regression cases are committed but unrun.
 
 These changes close the identified false-positive and denominator-loss paths in source. The corpus totals and real renderer outcomes still require execution on the pinned source tree.
 
 ## Remaining engine work
+
+- Expression conformance is still incomplete: reference-valued results for memory helpers and other function calls, all documented memory-index edge cases, exact RNG behavior, and full precedence/semantic comparison against the reference evaluator still need coverage. The current numeric evaluator must not be described as complete MilkDrop EEL.
 
 - Establish a versioned conformance corpus and emit per-file discovered/read/parse/compile/render/fidelity states, including missing textures and exclusions.
 - Compare classic `.milk` state, wave/shape equations, mesh warp, feedback, blur/noise resources, transitions, shader semantics and color/coordinate behavior against a reference renderer.
