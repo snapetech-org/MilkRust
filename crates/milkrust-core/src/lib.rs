@@ -1349,8 +1349,18 @@ pub fn validate_milkrust_import(source: &str) -> Result<String, String> {
         .iter()
         .enumerate()
         .filter_map(|(index, preset)| {
+            let content_error = if milkrust_preset_has_content(preset) {
+                String::new()
+            } else {
+                "MilkRust preset content is empty".to_string()
+            };
             let report = analyze_milkrust_preset_compatibility(preset);
-            let error = milkrust_compatibility_error(&report);
+            let compatibility_error = milkrust_compatibility_error(&report);
+            let error = [content_error, compatibility_error]
+                .into_iter()
+                .filter(|value| !value.is_empty())
+                .collect::<Vec<_>>()
+                .join("; ");
             if error.is_empty() {
                 None
             } else if parsed.presets.len() == 1 {
@@ -3942,6 +3952,19 @@ fn milkrust_entry_has_content(entry: &MilkRustIndexedEntry) -> bool {
     !entry.base_values.is_empty() || entry.equations != MilkRustEquations::default()
 }
 
+fn milkrust_preset_has_content(preset: &MilkRustPresetDocument) -> bool {
+    !preset.base_values.is_empty()
+        || preset.equations != MilkRustEquations::default()
+        || !preset.warp_shader.trim().is_empty()
+        || !preset.comp_shader.trim().is_empty()
+        || preset
+            .shapes
+            .iter()
+            .chain(preset.sprites.iter())
+            .chain(preset.waves.iter())
+            .any(milkrust_entry_has_content)
+}
+
 fn merge_milkrust_unique(mut values: Vec<String>) -> Vec<String> {
     values.retain(|value| !value.is_empty());
     values.sort();
@@ -4100,14 +4123,26 @@ pub fn build_milkrust_compatibility_entry(
         .map(|preset| {
             let report = analyze_milkrust_preset_compatibility(preset);
             let webgpu_shader_sections = webgpu_shader_sections(preset);
+            let content_error = if milkrust_preset_has_content(preset) {
+                String::new()
+            } else {
+                "preset content is empty".to_string()
+            };
+            let compatibility_error = milkrust_compatibility_error(&report);
+            let error = [content_error, compatibility_error]
+                .into_iter()
+                .filter(|value| !value.is_empty())
+                .collect::<Vec<_>>()
+                .join("; ");
             MilkRustCompatibilityPresetReport {
-                error: milkrust_compatibility_error(&report),
+                error,
                 index: preset.index,
                 metrics: milkrust_preset_metrics(preset),
                 shader_sections: report.shader_sections,
                 title: preset.title.clone(),
                 unsupported_functions: report.unsupported_functions,
-                webgpu_supported: webgpu_shader_sections.is_empty(),
+                webgpu_supported: milkrust_preset_has_content(preset)
+                    && webgpu_shader_sections.is_empty(),
                 webgpu_shader_sections,
             }
         })
