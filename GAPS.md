@@ -18,8 +18,8 @@ This audit replaces the older roadmap snapshot, which no longer matched the crat
 - Two-preset frame generation resolves each preset's shader and texture-sampler data from its own document instead of reusing the first preset's shader data for both entries.
 - The compatibility CLI now retains every discovered file in the file denominator and emits per-file read, parse and current-subset status plus per-preset diagnostics. I/O failures appear in `fileReadErrors`; non-UTF-8 files appear in `encodingWarnings` and are forced unsupported after a lossy diagnostic parse. Render and visual-fidelity stages are explicitly `not-run` / `not-assessed`; no file disappears from the denominator.
 - Blank and comments-only preset files now fail the import and compatibility gates instead of being counted as supported merely because no unsupported syntax was encountered.
-- Static compatibility results now enumerate known renderer-feature blockers separately from parser/function/shader-subset findings. In particular, presets with both warp and composite shader bodies are unsupported until those bodies have separate render stages; the diagnostic does not imply a working renderer.
-- Multi-state `.milk2` files are also marked unsupported by the current subset until saved blend patterns and transition state are implemented; the generic two-frame crossfade remains an intermediate representation.
+- Static compatibility results now enumerate known renderer-feature blockers separately from parser/function/shader-subset findings. In particular, presets with any composite shader body are unsupported until it has a distinct final stage; a warp shader combined with per-pixel equations is also blocked because the existing mesh path bypasses that shader; the diagnostic does not imply a working renderer.
+- All `.milk2` files are marked unsupported by the current subset until saved blend patterns and transition state are implemented; the generic two-frame crossfade remains an intermediate representation.
 - Compatibility JSON now reports per-file read/parse/subset status, per-preset diagnostics, and explicit `renderStatus: not-run` / `fidelityStatus: not-assessed`; geometry statistics are labeled as non-render output. The community-report generator labels static-subset results and records a deterministic SHA-256 fingerprint for each source pack. The checked-in May 2026 report remains a historical snapshot until regenerated on the current branch.
 - npm scripts now call the filenames that actually exist under `tools/`.
 - Both Rust expression evaluators now preserve MilkDrop `&&` / `||` short-circuiting and lazy `if()` / ternary branches, use the reference evaluator's 1e-5 boolean threshold, treat `band` / `bor` / `bnot` as boolean helpers, and reserve `&` / `|` for integer bitwise operations. The `^` operator is left-associative exponentiation above multiplication, `invsqrt` follows projectM's double-precision fast inverse-square-root routine, `%` / `mod` use integer remainder, and the standard `^=` / `%=` / `&=` / `|=` assignments are parsed. `if()` lvalue passthrough covers simple variable and megabuf targets. `memset` and projectM's no-op `freembuf` are implemented with bounded memory ranges, and `bxor` is no longer advertised as a MilkDrop built-in. Regression cases are committed but unrun.
@@ -43,8 +43,8 @@ These changes close the identified false-positive and denominator-loss paths in 
 - Extend versioned archive packs with immutable content addresses, dependency handling, schema migration and published compatibility records. The reproducible builder now requires per-file author, license, HTTPS source URL and shipped-notice records, checks full content-file coverage, and emits an integrity index; one CC0 fixture archive exists.
 - Build only packs whose redistribution rights are clear. `NOASSERTION` community entries remain source links/import targets unless permission is established; a disclaimer does not confer rights.
 - Add a signed remote catalog and broader cleared-pack availability. PlezyNG's first pinned catalog entry verifies the archive and per-file index, bounds extraction, validates notices and activates atomically; catalog updates, cancellation/resume/restart and update rollback remain open.
-- PlezyNG has a basic library sheet with one download, link-only sources and local `.milk`/`.milk2` import. Search, favorites, playlists, previews, local-import removal recovery, and per-preset compatibility diagnostics remain open.
-- Add an actual playback-owned PCM stream and native surface backend before calling any view live-audio-reactive MilkDrop playback. PlezyNG's existing six scenes currently use analyzed loudness or ambient animation.
+- PlezyNG PR #55 now contains library selection, search, per-profile favorites/preferences, named playlists with reference import/export, shuffle/lock/timing/transitions/quality/fullscreen, and bounded pack download/import/replacement recovery. Previews, broader content distribution, complete diagnostics and executed interaction checks remain open.
+- PlezyNG PR #55 contains pinned projectM/mpv extension patches, a playback-owned PCM tap, and a Linux worker/Flutter texture host. The PCM patch composes with the 23 existing common/Linux patches in the active mpv-build source revision. There are no new native artifacts or runtime qualification results. This projectM adapter does not complete the custom MilkRust renderer. The six original scenes still use analyzed loudness or ambient animation.
 - Keep platform support, audio capability, rendering fidelity, distribution status and release availability as separate states.
 
 ## Reproducible command map
@@ -54,3 +54,18 @@ Root npm scripts now target the checked-in RustyMilk-named tool files. For curre
 ## Source review follow-up — 2026-10-28
 
 Fixed the core memory helper loop-budget constant, resolved assignment targets once (including side effects in memory-call targets), and made all integer-remainder paths non-panicking for zero divisors and signed-minimum overflow. Regression source covers these cases; it has not been executed. This source review does not establish build or runtime conformance.
+
+
+## Renderer-report review
+
+The WebGL renderer currently applies the selected translated shader during
+feedback and uses a built-in final display pass. A composite-only preset is
+therefore also blocked on separate-stage rendering. With per-pixel equations,
+the mesh path bypasses the translated shader, so shader-aware mesh rendering is
+now an explicit blocker. These reports do not claim that either renderer feature
+has been implemented.
+
+WebGPU static-subset status now includes unsupported equation calls instead of
+checking shaders alone. Empty report sets cannot pass vacuously, and `.milk2`
+files with only one parsed state cannot evade the saved-blend blocker. Targeted
+regression source is included and remains unrun.

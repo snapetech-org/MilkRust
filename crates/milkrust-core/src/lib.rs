@@ -3872,10 +3872,16 @@ pub fn analyze_milkrust_preset_compatibility(
         shader_sections.push("comp_shader".to_string());
     }
 
-    let renderer_features = if !preset.warp_shader.trim().is_empty()
-        && !preset.comp_shader.trim().is_empty()
-    {
+    // The current WebGL path chooses one translated shader for feedback and
+    // always displays through the built-in final pass. Even a comp-only preset
+    // therefore requires a distinct composite stage. A per-pixel mesh also
+    // currently bypasses the translated warp program entirely.
+    let renderer_features = if !preset.comp_shader.trim().is_empty() {
         vec!["separate-warp-and-composite-stage-rendering".to_string()]
+    } else if !preset.warp_shader.trim().is_empty()
+        && !preset.equations.per_pixel.trim().is_empty()
+    {
+        vec!["shader-aware-per-pixel-mesh".to_string()]
     } else {
         Vec::new()
     };
@@ -4147,7 +4153,7 @@ pub fn build_milkrust_compatibility_entry(
     force_milk2: bool,
 ) -> MilkRustCompatibilityEntry {
     let parsed = parse_milkrust_preset_set(source, force_milk2);
-    let requires_milk2_saved_blend_state = parsed.format == "milk2" && parsed.presets.len() > 1;
+    let requires_milk2_saved_blend_state = parsed.format == "milk2";
     let preset_reports = parsed
         .presets
         .iter()
@@ -4165,6 +4171,7 @@ pub fn build_milkrust_compatibility_entry(
                 "preset content is empty".to_string()
             };
             let compatibility_error = milkrust_compatibility_error(&report);
+            let equations_supported = report.unsupported_functions.is_empty();
             let renderer_features = report.renderer_features;
             let webgpu_renderer_features = renderer_features.clone();
             let error = [content_error, compatibility_error]
@@ -4182,6 +4189,7 @@ pub fn build_milkrust_compatibility_entry(
                 unsupported_functions: report.unsupported_functions,
                 webgpu_renderer_features: webgpu_renderer_features.clone(),
                 webgpu_supported: milkrust_preset_has_content(preset)
+                    && equations_supported
                     && webgpu_shader_sections.is_empty()
                     && webgpu_renderer_features.is_empty(),
                 webgpu_shader_sections,
@@ -4224,8 +4232,8 @@ pub fn build_milkrust_compatibility_entry(
             .flat_map(|report| report.webgpu_shader_sections.clone())
             .collect(),
     );
-    let supported = preset_reports.iter().all(|report| report.error.is_empty());
-    let webgpu_supported = preset_reports.iter().all(|report| report.webgpu_supported);
+    let supported = !preset_reports.is_empty() && preset_reports.iter().all(|report| report.error.is_empty());
+    let webgpu_supported = !preset_reports.is_empty() && preset_reports.iter().all(|report| report.webgpu_supported);
     MilkRustCompatibilityEntry {
         file_name: file_name.to_string(),
         format: parsed.format,
@@ -7084,7 +7092,7 @@ sprite00_per_frame1=x=spritecall(time);
         assert_eq!(report.shader_sections, vec!["comp_shader".to_string()]);
         assert_eq!(
             milkrust_compatibility_error(&report),
-            "MilkRust preset has unsupported functions: customcall, spritecall; shader translation pending: comp_shader."
+            "MilkRust preset has unsupported functions: customcall, spritecall; shader translation pending: comp_shader; renderer features pending: separate-warp-and-composite-stage-rendering."
         );
 
         let parsed = parse_milkrust_preset_set(
@@ -7495,8 +7503,33 @@ comp_shader_2=ret = vec3(shifted, energy * bass_att);
         );
     }
 
-    // TEST_BLOCK_START
-    // TEST_BLOCK_END
+    #[test]
+    fn renderer_report_does_not_approve_discarded_stages_or_unsupported_equations() {
+        let composite = build_milkrust_compatibility_entry(
+            "comp-only", "comp.milk", "comp_1=ret=tex2D(sampler_main,uv).rgb;", false,
+        );
+        assert!(!composite.supported);
+        assert!(!composite.webgpu_supported);
+        assert!(composite.renderer_features.contains(&"separate-warp-and-composite-stage-rendering".to_string()));
+
+        let mesh = build_milkrust_compatibility_entry(
+            "mesh-shader", "mesh.milk", "per_pixel_1=dx=x*0.01;\nwarp_1=ret=tex2D(sampler_main,uv).rgb;", false,
+        );
+        assert!(!mesh.supported);
+        assert!(mesh.renderer_features.contains(&"shader-aware-per-pixel-mesh".to_string()));
+
+        let equations = build_milkrust_compatibility_entry(
+            "unknown-call", "unknown.milk", "per_frame_1=q1=unknown_equation(1);", false,
+        );
+        assert!(!equations.supported);
+        assert!(!equations.webgpu_supported);
+
+        let incomplete_double = build_milkrust_compatibility_entry(
+            "one-state", "one-state.milk2", "[preset00]\nzoom=1;", true,
+        );
+        assert!(!incomplete_double.supported);
+        assert!(!incomplete_double.webgpu_supported);
+    }
 
     #[test]
     fn assignment_target_runs_once_and_remainder_never_overflows() {
