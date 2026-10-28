@@ -28,7 +28,7 @@ These changes close the identified false-positive and denominator-loss paths in 
 
 ## Remaining engine work
 
-- Expression conformance is still incomplete: reference-valued results for memory helpers and other function calls, all documented memory-index edge cases, exact RNG behavior, and full precedence/semantic comparison against the reference evaluator still need coverage. The current numeric evaluator must not be described as complete MilkDrop EEL.
+- Expression conformance is still incomplete: generic reference propagation through nested function results and arithmetic, remaining memory-index edge cases, exact RNG behavior, and full precedence/semantic comparison against the reference evaluator still need coverage. Simple `if()` / `memcpy()` / `memset()` assignment targets work, but the numeric evaluator is not a general reference-valued EEL VM.
 
 - Establish a versioned conformance corpus and emit per-file discovered/read/parse/compile/render/fidelity states, including missing textures and exclusions.
 - Compare classic `.milk` state, wave/shape equations, mesh warp, feedback, blur/noise resources, transitions, shader semantics and color/coordinate behavior against a reference renderer.

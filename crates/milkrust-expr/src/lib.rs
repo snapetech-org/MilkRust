@@ -585,11 +585,73 @@ impl<'a> MilkRustExpressionParser<'a> {
                 let index = self.evaluate_arg_tokens(rest)?;
                 Ok(Some(milkrust_buffer_key(name, index)))
             }
+            [MilkRustToken::Ident(name), MilkRustToken::Op(open), rest @ .., MilkRustToken::Op(close)]
+                if open == "("
+                    && close == ")"
+                    && (name.eq_ignore_ascii_case("memcpy")
+                        || name.eq_ignore_ascii_case("memset")) =>
+            {
+                let args = split_milkrust_call_tokens(rest);
+                self.memory_intrinsic_target(name, &args)
+            }
             _ => Ok(None),
         }
     }
 
-    fn call_special_function(
+        fn memory_intrinsic_target(
+        &mut self,
+        name: &str,
+        args: &[&[MilkRustToken]],
+    ) -> Result<Option<String>, String> {
+        if args.len() < 3 {
+            return Ok(None);
+        }
+        let destination = self.evaluate_arg_tokens(args[0])?
+            .trunc()
+            .clamp(0.0, (MILKRUST_MEMORY_LENGTH - 1) as f64) as usize;
+        if name.eq_ignore_ascii_case("memset") {
+            let value = self.evaluate_arg_tokens(args[1])?;
+            let requested = self.evaluate_arg_tokens(args[2])?
+                .trunc()
+                .clamp(0.0, RUSTYMILK_MAX_LOOP_ITERATIONS as f64) as usize;
+            let count = requested.min(MILKRUST_MEMORY_LENGTH - destination);
+            for offset in 0..count {
+                self.scope.insert(
+                    milkrust_buffer_key("megabuf", (destination + offset) as f64),
+                    MilkRustValue::Number(value),
+                );
+            }
+        } else if name.eq_ignore_ascii_case("memcpy") {
+            let source = self.evaluate_arg_tokens(args[1])?
+                .trunc()
+                .clamp(0.0, (MILKRUST_MEMORY_LENGTH - 1) as f64) as usize;
+            let requested = self.evaluate_arg_tokens(args[2])?
+                .trunc()
+                .clamp(0.0, RUSTYMILK_MAX_LOOP_ITERATIONS as f64) as usize;
+            let count = requested
+                .min(MILKRUST_MEMORY_LENGTH - destination)
+                .min(MILKRUST_MEMORY_LENGTH - source);
+            let values = (0..count)
+                .map(|offset| {
+                    milkrust_number(
+                        &self.scope,
+                        &milkrust_buffer_key("megabuf", (source + offset) as f64),
+                    )
+                })
+                .collect::<Vec<_>>();
+            for (offset, value) in values.into_iter().enumerate() {
+                self.scope.insert(
+                    milkrust_buffer_key("megabuf", (destination + offset) as f64),
+                    MilkRustValue::Number(value),
+                );
+            }
+        } else {
+            return Ok(None);
+        }
+        Ok(Some(milkrust_buffer_key("megabuf", destination as f64)))
+    }
+
+fn call_special_function(
         &mut self,
         name: &str,
         args: &[&[MilkRustToken]],
@@ -664,71 +726,21 @@ impl<'a> MilkRustExpressionParser<'a> {
                 }
                 Ok(Some(last))
             }
-            "freembuf" => {
+                        "freembuf" => {
                 if let Some(index) = args.first() {
                     self.evaluate_arg_tokens(index)?;
                 }
                 Ok(Some(0.0))
             }
-            "memset" => {
-                if args.len() < 3 {
-                    return Ok(Some(0.0));
-                }
-                let dest = self.evaluate_arg_tokens(args[0])?
-                    .trunc()
-                    .clamp(0.0, (MILKRUST_MEMORY_LENGTH - 1) as f64) as usize;
-                let value = self.evaluate_arg_tokens(args[1])?;
-                let requested = self.evaluate_arg_tokens(args[2])?
-                    .trunc()
-                    .clamp(0.0, RUSTYMILK_MAX_LOOP_ITERATIONS as f64) as usize;
-                let count = requested.min(MILKRUST_MEMORY_LENGTH - dest);
-                for offset in 0..count {
-                    self.scope.insert(
-                        milkrust_buffer_key("megabuf", (dest + offset) as f64),
-                        MilkRustValue::Number(value),
-                    );
-                }
-                Ok(Some(milkrust_number(
-                    &self.scope,
-                    &milkrust_buffer_key("megabuf", dest as f64),
-                )))
+            "memcpy" | "memset" => {
+                let key = self.memory_intrinsic_target(name, args)?;
+                Ok(Some(
+                    key.as_ref()
+                        .map(|key| milkrust_number(&self.scope, key))
+                        .unwrap_or(0.0),
+                ))
             }
-            "memcpy" => {
-                if args.len() < 3 {
-                    return Ok(Some(0.0));
-                }
-                let dest = self.evaluate_arg_tokens(args[0])?
-                    .trunc()
-                    .clamp(0.0, (MILKRUST_MEMORY_LENGTH - 1) as f64) as usize;
-                let source = self.evaluate_arg_tokens(args[1])?
-                    .trunc()
-                    .clamp(0.0, (MILKRUST_MEMORY_LENGTH - 1) as f64) as usize;
-                let requested = self.evaluate_arg_tokens(args[2])?
-                    .trunc()
-                    .clamp(0.0, RUSTYMILK_MAX_LOOP_ITERATIONS as f64) as usize;
-                let count = requested
-                    .min(MILKRUST_MEMORY_LENGTH - dest)
-                    .min(MILKRUST_MEMORY_LENGTH - source);
-                let values = (0..count)
-                    .map(|offset| {
-                        milkrust_number(
-                            &self.scope,
-                            &milkrust_buffer_key("megabuf", (source + offset) as f64),
-                        )
-                    })
-                    .collect::<Vec<_>>();
-                for (offset, value) in values.into_iter().enumerate() {
-                    self.scope.insert(
-                        milkrust_buffer_key("megabuf", (dest + offset) as f64),
-                        MilkRustValue::Number(value),
-                    );
-                }
-                Ok(Some(milkrust_number(
-                    &self.scope,
-                    &milkrust_buffer_key("megabuf", dest as f64),
-                )))
-            }
-            _ => Ok(None),
+_ => Ok(None),
         }
     }
 
@@ -2115,7 +2127,7 @@ mod tests {
         assert_eq!(evaluate_milkrust_expression("1 ? 9 : unsupported(1)", &scope).unwrap(), 9.0);
 
         let changed = evaluate_milkrust_equations(
-            "if(1, assign(a, 3), assign(b, 4)); if(0, a, b)=10; x=2; x^=3; y=7; y&=3; z=7; z%=3; memset(8,0.25,2); freembuf(0); band(0,assign(side_effect,1))",
+            "if(1, assign(a, 3), assign(b, 4)); if(0, a, b)=10; x=2; x^=3; y=7; y&=3; z=7; z%=3; memset(8,0.25,2); memset(10,0.5,1)=0.75; memcpy(11,10,1)=1.25; freembuf(0); band(0,assign(side_effect,1))",
             &scope,
         )
         .unwrap();
@@ -2126,6 +2138,8 @@ mod tests {
         assert_eq!(changed["z"], MilkRustValue::Number(1.0));
         assert_eq!(changed["megabuf_8"], MilkRustValue::Number(0.25));
         assert_eq!(changed["megabuf_9"], MilkRustValue::Number(0.25));
+        assert_eq!(changed["megabuf_10"], MilkRustValue::Number(0.75));
+        assert_eq!(changed["megabuf_11"], MilkRustValue::Number(1.25));
         assert_eq!(changed["side_effect"], MilkRustValue::Number(1.0));
     }
 
