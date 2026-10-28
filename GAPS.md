@@ -15,6 +15,7 @@ This audit replaces the older roadmap snapshot, which no longer matched the crat
 - The preset parser now recognizes numbered classic MilkDrop shader keys (`warp_N` and `comp_N`), removes the per-line backtick marker and combines shader lines in numeric order.
 - The parser accepts additional indexed shape, sprite and wave key forms, including `shapecode_N_*`, `shape_N_*`, `spritecode_N_*`, `wave_N_*` and the existing forms.
 - `per_frame_init_N` and `frame_init_N` now populate the initialization equation scope before generic frame-equation matching.
+- Two-preset frame generation resolves each preset's shader and texture-sampler data from its own document instead of reusing the first preset's shader data for both entries.
 - The compatibility CLI now retains every discovered file in the file denominator. Read/encoding failures are returned in `fileReadErrors` and count as unsupported files instead of silently disappearing.
 - npm scripts now call the filenames that actually exist under `tools/`.
 
@@ -25,17 +26,17 @@ These changes close the identified false-positive and denominator-loss paths in 
 - Establish a versioned conformance corpus and emit per-file discovered/read/parse/compile/render/fidelity states, including missing textures and exclusions.
 - Compare classic `.milk` state, wave/shape equations, mesh warp, feedback, blur/noise resources, transitions, shader semantics and color/coordinate behavior against a reference renderer.
 - Complete and qualify distinct warp and composite shader stages; the current translator handles a subset and cannot be described as a complete HLSL implementation.
-- Complete `.milk2` double-preset state, render targets, blend timing and saved transition behavior from actual MilkDrop 3 samples.
+- Complete `.milk2` double-preset state, separate render targets, saved blend pattern/progress/direction/random values and transitions from actual MilkDrop 3 samples. The current two-frame container and generic alpha remain an intermediate representation.
 - Implement real GPU renderers on each claimed target. The headless batching path and desktop shell are not equivalent to a native full-fidelity player.
 - Define safe, bounded support for imported formats. Do not execute downloaded JavaScript or remote shader includes.
 - Add independent visual evidence with negative controls; parser acceptance and nonempty output do not prove faithful rendering.
 
 ## Remaining packs and app integration
 
-- Evolve folder-only manifests into versioned archive packs with per-file hashes, immutable content addresses, size/count limits, dependencies, licensing notices and schema migration.
+- Extend versioned archive packs with immutable content addresses, dependency handling, schema migration and published compatibility records. The reproducible builder, per-file integrity index, distribution gate and one CC0 fixture archive now exist.
 - Build only packs whose redistribution rights are clear. `NOASSERTION` community entries remain source links/import targets unless permission is established; a disclaimer does not confer rights.
-- Add the archive builder, deterministic catalog generation, trusted catalog signing, app-side verification, bounded extraction, atomic activation, update rollback, resume/restart behavior and offline use.
-- Integrate a pack browser and library into PlezyNG with local `.milk`/`.milk2` import, search, favorites, playlist controls, accessibility/focus handling and visible per-preset compatibility diagnostics.
+- Add a signed remote catalog and broader cleared-pack availability. PlezyNG's first pinned catalog entry verifies the archive and per-file index, bounds extraction, validates notices and activates atomically; catalog updates, cancellation/resume/restart and update rollback remain open.
+- PlezyNG has a basic library sheet with one download, link-only sources and local `.milk`/`.milk2` import. Search, favorites, playlists, previews, local-import removal recovery, and per-preset compatibility diagnostics remain open.
 - Add an actual playback-owned PCM stream and native surface backend before calling any view live-audio-reactive MilkDrop playback. PlezyNG's existing six scenes currently use analyzed loudness or ambient animation.
 - Keep platform support, audio capability, rendering fidelity, distribution status and release availability as separate states.
 

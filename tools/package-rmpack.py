@@ -72,9 +72,13 @@ def main() -> int:
             {"path": name, "size": len(data), "sha256": hashlib.sha256(data).hexdigest()}
             for name, _, data in files
         ],
-        "expandedBytes": total_bytes,
+        "contentBytes": total_bytes,
     }
-    output_files = files + [("integrity.json", None, (json.dumps(integrity, indent=2, sort_keys=True) + "\n").encode())]
+    integrity_bytes = (json.dumps(integrity, indent=2, sort_keys=True) + "\n").encode()
+    expanded_archive_bytes = total_bytes + len(integrity_bytes)
+    if expanded_archive_bytes > MAX_EXPANDED_BYTES:
+        raise ValueError(f"expanded pack exceeds {MAX_EXPANDED_BYTES} bytes")
+    output_files = files + [("integrity.json", None, integrity_bytes)]
     args.output.parent.mkdir(parents=True, exist_ok=True)
     temporary = args.output.with_suffix(args.output.suffix + ".partial")
     with zipfile.ZipFile(temporary, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as archive:
@@ -93,7 +97,7 @@ def main() -> int:
         "license": manifest["license"],
         "fileCount": len(files),
         "presetCount": len(manifest.get("presets", [])),
-        "expandedBytes": total_bytes,
+        "expandedBytes": expanded_archive_bytes,
         "archiveBytes": len(archive_bytes),
         "sha256": hashlib.sha256(archive_bytes).hexdigest(),
     }, indent=2))
