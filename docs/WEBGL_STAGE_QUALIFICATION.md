@@ -56,3 +56,9 @@ No tests, builds, CI, render captures or benchmarks ran in this session. Follow
 `AGENTS.md`: compatible private ephemeral JIT runners only, with the actual GPU
 and device matrix. The native renderer/ABI and other backend implementations
 remain separate work.
+
+
+Source increment: fixed-function feedback now samples and decays history without
+adding a procedural scene. Mesh and non-mesh motion use the same transform
+convention. Unnamed textured shapes sample previous history. No pixel capture or
+reference comparison has yet qualified these corrections.

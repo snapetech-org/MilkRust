@@ -139,3 +139,38 @@ Classic serialized fields now seed runtime variables (`fDecay` → `decay`,
 source keys. Unrequested synthetic treble-driven rotation was removed from
 source-driven frame construction. These targeted changes and saved-envelope
 regressions are unrun; full native, shader and platform qualification remain open.
+
+
+## Native source and delivery increment — 2026-10-28
+
+A new `milkrust-native` crate implements C ABI v1, GL 3.2/GLES 3 contexts supplied
+by the host, bounded native PCM analysis, per-layer feedback, translated warp and
+composite passes, named RGBA texture uploads and offscreen readback. PlezyNG's
+source hosts now cover Linux, Windows, macOS, iOS/tvOS and Android/TV. They are
+unbuilt and unqualified; no platform cell becomes complete from this change.
+webOS/Tizen host work is still open.
+
+The default WebGL feedback pass no longer adds synthetic rings, spokes, tint or
+time-based rotation. Unnamed textured shapes sample previous feedback. Uploaded
+image placeholders are opaque black and are never a substitute for a failed
+named asset. Source-driven decay accepts both endpoints; rotation, translation
+and ordinary zoom values are no longer clipped to demo-specific ranges. Native
+RGBA blending keeps the display opaque. The stateless saved-pair path now uses
+the same envelope progress as the checked runtime and refuses unknown masks.
+These fixes have source regression cases but no executed results or captures.
+
+`tools/convert_butterchurn.py` provides a conservative, attributed conversion
+recipe for the vendored MIT collection. It rejects unsupported JavaScript and
+shader-bearing converted JSON; it does not reverse-transpile GLSL to original
+MilkDrop HLSL. Broader archives have not been generated, qualified, or delivered.
+
+`tools/signed_catalog.py` and the manual private-JIT publisher workflow implement
+catalog signing, verification and monotonic publication. The release trust root
+is deliberately unprovisioned; duplicate key bytes under different IDs cannot
+satisfy independent-key quorum. No production private key, signed catalog branch
+or published broader pack is asserted to exist.
+
+Full shader semantics (including resources/helpers), all saved spatial blend
+patterns and extensions, reference audio, transitions, device qualification and
+production delivery remain open. Source-format preservation and explicit failure
+reporting are not evidence of complete community preset fidelity.

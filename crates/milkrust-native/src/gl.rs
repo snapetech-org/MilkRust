@@ -75,6 +75,7 @@ functions! {
     enable: "glEnable" (u32);
     disable: "glDisable" (u32);
     blend_func: "glBlendFunc" (u32, u32);
+    blend_func_separate: "glBlendFuncSeparate" (u32, u32, u32, u32);
     draw_arrays: "glDrawArrays" (u32, i32, i32);
     get_error: "glGetError" () -> u32;
     get_integer: "glGetIntegerv" (u32, *mut i32);

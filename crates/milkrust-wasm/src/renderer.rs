@@ -35,8 +35,8 @@ impl MilkRustRenderer {
             Self::WebGl(renderer_set) => renderer_set.render_frame_set(frame_set, time),
             Self::Canvas { canvas, context } => {
                 if frame_set.entries.iter().any(|entry| entry.frame.shader_stages.warp.required ||
-                    entry.frame.shader_stages.composite.required || entry.frame.warp_mesh.is_some()) {
-                    return Err(JsValue::from_str("Canvas preview cannot execute preset shaders or a warp mesh"));
+                    entry.frame.shader_stages.composite.required || entry.frame.warp_mesh.is_some() || !entry.frame.textured_primitives.is_empty()) {
+                    return Err(JsValue::from_str("Canvas preview cannot execute preset shaders, a warp mesh or textured primitives"));
                 }
                 for (index, entry) in frame_set.entries.iter().enumerate() {
                     context.save();
@@ -67,7 +67,7 @@ struct MilkRustWebGlRenderer {
     primitive_buffer: web_sys::WebGlBuffer,
     primitive_color_buffer: web_sys::WebGlBuffer,
     primitive_program: web_sys::WebGlProgram,
-    procedural_texture: web_sys::WebGlTexture,
+    placeholder_texture: web_sys::WebGlTexture,
     named_textures: RefCell<BTreeMap<String, MilkRustTextureAsset>>,
     texture_pixels: Rc<Cell<u64>>,
     max_texture_units: usize,
@@ -297,7 +297,7 @@ impl MilkRustWebGlRenderer {
         let textured_uv_buffer = gl
             .create_buffer()
             .ok_or_else(|| JsValue::from_str("WebGL textured UV buffer allocation failed"))?;
-        let procedural_texture = create_milkrust_procedural_texture(&gl)?;
+        let placeholder_texture = create_milkrust_placeholder_texture(&gl)?;
         let warp_position_buffer = gl
             .create_buffer()
             .ok_or_else(|| JsValue::from_str("WebGL warp position buffer allocation failed"))?;
@@ -341,7 +341,7 @@ impl MilkRustWebGlRenderer {
             primitive_buffer,
             primitive_color_buffer,
             primitive_program,
-            procedural_texture,
+            placeholder_texture,
             program,
             textured_position_buffer,
             textured_program,
@@ -396,7 +396,7 @@ impl MilkRustWebGlRenderer {
         } else {
             self.draw_feedback_quad(frame, time, drawing_width, drawing_height, false, 1.0);
         }
-        self.draw_textured_primitives(frame);
+        self.draw_textured_primitives(frame, &targets.targets[read_index].texture)?;
         self.draw_primitives(frame);
 
         self.gl
@@ -411,13 +411,13 @@ impl MilkRustWebGlRenderer {
             self.gl
                 .clear(web_sys::WebGl2RenderingContext::COLOR_BUFFER_BIT);
         }
-        let output_alpha = clamp_unit(output_alpha) as f32;
-        let should_blend = !clear_screen || output_alpha < 1.0;
+        let output_alpha = if clear_screen { 1.0 } else { clamp_unit(output_alpha) as f32 };
+        let should_blend = !clear_screen;
         if should_blend {
             self.gl.enable(web_sys::WebGl2RenderingContext::BLEND);
             let (source_factor, destination_factor) =
                 milkrust_webgl_composite_blend_factors(composite_mode);
-            self.gl.blend_func(source_factor, destination_factor);
+            self.gl.blend_func_separate(source_factor, destination_factor, web_sys::WebGl2RenderingContext::ONE, destination_factor);
         }
         if let Some(program) = composite_program {
             self.draw_translated_quad(&program, frame, &frame.shader_stages.composite,
@@ -521,7 +521,7 @@ impl MilkRustWebGlRenderer {
         );
         self.gl.uniform1f(
             self.u_warp_feedback.as_ref(),
-            (1.0 - frame.background_alpha).clamp(0.0, 0.985) as f32,
+            (1.0 - frame.background_alpha).clamp(0.0, 1.0) as f32,
         );
         self.gl.uniform1f(self.u_warp_output_alpha.as_ref(), 1.0);
         self.gl.uniform1i(self.u_warp_previous_frame.as_ref(), 0);
@@ -590,7 +590,7 @@ impl MilkRustWebGlRenderer {
         output_alpha: f32,
     ) {
         let (r, g, b) = frame.wave_color;
-        let feedback = (1.0 - frame.background_alpha).clamp(0.0, 0.985) as f32;
+        let feedback = (1.0 - frame.background_alpha).clamp(0.0, 1.0) as f32;
         let uniform = |name: &str| self.gl.get_uniform_location(program, name);
         self.gl.uniform3f(
             uniform("color").as_ref(),
@@ -607,7 +607,7 @@ impl MilkRustWebGlRenderer {
                 .texture_samplers
                 .get(index)
                 .and_then(|name| self.named_texture_for(name).ok().flatten())
-                .unwrap_or_else(|| self.procedural_texture.clone());
+                .unwrap_or_else(|| self.placeholder_texture.clone());
             self.gl
                 .bind_texture(web_sys::WebGl2RenderingContext::TEXTURE_2D, Some(&texture));
             self.gl.uniform1i(
@@ -747,7 +747,7 @@ impl MilkRustWebGlRenderer {
                 .clear(web_sys::WebGl2RenderingContext::COLOR_BUFFER_BIT);
         }
         let (r, g, b) = frame.wave_color;
-        let feedback = (1.0 - frame.background_alpha).clamp(0.0, 0.985) as f32;
+        let feedback = (1.0 - frame.background_alpha).clamp(0.0, 1.0) as f32;
         self.gl.uniform1i(self.u_previous_frame.as_ref(), 0);
         self.gl.uniform1f(
             self.u_display_only.as_ref(),
@@ -790,8 +790,10 @@ impl MilkRustWebGlRenderer {
             return;
         }
         self.gl.enable(web_sys::WebGl2RenderingContext::BLEND);
-        self.gl.blend_func(
+        self.gl.blend_func_separate(
             web_sys::WebGl2RenderingContext::SRC_ALPHA,
+            web_sys::WebGl2RenderingContext::ONE_MINUS_SRC_ALPHA,
+            web_sys::WebGl2RenderingContext::ONE,
             web_sys::WebGl2RenderingContext::ONE_MINUS_SRC_ALPHA,
         );
         self.gl.use_program(Some(&self.primitive_program));
@@ -894,7 +896,7 @@ impl MilkRustWebGlRenderer {
     }
 
     fn named_texture_for(&self, raw_name: &str) -> Result<Option<web_sys::WebGlTexture>, JsValue> {
-        if raw_name.is_empty() { return Ok(Some(self.procedural_texture.clone())); }
+        if raw_name.is_empty() { return Ok(Some(self.placeholder_texture.clone())); }
         for alias in get_milkrust_texture_name_aliases(raw_name) {
             if let Some(asset) = self.named_textures.borrow().get(&alias) {
                 return match asset.state.borrow().as_ref() {
@@ -919,13 +921,15 @@ impl MilkRustWebGlRenderer {
         Err(JsValue::from_str(&format!("Missing texture: {raw_name}")))
     }
 
-    fn draw_textured_primitives(&self, frame: &MilkRustFrame) {
+    fn draw_textured_primitives(&self, frame: &MilkRustFrame, previous_frame: &web_sys::WebGlTexture) -> Result<(), JsValue> {
         if frame.textured_primitives.is_empty() {
-            return;
+            return Ok(());
         }
         self.gl.enable(web_sys::WebGl2RenderingContext::BLEND);
-        self.gl.blend_func(
+        self.gl.blend_func_separate(
             web_sys::WebGl2RenderingContext::SRC_ALPHA,
+            web_sys::WebGl2RenderingContext::ONE_MINUS_SRC_ALPHA,
+            web_sys::WebGl2RenderingContext::ONE,
             web_sys::WebGl2RenderingContext::ONE_MINUS_SRC_ALPHA,
         );
         self.gl.use_program(Some(&self.textured_program));
@@ -944,10 +948,10 @@ impl MilkRustWebGlRenderer {
             }
             self.gl
                 .active_texture(web_sys::WebGl2RenderingContext::TEXTURE1);
-            let texture = self
-                .named_texture_for(&primitive.texture_name)
-                .ok().flatten()
-                .unwrap_or_else(|| self.procedural_texture.clone());
+            let texture = if primitive.texture_name.is_empty() { previous_frame.clone() } else {
+                self.named_texture_for(&primitive.texture_name)?
+                    .ok_or_else(|| JsValue::from_str("Texture became unavailable before drawing"))?
+            };
             self.gl
                 .bind_texture(web_sys::WebGl2RenderingContext::TEXTURE_2D, Some(&texture));
             let vertices = primitive
@@ -1023,6 +1027,7 @@ impl MilkRustWebGlRenderer {
             .active_texture(web_sys::WebGl2RenderingContext::TEXTURE0);
         self.gl.disable(web_sys::WebGl2RenderingContext::BLEND);
         self.gl.use_program(Some(&self.program));
+        Ok(())
     }
 }
 
@@ -1039,7 +1044,7 @@ impl Drop for MilkRustWebGlRenderer {
         for cache in [&mut self.translated_warp_program, &mut self.translated_composite_program] {
             if let Some(program) = cache.get_mut().take() { self.gl.delete_program(Some(&program.program)); }
         }
-        self.gl.delete_texture(Some(&self.procedural_texture));
+        self.gl.delete_texture(Some(&self.placeholder_texture));
         for asset in self.named_textures.get_mut().values() { self.gl.delete_texture(Some(&asset.texture)); }
     }
 }
@@ -1172,19 +1177,13 @@ fn create_milkrust_feedback_target(
     })
 }
 
-fn create_milkrust_procedural_texture(
+fn create_milkrust_placeholder_texture(
     gl: &web_sys::WebGl2RenderingContext,
 ) -> Result<web_sys::WebGlTexture, JsValue> {
     let texture = gl
         .create_texture()
-        .ok_or_else(|| JsValue::from_str("WebGL procedural texture allocation failed"))?;
-    let mut pixels = Vec::with_capacity(16 * 16 * 4);
-    for y in 0..16 {
-        for x in 0..16 {
-            let checker = if (x / 4 + y / 4) % 2 == 0 { 224 } else { 72 };
-            pixels.extend_from_slice(&[checker, 192, 255_u8.saturating_sub(checker / 3), 255]);
-        }
-    }
+        .ok_or_else(|| JsValue::from_str("WebGL placeholder texture allocation failed"))?;
+    let pixels = [0u8, 0, 0, 255];
     gl.bind_texture(web_sys::WebGl2RenderingContext::TEXTURE_2D, Some(&texture));
     gl.tex_parameteri(
         web_sys::WebGl2RenderingContext::TEXTURE_2D,
@@ -1210,8 +1209,8 @@ fn create_milkrust_procedural_texture(
         web_sys::WebGl2RenderingContext::TEXTURE_2D,
         0,
         web_sys::WebGl2RenderingContext::RGBA as i32,
-        16,
-        16,
+        1,
+        1,
         0,
         web_sys::WebGl2RenderingContext::RGBA,
         web_sys::WebGl2RenderingContext::UNSIGNED_BYTE,
@@ -1229,7 +1228,7 @@ fn create_milkrust_texture_from_data_url(
         .any(|kind| data_url.starts_with(&format!("data:image/{kind};base64,"))) {
         return Err(JsValue::from_str("Texture must be a bounded embedded raster image; URLs and SVG are unavailable"));
     }
-    let texture = create_milkrust_procedural_texture(gl)?;
+    let texture = create_milkrust_placeholder_texture(gl)?;
     let image = web_sys::HtmlImageElement::new()?;
     let gl_for_load = gl.clone();
     let texture_for_load = texture.clone();
@@ -1368,41 +1367,20 @@ void main() {
 
 const MILKRUST_WEBGL_FRAGMENT_SHADER: &str = r#"#version 300 es
 precision highp float;
-uniform vec2 u_resolution;
-uniform float u_time;
-uniform vec4 u_color;
 uniform vec4 u_motion;
-uniform vec2 u_counts;
 uniform sampler2D u_previousFrame;
 uniform float u_feedback;
 uniform float u_displayOnly;
 uniform float u_outputAlpha;
 in vec2 v_uv;
 out vec4 outColor;
-
-mat2 rotate2d(float angle) {
-  float s = sin(angle);
-  float c = cos(angle);
-  return mat2(c, -s, s, c);
-}
-
 void main() {
-  vec2 centered = v_uv - vec2(0.5) - u_motion.zw;
-  vec2 warped = rotate2d(u_motion.x + u_time * 0.035) * centered / max(u_motion.y, 0.001);
-  float radius = length(warped);
-  float angle = atan(warped.y, warped.x);
-  float rings = 0.5 + 0.5 * sin(radius * 42.0 - u_time * 3.0 + u_counts.x * 0.35);
-  float spokes = 0.5 + 0.5 * cos(angle * (5.0 + u_counts.y) + u_time * 1.7);
-  float wave = 0.5 + 0.5 * sin((v_uv.x + v_uv.y) * 18.0 + u_time * 4.0);
-  float shapePulse = smoothstep(0.24, 0.0, abs(radius - (0.18 + 0.025 * u_counts.x)));
-  vec3 tint = mix(u_color.rgb * 0.24, u_color.rgb, max(rings * 0.62, spokes * 0.42));
-  tint += vec3(1.0, 0.72, 0.32) * shapePulse * 0.35;
-  tint += vec3(0.65, 0.85, 1.0) * wave * 0.08 * max(u_counts.y, 1.0);
-  vec2 feedbackUv = v_uv - u_motion.zw * 0.18;
-  feedbackUv = (feedbackUv - vec2(0.5)) / max(u_motion.y, 0.001) + vec2(0.5);
-  vec3 previous = texture(u_previousFrame, clamp(feedbackUv, vec2(0.001), vec2(0.999))).rgb;
-  vec3 composited = mix(tint, previous * 0.996, clamp(u_feedback, 0.0, 0.985));
-  outColor = vec4(mix(composited, texture(u_previousFrame, v_uv).rgb, step(0.5, u_displayOnly)), u_outputAlpha);
+  vec2 centered = (v_uv - vec2(0.5)) / max(u_motion.y, 0.001);
+  float s = sin(u_motion.x), c = cos(u_motion.x);
+  vec2 feedbackUv = vec2(c*centered.x-s*centered.y, s*centered.x+c*centered.y) + vec2(0.5) + u_motion.zw;
+  vec2 sampleUv = u_displayOnly > 0.5 ? v_uv : feedbackUv;
+  float retention = u_displayOnly > 0.5 ? 1.0 : clamp(u_feedback, 0.0, 1.0);
+  outColor = vec4(texture(u_previousFrame, clamp(sampleUv, vec2(0.0), vec2(1.0))).rgb * retention, u_outputAlpha);
 }
 "#;
 
@@ -1470,7 +1448,7 @@ in vec2 v_sourceUv;
 out vec4 outColor;
 void main() {
   vec3 previous = texture(u_previousFrame, clamp(v_sourceUv, vec2(0.0), vec2(1.0))).rgb;
-  vec3 base = mix(u_color * 0.18, previous, clamp(u_feedback, 0.0, 0.985));
+  vec3 base = previous * clamp(u_feedback, 0.0, 1.0);
   outColor = vec4(base, u_outputAlpha);
 }
 "#;

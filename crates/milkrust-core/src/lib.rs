@@ -740,12 +740,12 @@ fn build_milkrust_frame_from_scope(
     MilkRustFrame {
         background_alpha: clamp_range(
             1.0 - milkrust_scope_number(scope, "decay", fallback("decay", 0.89)),
-            0.01,
-            0.5,
+            0.0,
+            1.0,
         ),
         bass,
-        dx: clamp_range(milkrust_scope_number(scope, "dx", 0.0), -0.5, 0.5),
-        dy: clamp_range(milkrust_scope_number(scope, "dy", 0.0), -0.5, 0.5),
+        dx: milkrust_scope_number(scope, "dx", 0.0),
+        dy: milkrust_scope_number(scope, "dy", 0.0),
         fft_bins,
         mid,
         primitives,
@@ -755,11 +755,7 @@ fn build_milkrust_frame_from_scope(
             .iter()
             .filter(|shape| milkrust_base_number(&shape.base_values, "enabled", 0.0) > 0.0)
             .count(),
-        rotation: clamp_range(
-            milkrust_scope_number(scope, "rot", fallback("rot", 0.012)),
-            -0.5,
-            0.5,
-        ),
+        rotation: milkrust_scope_number(scope, "rot", fallback("rot", 0.012)),
         shader_source: translated_milkrust_shader_source(preset_document),
         shader_texture_samplers: milkrust_shader_texture_samplers(preset_document),
         shader_stages: milkrust_shader_stages(preset_document),
@@ -781,7 +777,7 @@ fn build_milkrust_frame_from_scope(
         zoom: clamp_range(
             milkrust_scope_number(scope, "zoom", fallback("zoom", 1.02)),
             0.001,
-            1.8,
+            1.0e6,
         ),
     }
 }
@@ -833,12 +829,12 @@ fn build_milkrust_frame_from_runtime_scope(
      MilkRustFrame {
          background_alpha: clamp_range(
              1.0 - milkrust_scope_number(scope, "decay", preset.decay),
-             0.01,
-             0.5,
+             0.0,
+             1.0,
          ),
          bass,
-         dx: clamp_range(milkrust_scope_number(scope, "dx", 0.0), -0.5, 0.5),
-         dy: clamp_range(milkrust_scope_number(scope, "dy", 0.0), -0.5, 0.5),
+         dx: milkrust_scope_number(scope, "dx", 0.0),
+         dy: milkrust_scope_number(scope, "dy", 0.0),
          fft_bins,
          mid,
          primitives,
@@ -848,11 +844,7 @@ fn build_milkrust_frame_from_runtime_scope(
              .iter()
              .filter(|shape| milkrust_base_number(&shape.base_values, "enabled", 0.0) > 0.0)
              .count(),
-         rotation: clamp_range(
-             milkrust_scope_number(scope, "rot", preset.rot),
-             -0.5,
-             0.5,
-         ),
+         rotation: milkrust_scope_number(scope, "rot", preset.rot),
          shader_source: translated_shader_source.unwrap_or_default().to_string(),
          shader_texture_samplers: shader_texture_samplers.to_vec(),
          shader_stages: shader_stages.clone(),
@@ -874,7 +866,7 @@ fn build_milkrust_frame_from_runtime_scope(
          zoom: clamp_range(
              milkrust_scope_number(scope, "zoom", preset.zoom),
              0.001,
-             1.8,
+             1.0e6,
          ),
      }
  }
@@ -990,6 +982,11 @@ pub fn milkrust_frame_set_from_source_with_audio_and_input(
     let title = milkrust_preset_set_title(&parsed);
     let transition_mode = milkrust_transition_mode(&parsed);
     let transition_seconds = milkrust_transition_seconds(&parsed);
+    if parsed.saved_blend.as_ref().and_then(milk2::SavedBlend::render_requirement).is_some()
+        || parsed.presets.iter().any(|preset| !preset.parse_errors.is_empty()) {
+        return MilkRustFrameSet { entries: Vec::new(), preset_count: 0, title,
+            transition_mode, transition_seconds };
+    }
     let entries = parsed
         .presets
         .iter()
@@ -1023,7 +1020,10 @@ pub fn milkrust_frame_set_from_source_with_audio_and_input(
                 }
             }
             MilkRustCompositeFrame {
-                blend_alpha: milkrust_composite_alpha(preset_document, index),
+                blend_alpha: match &parsed.saved_blend {
+                    Some(blend) => if index == 0 { 1.0 } else { blend.progress },
+                    None => milkrust_composite_alpha(preset_document, index),
+                },
                 composite_mode: milkrust_composite_mode(preset_document, index).to_string(),
                 frame: build_milkrust_frame_from_scope(
                     preset_document,
@@ -7861,6 +7861,35 @@ comp_shader_2=ret = vec3(shifted, energy * bass_att);
         assert_eq!(changed["megabuf_10"], MilkRustValue::Number(0.75));
         assert_eq!(changed["megabuf_11"], MilkRustValue::Number(1.25));
         assert_eq!(changed["side_effect"], MilkRustValue::Number(1.0));
+    }
+
+    #[test]
+    fn source_driven_frames_preserve_feedback_endpoints_and_motion_values() {
+        let source = "[preset00]\nfDecay=1\nrot=1\nzoom=3\nper_frame_1=dx=0.75;dy=-0.75;";
+        let mut runtime = MilkRustFrameSetRuntime::default();
+        let frames = runtime.try_render_source_with_audio_and_input(source, 0.0, 0.0, 0.0, 0.0,
+            &[], &[], MilkRustInputState::default()).unwrap();
+        let frame = &frames.entries[0].frame;
+        assert_eq!(frame.background_alpha, 0.0);
+        assert_eq!(frame.rotation, 1.0);
+        assert_eq!(frame.zoom, 3.0);
+        assert_eq!(frame.dx, 0.75);
+        assert_eq!(frame.dy, -0.75);
+        let source = source.replace("fDecay=1", "fDecay=0");
+        let frames = runtime.try_render_source_with_audio_and_input(&source, 0.0, 0.0, 0.0, 0.0,
+            &[], &[], MilkRustInputState::default()).unwrap();
+        assert_eq!(frames.entries[0].frame.background_alpha, 1.0);
+    }
+
+    #[test]
+    fn stateless_saved_pair_uses_envelope_progress_and_refuses_unknown_masks() {
+        let source = "blending_pattern=Fade\nblending_progress=0.2\n[PRESET1_BEGIN]\n[preset00]\nzoom=1\n[PRESET1_END]\n[PRESET2_BEGIN]\n[preset00]\nzoom=1\n[PRESET2_END]";
+        let frames = milkrust_frame_set_from_source(source, 0.0, 0.0, 0.0, 0.0);
+        assert_eq!(frames.entries.len(), 2);
+        assert_eq!(frames.entries[0].blend_alpha, 1.0);
+        assert_eq!(frames.entries[1].blend_alpha, 0.2);
+        assert!(milkrust_frame_set_from_source(&source.replace("Fade", "UnknownMask"),
+            0.0, 0.0, 0.0, 0.0).entries.is_empty());
     }
 
 }

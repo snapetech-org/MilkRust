@@ -312,7 +312,7 @@ impl Renderer {
             let warp = layer.warp.as_ref().map_or(&self.copy, |(_, program)| program);
             self.uniforms(warp, frame, &frame.shader_stages.warp, time, 1.0, (1.0-frame.background_alpha).clamp(0.0, 1.0) as f32)?;
             self.draw(0x0004, &feedback_vertices(frame)?)?;
-            unsafe { (self.gl.enable)(BLEND); (self.gl.blend_func)(SRC_ALPHA, ONE_MINUS_SRC_ALPHA); }
+            unsafe { (self.gl.enable)(BLEND); (self.gl.blend_func_separate)(SRC_ALPHA, ONE_MINUS_SRC_ALPHA, 1, ONE_MINUS_SRC_ALPHA); }
             for primitive in &frame.textured_primitives {
                 self.textured.bind(); self.textured.integer("previousFrame", 0);
                 self.bind_texture(0, if primitive.texture_name.is_empty() { layer.targets[layer.read].texture.id }
@@ -334,12 +334,12 @@ impl Renderer {
                 if index == 0 { (self.gl.disable)(BLEND); } else {
                     (self.gl.enable)(BLEND);
                     let destination = if entry.composite_mode == "additive" { 1 } else { ONE_MINUS_SRC_ALPHA };
-                    (self.gl.blend_func)(SRC_ALPHA, destination);
+                    (self.gl.blend_func_separate)(SRC_ALPHA, destination, 1, destination);
                 }
             }
             self.bind_texture(0, layer.targets[write].texture.id);
             let composite = layer.composite.as_ref().map_or(&self.copy, |(_, program)| program);
-            self.uniforms(composite, frame, &frame.shader_stages.composite, time, entry.blend_alpha.clamp(0.0, 1.0) as f32, 1.0)?;
+            self.uniforms(composite, frame, &frame.shader_stages.composite, time, if index == 0 { 1.0 } else { entry.blend_alpha.clamp(0.0, 1.0) as f32 }, 1.0)?;
             self.draw(0x0004, &quad())?;
             self.layers[index].read = write;
         }
@@ -375,10 +375,10 @@ fn feedback_vertices(frame: &MilkRustFrame) -> Result<Vec<f32>, String> {
     let mut vertices = quad();
     let (sine, cosine) = frame.rotation.sin_cos();
     for vertex in vertices.chunks_exact_mut(8) {
-        let x = (vertex[2] as f64 - 0.5 - frame.dx) / frame.zoom.max(0.001);
-        let y = (vertex[3] as f64 - 0.5 - frame.dy) / frame.zoom.max(0.001);
-        vertex[2] = (cosine*x + sine*y + 0.5) as f32;
-        vertex[3] = (-sine*x + cosine*y + 0.5) as f32;
+        let x = (vertex[2] as f64 - 0.5) / frame.zoom.max(0.001);
+        let y = (vertex[3] as f64 - 0.5) / frame.zoom.max(0.001);
+        vertex[2] = (cosine*x - sine*y + 0.5 + frame.dx) as f32;
+        vertex[3] = (sine*x + cosine*y + 0.5 + frame.dy) as f32;
     }
     Ok(vertices)
 }
