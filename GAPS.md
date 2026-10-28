@@ -16,8 +16,9 @@ This audit replaces the older roadmap snapshot, which no longer matched the crat
 - The parser accepts additional indexed shape, sprite and wave key forms, including `shapecode_N_*`, `shape_N_*`, `spritecode_N_*`, `wave_N_*` and the existing forms.
 - `per_frame_init_N` and `frame_init_N` now populate the initialization equation scope before generic frame-equation matching.
 - Two-preset frame generation resolves each preset's shader and texture-sampler data from its own document instead of reusing the first preset's shader data for both entries.
-- The compatibility CLI now retains every discovered file in the file denominator. I/O failures appear in `fileReadErrors`; non-UTF-8 files appear in `encodingWarnings` and are forced unsupported after a lossy diagnostic parse. No file disappears from the denominator.
+- The compatibility CLI now retains every discovered file in the file denominator and emits per-file read, parse and current-subset status plus per-preset diagnostics. I/O failures appear in `fileReadErrors`; non-UTF-8 files appear in `encodingWarnings` and are forced unsupported after a lossy diagnostic parse. Render and visual-fidelity stages are explicitly `not-run` / `not-assessed`; no file disappears from the denominator.
 - Blank and comments-only preset files now fail the import and compatibility gates instead of being counted as supported merely because no unsupported syntax was encountered.
+- Compatibility JSON now reports per-file read/parse/subset status, per-preset diagnostics, and explicit `renderStatus: not-run` / `fidelityStatus: not-assessed`; geometry statistics are labeled as non-render output. The community-report generator labels static-subset results and records a deterministic SHA-256 fingerprint for each source pack. The checked-in May 2026 report remains a historical snapshot until regenerated on the current branch.
 - npm scripts now call the filenames that actually exist under `tools/`.
 
 These changes close the identified false-positive and denominator-loss paths in source. The corpus totals and real renderer outcomes still require execution on the pinned source tree.

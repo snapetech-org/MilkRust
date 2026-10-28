@@ -1,4 +1,5 @@
 import fs from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 
@@ -62,6 +63,32 @@ const extensionCounts = async (root, counts = {}) => {
   return counts;
 };
 
+const fingerprintPack = async (root) => {
+  const files = [];
+  const walk = async (directory, prefix = '') => {
+    const entries = await fs.readdir(directory, { withFileTypes: true });
+    entries.sort((left, right) => (left.name < right.name ? -1 : left.name > right.name ? 1 : 0));
+    for (const entry of entries) {
+      const relative = prefix ? `${prefix}/${entry.name}` : entry.name;
+      const fullPath = path.join(directory, entry.name);
+      if (entry.isSymbolicLink()) throw new Error(`community pack contains a symlink: ${fullPath}`);
+      if (entry.isDirectory()) await walk(fullPath, relative);
+      else if (entry.isFile()) files.push({ fullPath, relative });
+    }
+  };
+  await walk(root);
+  const digest = createHash('sha256');
+  for (const file of files) {
+    const name = Buffer.from(file.relative.replaceAll('\\', '/'), 'utf8');
+    const contents = await fs.readFile(file.fullPath);
+    digest.update(`${name.length}:`);
+    digest.update(name);
+    digest.update(`${contents.length}:`);
+    digest.update(contents);
+  }
+  return { sourceFileCount: files.length, corpusSha256: digest.digest('hex') };
+};
+
 const runCompatReport = async (sourceDir) => {
   const report = await runJson('cargo', [
     'run',
@@ -73,6 +100,12 @@ const runCompatReport = async (sourceDir) => {
     sourceDir,
   ]);
   return {
+    reportSchemaVersion: report.reportSchemaVersion,
+    analysisScope: report.analysisScope,
+    renderStatus: report.renderStatus,
+    fidelityStatus: report.fidelityStatus,
+    renderedCount: report.renderedCount,
+    visuallyReviewedCount: report.visuallyReviewedCount,
     fileCount: report.totalCount,
     presetCount: report.presetCount,
     parsedPresetCount: report.presetCount,
@@ -119,6 +152,7 @@ const main = async () => {
     const manifestPath = path.join(packDir, 'manifest.json');
     const manifest = await readJson(manifestPath);
     const counts = await extensionCounts(packDir);
+    const fingerprint = await fingerprintPack(packDir);
     const pack = {
       id: manifest.id,
       name: manifest.name,
@@ -128,6 +162,7 @@ const main = async () => {
       presetCount: manifest.presets?.length || 0,
       textureCount: manifest.textures?.length || 0,
       playlistCount: manifest.playlist?.length || 0,
+      ...fingerprint,
       byExtension: Object.fromEntries(Object.entries(counts).sort(([left], [right]) => left.localeCompare(right))),
     };
     if (compat) {
@@ -137,12 +172,20 @@ const main = async () => {
   }
 
   const summary = {
+    reportSchemaVersion: 2,
     generatedAt: new Date().toISOString(),
     packCount: packs.length,
     totalPresets: packs.reduce((total, pack) => total + pack.presetCount, 0),
     totalTextures: packs.reduce((total, pack) => total + pack.textureCount, 0),
     compatibilityMode: compat ? (limit ? 'sample' : 'full') : 'none',
     compatibilityLimit: compat && limit ? limit : 0,
+    compatibilityReportSchemaVersion: compat ? 2 : null,
+    reportInterpretation: 'Static parser/function/shader-subset results only; rendering and visual fidelity are not assessed by this report.',
+    analysisScope: compat ? 'static parser/function/shader-subset analysis only' : 'not-run',
+    renderStatus: 'not-run',
+    fidelityStatus: 'not-assessed',
+    renderedCount: 0,
+    visuallyReviewedCount: 0,
     packs,
   };
 
@@ -160,9 +203,13 @@ const renderList = (values = []) => values.length
 
 function renderMarkdown(summary) {
   const rows = summary.packs.map((pack) => {
+    const corpus = `${pack.sourceFileCount} files · `${pack.corpusSha256}``;
     const compatibility = pack.compatibility
-      ? `${pack.compatibility.supportedCount}/${pack.compatibility.fileCount || pack.compatibility.presetCount} files ${pack.compatibility.mode === 'full' ? 'supported' : 'sampled supported'} (${pack.compatibility.parsedPresetCount || pack.compatibility.presetCount} parsed presets)`
+      ? `${pack.compatibility.supportedCount}/${pack.compatibility.fileCount || pack.compatibility.presetCount} files pass the current static subset (${pack.compatibility.parsedPresetCount || pack.compatibility.presetCount} parsed presets)`
       : 'not sampled';
+    const rendererEvidence = pack.compatibility
+      ? `${pack.compatibility.renderedCount} rendered; ${pack.compatibility.fidelityStatus}`
+      : 'not assessed';
     const blockers = pack.compatibility
       ? renderList([
         ...pack.compatibility.unsupportedFunctions,
@@ -170,7 +217,7 @@ function renderMarkdown(summary) {
         ...pack.compatibility.webGpuUnsupportedShaderSections,
       ])
       : '';
-    return `| ${pack.id} | ${pack.presetCount} | ${pack.textureCount} | ${compatibility} | ${blockers || 'none'} |`;
+    return `| ${pack.id} | ${corpus} | ${pack.presetCount} | ${pack.textureCount} | ${compatibility} | ${rendererEvidence} | ${blockers || 'none in current static subset'} |`;
   }).join('\n');
 
   return `# Community Pack Summary
@@ -185,11 +232,13 @@ Community-unlicensed packs are imported into \`content/community-unlicensed\` fo
 - Presets: ${summary.totalPresets}
 - Textures: ${summary.totalTextures}
 - Compatibility mode: ${summary.compatibilityMode === 'sample' ? `sample (${summary.compatibilityLimit})` : summary.compatibilityMode}
+- Analysis scope: ${summary.packs.find((pack) => pack.compatibility)?.compatibility.analysisScope || 'not run'}
+- Render/fidelity status: ${summary.packs.find((pack) => pack.compatibility)?.compatibility.renderStatus || 'not run'} / ${summary.packs.find((pack) => pack.compatibility)?.compatibility.fidelityStatus || 'not assessed'}
 
 ## Packs
 
-| Pack | Presets | Textures | Compatibility | Blockers |
-| --- | ---: | ---: | --- | --- |
+| Pack | Corpus snapshot | Presets | Textures | Static subset analysis | Renderer evidence | Static-subset blockers |
+| --- | --- | ---: | ---: | --- | --- | --- |
 ${rows}
 `;
 }

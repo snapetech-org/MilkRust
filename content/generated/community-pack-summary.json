@@ -1,5 +1,6 @@
 {
   "generatedAt": "2026-05-07T02:07:14.555Z",
+  "reportInterpretation": "Historical 2026-05-07 snapshot. Compatibility counts are static parser/function/shader-subset results only; rendering and visual fidelity were not assessed, and file denominators are not current to the active branch.",
   "packCount": 5,
   "totalPresets": 14576,
   "totalTextures": 107,

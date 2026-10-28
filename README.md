@@ -115,6 +115,8 @@ cargo run -p milkrust-cli -- pack-inspect examples/sample-pack
 cargo run -p milkrust-cli -- pack-validate examples/sample-pack
 ```
 
+`compat` reports whether a preset passes the currently analyzed parser/function/shader subset; its `renderStatus` remains `not-run` and `fidelityStatus` remains `not-assessed`. `render-stats` reports generated geometry counts only. Neither command is evidence of visual compatibility.
+
 ## Content Catalog
 
 ```bash
@@ -124,7 +126,7 @@ npm run content:report-community:compat
 npm run content:validate
 ```
 
-Third-party packs live in [`content/catalog.json`](content/catalog.json). Vetted redistributable content goes in `content/third-party`; aggressive public community imports with unclear/no explicit licenses go in [`content/community-unlicensed`](content/community-unlicensed) and are excluded from default builds unless a distribution opts in. The repo currently vendors the MIT-licensed [`butterchurn-presets@2.4.7`](content/third-party/butterchurn-presets-2.4.7) converted preset package plus public projectM community preset/texture packs.
+Third-party packs live in [`content/catalog.json`](content/catalog.json). Vetted redistributable content goes in `content/third-party`; historical public community imports with unclear/no explicit licenses go in [`content/community-unlicensed`](content/community-unlicensed) for compatibility analysis and are excluded from default builds and downloadable packs. The repo vendors the MIT-licensed [`butterchurn-presets@2.4.7`](content/third-party/butterchurn-presets-2.4.7) converted preset package; projectM community source copies remain in the separately marked community-unlicensed lane.
 
 ## Local security scanning
 

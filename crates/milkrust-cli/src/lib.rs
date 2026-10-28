@@ -135,6 +135,8 @@ pub fn run_milkrust_cli(args: &[String]) -> MilkRustCliResult {
                         "pointVertices": stats.point_vertices,
                         "texturedVertices": stats.textured_vertices,
                         "triangleVertices": stats.triangle_vertices,
+                        "renderStatus": "not-run",
+                        "resultKind": "geometry-statistics-only",
                         "batches": {
                             "filledVertices": batches.filled_vertices.len() / 6,
                             "lineVertices": batches.line_vertices.len() / 6,
@@ -169,6 +171,7 @@ fn compat_command(path: Option<&String>) -> MilkRustCliResult {
 
     let mut file_read_errors = Vec::new();
     let mut encoding_warnings = Vec::new();
+    let mut source_read_statuses = Vec::with_capacity(files.len());
     let entries = files
         .iter()
         .map(|file| {
@@ -184,13 +187,17 @@ fn compat_command(path: Option<&String>) -> MilkRustCliResult {
                 .is_some_and(|extension| extension.eq_ignore_ascii_case("milk2"));
             match fs::read(file) {
                 Ok(bytes) => match String::from_utf8(bytes) {
-                    Ok(source) => build_milkrust_compatibility_entry(
-                        &id,
-                        &file_name,
-                        &source,
-                        is_milk2,
-                    ),
+                    Ok(source) => {
+                        source_read_statuses.push("readable-utf8");
+                        build_milkrust_compatibility_entry(
+                            &id,
+                            &file_name,
+                            &source,
+                            is_milk2,
+                        )
+                    }
                     Err(error) => {
+                        source_read_statuses.push("readable-non-utf8");
                         encoding_warnings.push(serde_json::json!({
                             "fileName": file_name,
                             "error": "non-UTF-8 preset; compatibility is reported unsupported",
@@ -208,6 +215,7 @@ fn compat_command(path: Option<&String>) -> MilkRustCliResult {
                     }
                 },
                 Err(error) => {
+                    source_read_statuses.push("read-failed");
                     file_read_errors.push(serde_json::json!({
                         "fileName": file_name,
                         "error": error.to_string(),
@@ -228,7 +236,13 @@ fn compat_command(path: Option<&String>) -> MilkRustCliResult {
     MilkRustCliResult::ok(format!(
         "{}\n",
         serde_json::json!({
+            "reportSchemaVersion": 2,
             "source": path.display().to_string(),
+            "analysisScope": "static parser/function/shader-subset analysis only",
+            "renderStatus": "not-run",
+            "fidelityStatus": "not-assessed",
+            "renderedCount": 0,
+            "visuallyReviewedCount": 0,
             "totalCount": summary.total_count,
             "fileReadErrorCount": file_read_errors.len(),
             "fileReadErrors": file_read_errors,
@@ -247,16 +261,47 @@ fn compat_command(path: Option<&String>) -> MilkRustCliResult {
             "unsupportedFunctions": summary.unsupported_functions,
             "unsupportedShaderSections": summary.unsupported_shader_sections,
             "webGpuUnsupportedShaderSections": summary.webgpu_unsupported_shader_sections,
-            "entries": entries.iter().map(|entry| serde_json::json!({
+            "entries": entries.iter().enumerate().map(|(index, entry)| serde_json::json!({
                 "id": entry.id,
                 "fileName": entry.file_name,
                 "format": entry.format,
+                "sourceReadStatus": source_read_statuses[index],
+                "parseStatus": match source_read_statuses[index] {
+                    "read-failed" => "not-run",
+                    "readable-non-utf8" => "lossy-diagnostic-only",
+                    _ if entry.preset_count == 0 => "no-presets-parsed",
+                    _ => "parsed",
+                },
+                "featureSubsetStatus": match source_read_statuses[index] {
+                    "read-failed" => "not-evaluated",
+                    "readable-non-utf8" => "unsupported-encoding",
+                    _ if entry.preset_count == 0 => "no-presets-parsed",
+                    _ if entry.supported => "supported-by-current-static-subset",
+                    _ => "unsupported-by-current-static-subset",
+                },
+                "renderStatus": "not-run",
+                "fidelityStatus": "not-assessed",
+                "webGpuSupportScope": "shader-translation-subset-only",
                 "presetCount": entry.preset_count,
                 "supported": entry.supported,
                 "webGpuSupported": entry.webgpu_supported,
                 "unsupportedFunctions": entry.unsupported_functions,
                 "shaderSections": entry.shader_sections,
                 "webGpuShaderSections": entry.webgpu_shader_sections,
+                "presetReports": entry.preset_reports.iter().map(|report| serde_json::json!({
+                    "index": report.index,
+                    "title": report.title,
+                    "error": report.error,
+                    "supportedByCurrentSubset": report.error.is_empty(),
+                    "unsupportedFunctions": report.unsupported_functions,
+                    "shaderSections": report.shader_sections,
+                    "webGpuShaderSections": report.webgpu_shader_sections,
+                    "webGpuShaderSubsetSupported": report.webgpu_supported,
+                    "shapeCount": report.metrics.shape_count,
+                    "spriteCount": report.metrics.sprite_count,
+                    "waveCount": report.metrics.wave_count,
+                    "qRegisters": report.metrics.q_registers,
+                })).collect::<Vec<_>>(),
             })).collect::<Vec<_>>(),
         })
     ))
