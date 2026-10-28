@@ -1,0 +1,46 @@
+{
+  "schemaVersion": 1,
+  "catalogVersion": "2026-10-28.1",
+  "generatedBy": "tools/package-rmpack.py",
+  "packs": [
+    {
+      "id": "milkrust-sample-pack",
+      "name": "MilkRust Sample Pack",
+      "version": "0.1.0",
+      "kind": "preset-pack",
+      "license": "CC0-1.0",
+      "licenseFiles": ["licenses/CC0-1.0.txt"],
+      "distributionStatus": "redistributable",
+      "contentNotice": "MilkRust-authored sample fixtures; no third-party presets or textures are included.",
+      "archive": "milkrust-sample-pack-0.1.0.rmpack",
+      "archiveUrl": "https://raw.githubusercontent.com/snapetech-org/MilkRust/main/content/downloads/milkrust-sample-pack-0.1.0.rmpack",
+      "sha256": "7dbbd8325fcde48187ff1ef0d3e37380bd79ac4ec8e7d52fe96b70cc037ee74b",
+      "archiveBytes": 2776,
+      "expandedBytes": 2947,
+      "fileCount": 6,
+      "presetCount": 2,
+      "formats": ["milk"],
+      "sourceUrls": ["https://github.com/snapetech-org/MilkRust/tree/main/examples/sample-pack"],
+      "compatibilityStatus": "sample-fixture-only",
+      "notes": "The archive is installable as a user pack. It is a small fixture pack, not a claim of community-preset compatibility or full MilkDrop rendering."
+    }
+  ],
+  "linkOnlySources": [
+    {
+      "id": "projectm-milkdrop-original",
+      "name": "Original MilkDrop Preset Pack",
+      "sourceUrl": "https://github.com/projectM-visualizer/presets-milkdrop-original",
+      "distributionStatus": "link-only",
+      "license": "NOASSERTION",
+      "notes": "No explicit license is recorded in the upstream repository. Open the upstream source or import a user-provided local copy; this catalog does not redistribute it."
+    },
+    {
+      "id": "projectm-cream-of-the-crop",
+      "name": "MilkDrop Cream of the Crop Presets",
+      "sourceUrl": "https://github.com/projectM-visualizer/presets-cream-of-the-crop",
+      "distributionStatus": "link-only",
+      "license": "NOASSERTION",
+      "notes": "The upstream notice does not provide a per-preset redistribution license. Open the upstream source or import a user-provided local copy; this catalog does not redistribute it."
+    }
+  ]
+}

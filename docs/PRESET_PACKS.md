@@ -1,8 +1,6 @@
 # MilkRust Preset Packs
 
-MilkRust packs are folder-based content bundles for presets, textures, reusable fragments, thumbnails, data-only plugins, playlists, and automation defaults.
-
-The current implementation supports folder packs. Zip-style `.rmpack` archives can be layered on top later without changing the manifest model.
+MilkRust packs use a folder-based source layout for presets, textures, reusable fragments, thumbnails, data-only plugins, playlists, automation defaults, and license notices. A deterministic ZIP-based `.rmpack` distribution archive is defined for packs whose redistribution status is explicitly cleared.
 
 ## Layout
 
@@ -14,9 +12,18 @@ fragments/
 thumbnails/
 plugins/
 licenses/
+integrity.json        # generated inside .rmpack archives
 ```
 
-Only `manifest.json` is mandatory. Asset paths in the manifest must be relative and must stay inside the pack directory.
+Only `manifest.json` is mandatory for an editable folder pack. Every published archive must additionally declare a known `distributionStatus`, license identifier, and one or more shipped license/attribution notices. Asset paths in the manifest must be relative and stay inside the pack directory.
+
+## Archive packaging
+
+`tools/package-rmpack.py` builds a stable archive from a source folder. The pack must explicitly set `distributionStatus` to `redistributable`; the builder refuses unreviewed or `NOASSERTION` community content. File order, timestamps, compression and mode bits are normalized. The archive includes `integrity.json` with the relative path, byte length and SHA-256 digest of each source file. A separate catalog records the archive SHA-256 and download size.
+
+The checked-in `content/downloads/catalog.json` contains the CC0 MilkRust sample pack and link-only entries for sources without redistribution permission. The sample pack proves the archive path; it does not establish broad MilkDrop rendering compatibility. The PlezyNG app must verify the catalog-pinned archive digest before extraction, enforce byte/file limits, validate paths and dependencies, and activate the install atomically. User imports must remain distinct from built-in packs.
+
+Hash verification protects the archive against accidental or in-transit changes. A runtime-fetched catalog must also be authenticated by a pinned signature before authorizing new URLs or hashes. PlezyNG's initial catalog is embedded in app code with the expected archive digest rather than trusting a mutable catalog endpoint.
 
 ## Manifest
 
@@ -100,3 +107,4 @@ See [`docs/PLUGIN_API.md`](PLUGIN_API.md) for the current hook surface.
 - The web SDK loads the same manifest shape for browser clients.
 - The standalone player accepts local served pack folders and builds a selectable library from generated pack indexes.
 - Studio should export this structure from authored presets, fragments, textures, and thumbnails.
+- Release workflows may publish `.rmpack` archives only after provenance, per-asset rights and compatibility reports are reviewed.

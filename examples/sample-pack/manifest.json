@@ -6,9 +6,14 @@
   "author": "MilkRust",
   "description": "Small local fixture pack for CLI, SDK, player, and Studio integration tests.",
   "license": "CC0-1.0",
+  "distributionStatus": "redistributable",
+  "licenseFiles": [
+    "licenses/CC0-1.0.txt"
+  ],
+  "contentNotice": "MilkRust-authored sample fixtures; no third-party presets or textures are included.",
   "requiredMilkRustVersion": "0.1.0",
   "sourceUrls": [
-    "https://github.com/snapetech/MilkRust"
+    "https://github.com/snapetech-org/MilkRust"
   ],
   "presets": [
     {

@@ -8,10 +8,18 @@
       "kind": "pack",
       "status": "vendored",
       "license": "CC0-1.0",
+      "distributionStatus": "redistributable",
+      "licenseFiles": ["examples/sample-pack/licenses/CC0-1.0.txt"],
       "copyPolicy": "include",
       "source": {
         "type": "local",
         "path": "examples/sample-pack"
+      },
+      "archive": {
+        "path": "content/downloads/milkrust-sample-pack-0.1.0.rmpack",
+        "sha256": "7dbbd8325fcde48187ff1ef0d3e37380bd79ac4ec8e7d52fe96b70cc037ee74b",
+        "compressedBytes": 2776,
+        "expandedBytes": 2947
       },
       "notes": "MilkRust-owned fixture pack used by CLI, SDK, player, and Studio integration tests."
     },
