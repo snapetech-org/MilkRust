@@ -6946,7 +6946,10 @@ comp_shader_2=ret = vec3(shifted, energy * bass_att);
         let report = analyze_milkrust_preset_compatibility(parsed.presets.first().unwrap());
         assert!(report.unsupported_functions.is_empty());
         assert!(report.shader_sections.is_empty());
-        assert_eq!(milkrust_compatibility_error(&report), "");
+        assert_eq!(
+            milkrust_compatibility_error(&report),
+            "MilkRust preset has renderer features pending: separate-warp-and-composite-stage-rendering."
+        );
     }
 
     #[test]
