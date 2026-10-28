@@ -18,6 +18,20 @@ MilkDrop uniforms and stage behavior. Compiler/driver hangs also require
 containment outside the current in-process renderer. Extending token rewrites
 does not satisfy those requirements.
 
+The next native/WebAssembly front-end candidate is the MIT-licensed
+[Thekla HLSLParser](https://github.com/Thekla/hlslparser). Its own README says
+it targets legacy Direct3D 9-style HLSL; the GLSL translator is maintained by
+community contributions. projectM vendors this parser, yet its current release
+notes still list presets that translate incorrectly or render black. Therefore
+the parser is a candidate for a pinned integration and corpus evaluation, not
+a complete-compatibility claim. Before replacing this translator, the project
+must audit the pinned source and notices, add a bounded MilkDrop shader wrapper
+and uniform/resource ABI, compile for each native target and WebAssembly, and
+compare output against an approved reference corpus. Arbitrary modern HLSL,
+DirectX-specific resources, and unsupported MilkDrop runtime features remain
+outside the promised compatibility contract unless those are separately
+implemented and qualified.
+
 Upstream routes reviewed for this work include
 [projectM](https://github.com/projectM-visualizer/projectm) (whose own releases
 still document shader translation limitations) and the MIT-licensed

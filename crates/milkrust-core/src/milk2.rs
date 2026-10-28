@@ -16,10 +16,35 @@ pub struct SavedBlend {
 }
 
 impl SavedBlend {
+    /// MilkDrop 3.2 adds a display-name record after the two preset blocks.
+    /// It is metadata, not an executable sprite/shader extension, so it must
+    /// not disable an otherwise supported uniform Fade blend.
+    fn has_only_supported_trailer_metadata(&self) -> bool {
+        let mut saw_name = false;
+        for line in self.trailer.lines() {
+            let line = line.trim();
+            if line.is_empty() {
+                continue;
+            }
+            let Some((key, value)) = line.split_once('=') else {
+                return false;
+            };
+            if !key.trim().eq_ignore_ascii_case("NAME")
+                || saw_name
+                || value.trim().len() > 512
+            {
+                return false;
+            }
+            saw_name = true;
+        }
+        true
+    }
+
     /// Only this family currently has an exact implemented spatial mask. Other
     /// patterns must not silently turn into an ordinary temporal cross-fade.
     pub fn supports_uniform_composite(&self) -> bool {
-        self.pattern.eq_ignore_ascii_case("fade") && self.trailer.trim().is_empty()
+        self.pattern.eq_ignore_ascii_case("fade")
+            && self.has_only_supported_trailer_metadata()
             && self.header.keys().all(|key| matches!(key.as_str(),
                 "blending_pattern" | "blending_progress" | "blending_direction" |
                 "random_1" | "random_2" | "random_3" | "random_4" | "random_5"))
@@ -146,6 +171,30 @@ mod tests {
         let (blend, presets) = parse(&source).unwrap();
         assert!(!blend.supports_uniform_composite());
         assert!(blend.serialize(&presets).contains("img=x.png"));
+    }
+
+    #[test]
+    fn milkdrop_32_display_name_does_not_disable_fade_and_round_trips() {
+        let source = format!("{}NAME=Original author title\n", PAIR);
+        let (blend, presets) = parse(&source).unwrap();
+        assert!(blend.supports_uniform_composite());
+        let serialized = blend.serialize(&presets);
+        assert!(serialized.ends_with("NAME=Original author title\n"));
+        assert_eq!(parse(&serialized).unwrap(), (blend, presets));
+    }
+
+    #[test]
+    fn unknown_or_ambiguous_trailer_metadata_remains_gated() {
+        let trailers = vec![
+            "NAME=first\nNAME=second\n".to_string(),
+            "sprite=external.png\n".to_string(),
+            format!("NAME={}\n", "x".repeat(513)),
+        ];
+        for trailer in trailers {
+            let source = format!("{PAIR}{trailer}");
+            let (blend, _) = parse(&source).unwrap();
+            assert!(!blend.supports_uniform_composite());
+        }
     }
     #[test]
     fn malformed_blocks_and_nonfinite_metadata_fail() {
