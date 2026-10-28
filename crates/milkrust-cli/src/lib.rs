@@ -7,6 +7,7 @@ use milkrust_core::{
     build_milkrust_compatibility_entry, parse_milkrust_preset_set,
     milkrust_frame_set_from_source_with_audio, milkrust_preset_name,
     summarize_milkrust_compatibility_matrix, validate_milkrust_import,
+    MilkRustCompatibilityEntry,
 };
 use milkrust_pack::{load_milkrust_pack_manifest, validate_milkrust_pack_dir};
 use milkrust_renderer_core::MilkRustRenderer;
@@ -166,21 +167,42 @@ fn compat_command(path: Option<&String>) -> MilkRustCliResult {
         );
     }
 
+    let mut file_read_errors = Vec::new();
     let entries = files
         .iter()
-        .filter_map(|file| {
-            let source = fs::read_to_string(file).ok()?;
-            Some(build_milkrust_compatibility_entry(
-                file
-                    .file_stem()
-                    .and_then(|stem| stem.to_str())
-                    .unwrap_or("preset"),
-                &file.display().to_string(),
-                &source,
-                file.extension()
-                    .and_then(|extension| extension.to_str())
-                    .is_some_and(|extension| extension.eq_ignore_ascii_case("milk2")),
-            ))
+        .map(|file| {
+            let file_name = file.display().to_string();
+            let id = file
+                .file_stem()
+                .and_then(|stem| stem.to_str())
+                .unwrap_or("preset")
+                .to_string();
+            let is_milk2 = file
+                .extension()
+                .and_then(|extension| extension.to_str())
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("milk2"));
+            match fs::read_to_string(file) {
+                Ok(source) => build_milkrust_compatibility_entry(
+                    &id,
+                    &file_name,
+                    &source,
+                    is_milk2,
+                ),
+                Err(error) => {
+                    file_read_errors.push(serde_json::json!({
+                        "fileName": file_name,
+                        "error": error.to_string(),
+                    }));
+                    MilkRustCompatibilityEntry {
+                        file_name,
+                        format: if is_milk2 { "milk2" } else { "milk" }.to_string(),
+                        id,
+                        supported: false,
+                        webgpu_supported: false,
+                        ..MilkRustCompatibilityEntry::default()
+                    }
+                }
+            }
         })
         .collect::<Vec<_>>();
     let summary = summarize_milkrust_compatibility_matrix(&entries);
@@ -189,6 +211,8 @@ fn compat_command(path: Option<&String>) -> MilkRustCliResult {
         serde_json::json!({
             "source": path.display().to_string(),
             "totalCount": summary.total_count,
+            "fileReadErrorCount": file_read_errors.len(),
+            "fileReadErrors": file_read_errors,
             "presetCount": summary.preset_count,
             "supportedCount": summary.supported_count,
             "unsupportedCount": summary.unsupported_count,

@@ -1526,6 +1526,18 @@ fn parse_indexed_key<'a>(key: &'a str, prefix: &str) -> Option<(usize, &'a str)>
     Some((index, &rest[digit_count + 1..]))
 }
 
+fn parse_numbered_key(key: &str, prefix: &str) -> Option<usize> {
+    let rest = key.strip_prefix(prefix)?;
+    if rest.is_empty() || !rest.chars().all(|ch| ch.is_ascii_digit()) {
+        return None;
+    }
+    rest.parse::<usize>().ok()
+}
+
+fn milkrust_shader_line(value: &str) -> &str {
+    value.trim().strip_prefix('`').unwrap_or(value.trim()).trim()
+}
+
 fn ensure_milkrust_entry(
     entries: &mut Vec<MilkRustIndexedEntry>,
     index: usize,
@@ -1537,6 +1549,10 @@ fn ensure_milkrust_entry(
 }
 
 fn assign_milkrust_equation(equations: &mut MilkRustEquations, key: &str, value: &str) -> bool {
+    if key.starts_with("per_frame_init") || key.starts_with("frame_init") {
+        append_milkrust_statement(&mut equations.init, value);
+        return true;
+    }
     if key.starts_with("per_frame") || key.starts_with("frame") {
         append_milkrust_statement(&mut equations.per_frame, value);
         return true;
@@ -1578,6 +1594,8 @@ fn assign_milkrust_indexed_equation(
 fn parse_milkrust_preset_text(text: &str, index: usize) -> MilkRustPresetDocument {
     let mut preset = MilkRustPresetDocument::new(text, index);
     let mut section = "preset".to_string();
+    let mut numbered_warp_shader = BTreeMap::<usize, String>::new();
+    let mut numbered_comp_shader = BTreeMap::<usize, String>::new();
 
     for raw_line in text.replace("\r\n", "\n").replace('\r', "\n").lines() {
         let trimmed = raw_line.trim();
@@ -1605,21 +1623,29 @@ fn parse_milkrust_preset_text(text: &str, index: usize) -> MilkRustPresetDocumen
             preset.title = raw_value.to_string();
             continue;
         }
-        if let Some((shape_index, shape_key)) = parse_indexed_key(&key, "shape") {
+        if let Some((shape_index, shape_key)) = parse_indexed_key(&key, "shapecode_")
+            .or_else(|| parse_indexed_key(&key, "shape_"))
+            .or_else(|| parse_indexed_key(&key, "shape"))
+        {
             let entry = ensure_milkrust_entry(&mut preset.shapes, shape_index);
             if !assign_milkrust_indexed_equation(&mut entry.equations, shape_key, raw_value) {
                 entry.base_values.insert(shape_key.to_string(), value);
             }
             continue;
         }
-        if let Some((sprite_index, sprite_key)) = parse_indexed_key(&key, "sprite") {
+        if let Some((sprite_index, sprite_key)) = parse_indexed_key(&key, "spritecode_")
+            .or_else(|| parse_indexed_key(&key, "sprite_"))
+            .or_else(|| parse_indexed_key(&key, "sprite"))
+        {
             let entry = ensure_milkrust_entry(&mut preset.sprites, sprite_index);
             if !assign_milkrust_indexed_equation(&mut entry.equations, sprite_key, raw_value) {
                 entry.base_values.insert(sprite_key.to_string(), value);
             }
             continue;
         }
-        if let Some((wave_index, wave_key)) = parse_indexed_key(&key, "wavecode_") {
+        if let Some((wave_index, wave_key)) = parse_indexed_key(&key, "wavecode_")
+            .or_else(|| parse_indexed_key(&key, "wave_"))
+        {
             let entry = ensure_milkrust_entry(&mut preset.waves, wave_index);
             if !assign_milkrust_indexed_equation(&mut entry.equations, wave_key, raw_value) {
                 entry.base_values.insert(wave_key.to_string(), value);
@@ -1634,10 +1660,25 @@ fn parse_milkrust_preset_text(text: &str, index: usize) -> MilkRustPresetDocumen
             append_milkrust_statement(&mut preset.comp_shader, raw_value);
             continue;
         }
+        if let Some(shader_index) = parse_numbered_key(&key, "warp_") {
+            numbered_warp_shader.insert(shader_index, milkrust_shader_line(raw_value).to_string());
+            continue;
+        }
+        if let Some(shader_index) = parse_numbered_key(&key, "comp_") {
+            numbered_comp_shader.insert(shader_index, milkrust_shader_line(raw_value).to_string());
+            continue;
+        }
         if assign_milkrust_equation(&mut preset.equations, &key, raw_value) {
             continue;
         }
         preset.base_values.insert(key, value);
+    }
+
+    for line in numbered_warp_shader.values() {
+        append_milkrust_statement(&mut preset.warp_shader, line);
+    }
+    for line in numbered_comp_shader.values() {
+        append_milkrust_statement(&mut preset.comp_shader, line);
     }
 
     preset
