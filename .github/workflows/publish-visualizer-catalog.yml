@@ -1,0 +1,47 @@
+# ng-runner-policy: private-jit-only-v1
+name: Publish signed visualizer catalog
+on:
+  workflow_dispatch:
+    inputs:
+      sequence:
+        description: Monotonically increasing catalog sequence
+        required: true
+        type: string
+      bootstrap:
+        description: Create the first catalog branch (only after public keys ship in the app)
+        default: false
+        type: boolean
+permissions:
+  contents: read
+concurrency:
+  group: milkrust-signed-catalog
+  cancel-in-progress: false
+jobs:
+  publish:
+    if: github.ref == 'refs/heads/main'
+    environment: visualizer-catalog
+    permissions:
+      contents: write
+    runs-on: ${{ fromJSON(format('{{"group":"ng-shared-main-jit","labels":["self-hosted","linux","x64","ng-shared-main-milkrust","ng-main-run-{0}","gha-{0}-catalog-publish"]}}', github.run_id)) }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Prepare reviewed immutable pack metadata
+        env:
+          CATALOG_SEQUENCE: ${{ inputs.sequence }}
+        run: python3 tools/signed_catalog.py prepare --input content/downloads/catalog.json --sequence "$CATALOG_SEQUENCE" --output "$RUNNER_TEMP/catalog-payload.json"
+      - name: Sign and self-verify with the release trust root
+        env:
+          MILKRUST_CATALOG_PRIVATE_KEYS: ${{ secrets.MILKRUST_CATALOG_PRIVATE_KEYS }}
+        run: python3 tools/signed_catalog.py sign --input "$RUNNER_TEMP/catalog-payload.json" --output "$RUNNER_TEMP/visualizer-catalog.json"
+      - name: Publish verified catalog without rewriting history
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          CATALOG_BOOTSTRAP: ${{ inputs.bootstrap }}
+        shell: bash
+        run: |
+          args=()
+          if [[ "$CATALOG_BOOTSTRAP" == "true" ]]; then args+=(--bootstrap); fi
+          python3 tools/signed_catalog.py publish --input "$RUNNER_TEMP/visualizer-catalog.json" "${args[@]}"
