@@ -157,6 +157,9 @@ export interface MilkRustFrame {
 }
 
 export interface MilkRustRenderState {
+  error?: string;
+  fidelity?: 'not-assessed';
+  waitingForTextures?: boolean;
   presetName?: string;
   presetIndex?: number;
 }

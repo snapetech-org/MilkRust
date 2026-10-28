@@ -1,8 +1,9 @@
-use std::{cell::RefCell, collections::BTreeMap, rc::Rc};
+use std::{cell::{Cell, RefCell}, collections::BTreeMap, rc::Rc};
 
 use milkrust_core::{
     clamp_unit, create_repeated_milkrust_colors, get_milkrust_texture_name_aliases,
     MilkRustFrame, MilkRustFrameSet, MilkRustPrimitiveMode, MilkRustTexturedPrimitiveMode,
+    MilkRustShaderStage,
 };
 use wasm_bindgen::{prelude::*, JsCast};
 
@@ -22,13 +23,21 @@ impl MilkRustRenderer {
         }
     }
 
-    pub fn render_frame_set(&self, frame_set: &MilkRustFrameSet, time: f64) {
+    pub fn reset(&self) {
+        if let Self::WebGl(renderer_set) = self { renderer_set.renderers.borrow_mut().clear(); }
+    }
+
+    pub fn render_frame_set(&self, frame_set: &MilkRustFrameSet, time: f64) -> Result<bool, JsValue> {
         if frame_set.entries.is_empty() {
-            return;
+            return Err(JsValue::from_str("No preset frames to render"));
         }
         match self {
             Self::WebGl(renderer_set) => renderer_set.render_frame_set(frame_set, time),
             Self::Canvas { canvas, context } => {
+                if frame_set.entries.iter().any(|entry| entry.frame.shader_stages.warp.required ||
+                    entry.frame.shader_stages.composite.required || entry.frame.warp_mesh.is_some()) {
+                    return Err(JsValue::from_str("Canvas preview cannot execute preset shaders or a warp mesh"));
+                }
                 for (index, entry) in frame_set.entries.iter().enumerate() {
                     context.save();
                     context.set_global_alpha(clamp_unit(entry.blend_alpha));
@@ -39,6 +48,7 @@ impl MilkRustRenderer {
                     }
                     context.restore();
                 }
+                Ok(true)
             }
         }
     }
@@ -58,12 +68,15 @@ struct MilkRustWebGlRenderer {
     primitive_color_buffer: web_sys::WebGlBuffer,
     primitive_program: web_sys::WebGlProgram,
     procedural_texture: web_sys::WebGlTexture,
-    named_textures: RefCell<BTreeMap<String, web_sys::WebGlTexture>>,
+    named_textures: RefCell<BTreeMap<String, MilkRustTextureAsset>>,
+    texture_pixels: Rc<Cell<u64>>,
+    max_texture_units: usize,
     program: web_sys::WebGlProgram,
     textured_position_buffer: web_sys::WebGlBuffer,
     textured_program: web_sys::WebGlProgram,
     textured_uv_buffer: web_sys::WebGlBuffer,
-    translated_program: RefCell<Option<MilkRustTranslatedProgram>>,
+    translated_warp_program: RefCell<Option<MilkRustTranslatedProgram>>,
+    translated_composite_program: RefCell<Option<MilkRustTranslatedProgram>>,
     texture_assets: Rc<RefCell<BTreeMap<String, String>>>,
     u_color: Option<web_sys::WebGlUniformLocation>,
     u_counts: Option<web_sys::WebGlUniformLocation>,
@@ -90,6 +103,27 @@ struct MilkRustWebGlRenderer {
 struct MilkRustTranslatedProgram {
     program: web_sys::WebGlProgram,
     source: String,
+    mesh: bool,
+}
+
+struct MilkRustTextureAsset {
+    texture: web_sys::WebGlTexture,
+    image: web_sys::HtmlImageElement,
+    // None while loading, Some(Ok) after upload, Some(Err) after decode/upload failure.
+    state: Rc<RefCell<Option<Result<(), String>>>>,
+    total_pixels: Rc<Cell<u64>>,
+    allocated_pixels: Rc<Cell<u64>>,
+    _onload: Closure<dyn FnMut(web_sys::Event)>,
+    _onerror: Closure<dyn FnMut(web_sys::Event)>,
+}
+
+impl Drop for MilkRustTextureAsset {
+    fn drop(&mut self) {
+        self.image.set_onload(None);
+        self.image.set_onerror(None);
+        self.image.set_src("");
+        self.total_pixels.set(self.total_pixels.get().saturating_sub(self.allocated_pixels.get()));
+    }
 }
 
 struct MilkRustFeedbackTargets {
@@ -137,11 +171,16 @@ impl MilkRustWebGlRendererSet {
         })
     }
 
-    fn render_frame_set(&self, frame_set: &MilkRustFrameSet, time: f64) {
-        if frame_set.entries.is_empty() || !self.ensure_renderer_count(frame_set.entries.len()) {
-            return;
-        }
+    fn render_frame_set(&self, frame_set: &MilkRustFrameSet, time: f64) -> Result<bool, JsValue> {
+        if self.gl.is_context_lost() { return Err(JsValue::from_str("WebGL context lost; reload the preset after recovery")); }
+        self.ensure_renderer_count(frame_set.entries.len())?;
         let renderers = self.renderers.borrow();
+        // Compile every required stage before changing feedback or the canvas.
+        // A failed shader never silently selects a built-in visual instead.
+        for (renderer, entry) in renderers.iter().zip(&frame_set.entries) {
+            renderer.prepare_stages(&entry.frame)?;
+            if !renderer.prepare_textures(&entry.frame)? { return Ok(false); }
+        }
         for (index, entry) in frame_set.entries.iter().enumerate() {
             if let Some(renderer) = renderers.get(index) {
                 renderer.render_with_options(
@@ -150,22 +189,21 @@ impl MilkRustWebGlRendererSet {
                     index == 0,
                     &entry.composite_mode,
                     entry.blend_alpha,
-                );
+                )?;
             }
         }
+        Ok(true)
     }
 
-    fn ensure_renderer_count(&self, count: usize) -> bool {
+    fn ensure_renderer_count(&self, count: usize) -> Result<(), JsValue> {
+        if count == 0 || count > 2 { return Err(JsValue::from_str("Expected one or two independent preset render targets")); }
         let mut renderers = self.renderers.borrow_mut();
+        renderers.truncate(count);
         while renderers.len() < count {
-            let Ok(renderer) =
-                MilkRustWebGlRenderer::new(self.gl.clone(), self.texture_assets.clone())
-            else {
-                return false;
-            };
+            let renderer = MilkRustWebGlRenderer::new(self.gl.clone(), self.texture_assets.clone())?;
             renderers.push(renderer);
         }
-        true
+        Ok(())
     }
 }
 
@@ -174,6 +212,8 @@ impl MilkRustWebGlRenderer {
         gl: web_sys::WebGl2RenderingContext,
         texture_assets: Rc<RefCell<BTreeMap<String, String>>>,
     ) -> Result<Self, JsValue> {
+        let max_texture_units = gl.get_parameter(web_sys::WebGl2RenderingContext::MAX_TEXTURE_IMAGE_UNITS)?
+            .as_f64().unwrap_or(0.0) as usize;
         let vertex_shader = compile_milkrust_shader(
             &gl,
             web_sys::WebGl2RenderingContext::VERTEX_SHADER,
@@ -296,6 +336,8 @@ impl MilkRustWebGlRenderer {
             feedback_targets,
             gl,
             named_textures: RefCell::new(BTreeMap::new()),
+            texture_pixels: Rc::new(Cell::new(0)),
+            max_texture_units,
             primitive_buffer,
             primitive_color_buffer,
             primitive_program,
@@ -305,7 +347,8 @@ impl MilkRustWebGlRenderer {
             textured_program,
             textured_uv_buffer,
             texture_assets,
-            translated_program: RefCell::new(None),
+            translated_warp_program: RefCell::new(None),
+            translated_composite_program: RefCell::new(None),
         })
     }
 
@@ -316,7 +359,8 @@ impl MilkRustWebGlRenderer {
         clear_screen: bool,
         composite_mode: &str,
         output_alpha: f64,
-    ) {
+    ) -> Result<(), JsValue> {
+        let (warp_program, composite_program) = self.prepare_stages(frame)?;
         self.gl.use_program(Some(&self.program));
         self.gl.bind_buffer(
             web_sys::WebGl2RenderingContext::ARRAY_BUFFER,
@@ -326,11 +370,9 @@ impl MilkRustWebGlRenderer {
         let drawing_height = self.gl.drawing_buffer_height().max(1);
         let mut targets = self.feedback_targets.borrow_mut();
         if targets.width != drawing_width || targets.height != drawing_height {
-            if let Ok(next_targets) =
-                create_milkrust_feedback_targets(&self.gl, drawing_width, drawing_height)
-            {
-                *targets = next_targets;
-            }
+            let next_targets = create_milkrust_feedback_targets(&self.gl, drawing_width, drawing_height)?;
+            delete_milkrust_feedback_targets(&self.gl, &targets);
+            *targets = next_targets;
         }
         let read_index = targets.read_index;
         let write_index = 1 - read_index;
@@ -345,16 +387,12 @@ impl MilkRustWebGlRenderer {
             web_sys::WebGl2RenderingContext::FRAMEBUFFER,
             Some(&targets.targets[write_index].framebuffer),
         );
+        self.gl.disable(web_sys::WebGl2RenderingContext::BLEND);
         if frame.warp_mesh.is_some() {
-            self.draw_warp_mesh(frame, drawing_width, drawing_height);
-        } else if let Some(program) = self.translated_program_for(&frame.shader_source) {
-            self.draw_translated_feedback_quad(
-                &program,
-                frame,
-                time,
-                drawing_width,
-                drawing_height,
-            );
+            self.draw_warp_mesh(frame, drawing_width, drawing_height, warp_program.as_ref(), time);
+        } else if let Some(program) = warp_program {
+            self.draw_translated_quad(&program, frame, &frame.shader_stages.warp,
+                time, drawing_width, drawing_height, true, 1.0);
         } else {
             self.draw_feedback_quad(frame, time, drawing_width, drawing_height, false, 1.0);
         }
@@ -363,6 +401,7 @@ impl MilkRustWebGlRenderer {
 
         self.gl
             .bind_framebuffer(web_sys::WebGl2RenderingContext::FRAMEBUFFER, None);
+        self.gl.active_texture(web_sys::WebGl2RenderingContext::TEXTURE0);
         self.gl.bind_texture(
             web_sys::WebGl2RenderingContext::TEXTURE_2D,
             Some(&targets.targets[write_index].texture),
@@ -380,28 +419,37 @@ impl MilkRustWebGlRenderer {
                 milkrust_webgl_composite_blend_factors(composite_mode);
             self.gl.blend_func(source_factor, destination_factor);
         }
-        self.draw_feedback_quad(
+        if let Some(program) = composite_program {
+            self.draw_translated_quad(&program, frame, &frame.shader_stages.composite,
+                time, drawing_width, drawing_height, false, output_alpha);
+        } else { self.draw_feedback_quad(
             frame,
             time,
             drawing_width,
             drawing_height,
             true,
             output_alpha,
-        );
+        ); }
         if should_blend {
             self.gl.disable(web_sys::WebGl2RenderingContext::BLEND);
         }
         targets.read_index = write_index;
+        if self.gl.get_error() != web_sys::WebGl2RenderingContext::NO_ERROR {
+            return Err(JsValue::from_str("WebGL failed while drawing a preset stage"));
+        }
+        Ok(())
     }
 
-    fn draw_warp_mesh(&self, frame: &MilkRustFrame, drawing_width: i32, drawing_height: i32) {
+    fn draw_warp_mesh(&self, frame: &MilkRustFrame, drawing_width: i32, drawing_height: i32,
+        translated: Option<&web_sys::WebGlProgram>, time: f64) {
         let Some(mesh) = frame.warp_mesh.as_ref() else {
             return;
         };
         if mesh.positions.len() < 6 || mesh.positions.len() != mesh.source_uvs.len() {
             return;
         }
-        self.gl.use_program(Some(&self.warp_program));
+        let program = translated.unwrap_or(&self.warp_program);
+        self.gl.use_program(Some(program));
         self.gl.viewport(0, 0, drawing_width, drawing_height);
         self.gl.clear_color(0.0, 0.0, 0.0, 1.0);
         self.gl
@@ -418,8 +466,8 @@ impl MilkRustWebGlRenderer {
             .collect::<Vec<_>>();
         let positions_array = js_sys::Float32Array::from(positions.as_slice());
         let source_uvs_array = js_sys::Float32Array::from(source_uvs.as_slice());
-        let position = self.gl.get_attrib_location(&self.warp_program, "position");
-        let source_uv = self.gl.get_attrib_location(&self.warp_program, "sourceUv");
+        let position = self.gl.get_attrib_location(program, "position");
+        let source_uv = self.gl.get_attrib_location(program, "sourceUv");
         self.gl.bind_buffer(
             web_sys::WebGl2RenderingContext::ARRAY_BUFFER,
             Some(&self.warp_position_buffer),
@@ -460,6 +508,10 @@ impl MilkRustWebGlRenderer {
                 0,
             );
         }
+        if translated.is_some() {
+            self.set_translated_uniforms(program, frame, &frame.shader_stages.warp,
+                time, drawing_width, drawing_height, true, 1.0);
+        } else {
         let (r, g, b) = frame.wave_color;
         self.gl.uniform3f(
             self.u_warp_color.as_ref(),
@@ -473,6 +525,7 @@ impl MilkRustWebGlRenderer {
         );
         self.gl.uniform1f(self.u_warp_output_alpha.as_ref(), 1.0);
         self.gl.uniform1i(self.u_warp_previous_frame.as_ref(), 0);
+        }
         self.gl.draw_arrays(
             web_sys::WebGl2RenderingContext::TRIANGLES,
             0,
@@ -480,42 +533,61 @@ impl MilkRustWebGlRenderer {
         );
     }
 
-    fn translated_program_for(&self, source: &str) -> Option<web_sys::WebGlProgram> {
-        if source.trim().is_empty() {
-            return None;
+    fn prepare_stages(&self, frame: &MilkRustFrame) -> Result<(Option<web_sys::WebGlProgram>, Option<web_sys::WebGlProgram>), JsValue> {
+        let units = self.max_texture_units;
+        if frame.shader_stages.warp.texture_samplers.len() + 2 > units ||
+            frame.shader_stages.composite.texture_samplers.len() + 2 > units {
+            return Err(JsValue::from_str("Preset exceeds the GPU texture-unit limit"));
         }
-        if let Some(cached) = self.translated_program.borrow().as_ref() {
-            if cached.source == source {
-                return Some(cached.program.clone());
+        let warp = self.translated_program_for(&frame.shader_stages.warp, &self.translated_warp_program,
+            frame.warp_mesh.is_some()).map_err(|e| JsValue::from_str(&format!("Warp shader: {}", e.as_string().unwrap_or_default())))?;
+        let composite = self.translated_program_for(&frame.shader_stages.composite, &self.translated_composite_program,
+            false).map_err(|e| JsValue::from_str(&format!("Composite shader: {}", e.as_string().unwrap_or_default())))?;
+        Ok((warp, composite))
+    }
+
+    fn translated_program_for(&self, stage: &MilkRustShaderStage,
+        cache: &RefCell<Option<MilkRustTranslatedProgram>>, mesh: bool) -> Result<Option<web_sys::WebGlProgram>, JsValue> {
+        if !stage.required { return Ok(None); }
+        let source = &stage.source;
+        if source.trim().is_empty() {
+            return Err(JsValue::from_str("the required shader could not be translated"));
+        }
+        if let Some(cached) = cache.borrow().as_ref() {
+            if cached.source == *source && cached.mesh == mesh {
+                return Ok(Some(cached.program.clone()));
             }
         }
         let vertex_shader = compile_milkrust_shader(
             &self.gl,
             web_sys::WebGl2RenderingContext::VERTEX_SHADER,
-            MILKRUST_TRANSLATED_VERTEX_SHADER,
-        )
-        .ok()?;
+            if mesh { MILKRUST_TRANSLATED_MESH_VERTEX_SHADER } else { MILKRUST_TRANSLATED_VERTEX_SHADER },
+        )?;
         let fragment_shader = compile_milkrust_shader(
             &self.gl,
             web_sys::WebGl2RenderingContext::FRAGMENT_SHADER,
             source,
-        )
-        .ok()?;
-        let program = link_milkrust_program(&self.gl, &vertex_shader, &fragment_shader).ok()?;
-        *self.translated_program.borrow_mut() = Some(MilkRustTranslatedProgram {
+        ).map_err(|error| { self.gl.delete_shader(Some(&vertex_shader)); error })?;
+        let program = link_milkrust_program(&self.gl, &vertex_shader, &fragment_shader)?;
+        if let Some(previous) = cache.borrow_mut().take() { self.gl.delete_program(Some(&previous.program)); }
+        *cache.borrow_mut() = Some(MilkRustTranslatedProgram {
             program: program.clone(),
             source: source.to_string(),
+            mesh,
         });
-        Some(program)
+        Ok(Some(program))
     }
 
     fn set_translated_uniforms(
         &self,
         program: &web_sys::WebGlProgram,
         frame: &MilkRustFrame,
+        stage: &MilkRustShaderStage,
         time: f64,
         drawing_width: i32,
         drawing_height: i32,
+        warp: bool,
+        output_alpha: f32,
     ) {
         let (r, g, b) = frame.wave_color;
         let feedback = (1.0 - frame.background_alpha).clamp(0.0, 0.985) as f32;
@@ -527,14 +599,14 @@ impl MilkRustWebGlRenderer {
             b as f32 / 255.0,
         );
         self.gl.uniform1i(uniform("previousFrame").as_ref(), 0);
-        for index in 0..4 {
+        for index in 0..stage.texture_samplers.len() {
             let texture_unit = index + 2;
             self.gl
                 .active_texture(web_sys::WebGl2RenderingContext::TEXTURE0 + texture_unit as u32);
-            let texture = frame
-                .shader_texture_samplers
+            let texture = stage
+                .texture_samplers
                 .get(index)
-                .and_then(|name| self.named_texture_for(name))
+                .and_then(|name| self.named_texture_for(name).ok().flatten())
                 .unwrap_or_else(|| self.procedural_texture.clone());
             self.gl
                 .bind_texture(web_sys::WebGl2RenderingContext::TEXTURE_2D, Some(&texture));
@@ -546,7 +618,10 @@ impl MilkRustWebGlRenderer {
         self.gl
             .active_texture(web_sys::WebGl2RenderingContext::TEXTURE0);
         self.gl.uniform1f(uniform("feedback").as_ref(), feedback);
-        self.gl.uniform1f(uniform("outputAlpha").as_ref(), 1.0);
+        self.gl.uniform1f(uniform("outputAlpha").as_ref(), output_alpha);
+        self.gl.uniform1f(uniform("isWarp").as_ref(), if warp { 1.0 } else { 0.0 });
+        self.gl.uniform4f(uniform("motion").as_ref(), frame.rotation as f32, frame.zoom as f32,
+            frame.dx as f32, frame.dy as f32);
         self.gl.uniform1f(uniform("time").as_ref(), time as f32);
         self.gl.uniform1f(uniform("sampleRate").as_ref(), 44_100.0);
         self.gl.uniform2f(
@@ -601,13 +676,16 @@ impl MilkRustWebGlRenderer {
         }
     }
 
-    fn draw_translated_feedback_quad(
+    fn draw_translated_quad(
         &self,
         program: &web_sys::WebGlProgram,
         frame: &MilkRustFrame,
+        stage: &MilkRustShaderStage,
         time: f64,
         drawing_width: i32,
         drawing_height: i32,
+        warp: bool,
+        output_alpha: f32,
     ) {
         self.gl.use_program(Some(program));
         self.gl.bind_buffer(
@@ -627,10 +705,11 @@ impl MilkRustWebGlRenderer {
             );
         }
         self.gl.viewport(0, 0, drawing_width, drawing_height);
-        self.gl.clear_color(0.0, 0.0, 0.0, 1.0);
-        self.gl
-            .clear(web_sys::WebGl2RenderingContext::COLOR_BUFFER_BIT);
-        self.set_translated_uniforms(program, frame, time, drawing_width, drawing_height);
+        if warp {
+            self.gl.clear_color(0.0, 0.0, 0.0, 1.0);
+            self.gl.clear(web_sys::WebGl2RenderingContext::COLOR_BUFFER_BIT);
+        }
+        self.set_translated_uniforms(program, frame, stage, time, drawing_width, drawing_height, warp, output_alpha);
         self.gl
             .draw_arrays(web_sys::WebGl2RenderingContext::TRIANGLE_STRIP, 0, 4);
     }
@@ -803,24 +882,41 @@ impl MilkRustWebGlRenderer {
         self.gl.use_program(Some(&self.program));
     }
 
-    fn named_texture_for(&self, raw_name: &str) -> Option<web_sys::WebGlTexture> {
+    fn prepare_textures(&self, frame: &MilkRustFrame) -> Result<bool, JsValue> {
+        let mut ready = true;
+        for name in frame.shader_stages.warp.texture_samplers.iter()
+            .chain(&frame.shader_stages.composite.texture_samplers)
+            .chain(frame.textured_primitives.iter().map(|primitive| &primitive.texture_name)) {
+            if name.is_empty() { continue; }
+            if self.named_texture_for(name)?.is_none() { ready = false; }
+        }
+        Ok(ready)
+    }
+
+    fn named_texture_for(&self, raw_name: &str) -> Result<Option<web_sys::WebGlTexture>, JsValue> {
+        if raw_name.is_empty() { return Ok(Some(self.procedural_texture.clone())); }
         for alias in get_milkrust_texture_name_aliases(raw_name) {
-            if let Some(texture) = self.named_textures.borrow().get(&alias) {
-                return Some(texture.clone());
+            if let Some(asset) = self.named_textures.borrow().get(&alias) {
+                return match asset.state.borrow().as_ref() {
+                    None => Ok(None),
+                    Some(Ok(())) => Ok(Some(asset.texture.clone())),
+                    Some(Err(error)) => Err(JsValue::from_str(&format!("Texture {raw_name}: {error}"))),
+                };
             }
             let data_url = self.texture_assets.borrow().get(&alias).cloned();
             let Some(data_url) = data_url else {
                 continue;
             };
-            let Ok(texture) = create_milkrust_texture_from_data_url(&self.gl, &data_url) else {
-                continue;
-            };
+            if self.named_textures.borrow().len() >= 64 {
+                return Err(JsValue::from_str("Preset exceeds the 64-texture cache limit"));
+            }
+            let asset = create_milkrust_texture_from_data_url(&self.gl, &data_url, self.texture_pixels.clone())?;
             self.named_textures
                 .borrow_mut()
-                .insert(alias, texture.clone());
-            return Some(texture);
+                .insert(alias, asset);
+            return Ok(None);
         }
-        None
+        Err(JsValue::from_str(&format!("Missing texture: {raw_name}")))
     }
 
     fn draw_textured_primitives(&self, frame: &MilkRustFrame) {
@@ -850,6 +946,7 @@ impl MilkRustWebGlRenderer {
                 .active_texture(web_sys::WebGl2RenderingContext::TEXTURE1);
             let texture = self
                 .named_texture_for(&primitive.texture_name)
+                .ok().flatten()
                 .unwrap_or_else(|| self.procedural_texture.clone());
             self.gl
                 .bind_texture(web_sys::WebGl2RenderingContext::TEXTURE_2D, Some(&texture));
@@ -929,6 +1026,31 @@ impl MilkRustWebGlRenderer {
     }
 }
 
+impl Drop for MilkRustWebGlRenderer {
+    fn drop(&mut self) {
+        delete_milkrust_feedback_targets(&self.gl, self.feedback_targets.get_mut());
+        for buffer in [&self.buffer, &self.primitive_buffer, &self.primitive_color_buffer,
+            &self.textured_position_buffer, &self.textured_uv_buffer, &self.warp_position_buffer, &self.warp_uv_buffer] {
+            self.gl.delete_buffer(Some(buffer));
+        }
+        for program in [&self.program, &self.primitive_program, &self.textured_program, &self.warp_program] {
+            self.gl.delete_program(Some(program));
+        }
+        for cache in [&mut self.translated_warp_program, &mut self.translated_composite_program] {
+            if let Some(program) = cache.get_mut().take() { self.gl.delete_program(Some(&program.program)); }
+        }
+        self.gl.delete_texture(Some(&self.procedural_texture));
+        for asset in self.named_textures.get_mut().values() { self.gl.delete_texture(Some(&asset.texture)); }
+    }
+}
+
+fn delete_milkrust_feedback_targets(gl: &web_sys::WebGl2RenderingContext, targets: &MilkRustFeedbackTargets) {
+    for target in &targets.targets {
+        gl.delete_framebuffer(Some(&target.framebuffer));
+        gl.delete_texture(Some(&target.texture));
+    }
+}
+
 fn milkrust_webgl_composite_blend_factors(mode: &str) -> (u32, u32) {
     match mode {
         "additive" => (
@@ -957,13 +1079,22 @@ fn create_milkrust_feedback_targets(
 ) -> Result<MilkRustFeedbackTargets, JsValue> {
     let width = width.max(1);
     let height = height.max(1);
+    if width > 4096 || height > 4096 || i64::from(width) * i64::from(height) > 8 * 1024 * 1024 {
+        return Err(JsValue::from_str("Render targets exceed 4096 pixels per side or 8 megapixels"));
+    }
+    let first = create_milkrust_feedback_target(gl, width, height)?;
+    let second = match create_milkrust_feedback_target(gl, width, height) {
+        Ok(target) => target,
+        Err(error) => {
+            gl.delete_framebuffer(Some(&first.framebuffer));
+            gl.delete_texture(Some(&first.texture));
+            return Err(error);
+        }
+    };
     Ok(MilkRustFeedbackTargets {
         height,
         read_index: 0,
-        targets: [
-            create_milkrust_feedback_target(gl, width, height)?,
-            create_milkrust_feedback_target(gl, width, height)?,
-        ],
+        targets: [first, second],
         width,
     })
 }
@@ -1025,10 +1156,15 @@ fn create_milkrust_feedback_target(
     );
     let status = gl.check_framebuffer_status(web_sys::WebGl2RenderingContext::FRAMEBUFFER);
     if status != web_sys::WebGl2RenderingContext::FRAMEBUFFER_COMPLETE {
+        gl.delete_framebuffer(Some(&framebuffer));
+        gl.delete_texture(Some(&texture));
         return Err(JsValue::from_str(
             "WebGL feedback framebuffer is incomplete",
         ));
     }
+    gl.viewport(0, 0, width, height);
+    gl.clear_color(0.0, 0.0, 0.0, 1.0);
+    gl.clear(web_sys::WebGl2RenderingContext::COLOR_BUFFER_BIT);
 
     Ok(MilkRustFeedbackTarget {
         framebuffer,
@@ -1087,18 +1223,38 @@ fn create_milkrust_procedural_texture(
 fn create_milkrust_texture_from_data_url(
     gl: &web_sys::WebGl2RenderingContext,
     data_url: &str,
-) -> Result<web_sys::WebGlTexture, JsValue> {
+    total_pixels: Rc<Cell<u64>>,
+) -> Result<MilkRustTextureAsset, JsValue> {
+    if data_url.len() > 24 * 1024 * 1024 || !["png", "jpeg", "gif", "webp", "bmp"].iter()
+        .any(|kind| data_url.starts_with(&format!("data:image/{kind};base64,"))) {
+        return Err(JsValue::from_str("Texture must be a bounded embedded raster image; URLs and SVG are unavailable"));
+    }
     let texture = create_milkrust_procedural_texture(gl)?;
     let image = web_sys::HtmlImageElement::new()?;
     let gl_for_load = gl.clone();
     let texture_for_load = texture.clone();
     let image_for_load = image.clone();
+    let state = Rc::new(RefCell::new(None));
+    let state_for_load = state.clone();
+    let pixels_for_load = total_pixels.clone();
+    let allocated_pixels = Rc::new(Cell::new(0));
+    let allocated_for_load = allocated_pixels.clone();
     let onload = Closure::<dyn FnMut(web_sys::Event)>::wrap(Box::new(move |_event| {
+        let width = image_for_load.natural_width();
+        let height = image_for_load.natural_height();
+        let pixels = u64::from(width) * u64::from(height);
+        if width == 0 || height == 0 || width > 4096 || height > 4096 ||
+            pixels > 8 * 1024 * 1024 ||
+            pixels_for_load.get().saturating_sub(allocated_for_load.get()) + pixels > 32 * 1024 * 1024 {
+            *state_for_load.borrow_mut() = Some(Err("Decoded image exceeds 4096 pixels per side or 8 megapixels".to_string()));
+            return;
+        }
+        gl_for_load.active_texture(web_sys::WebGl2RenderingContext::TEXTURE0);
         gl_for_load.bind_texture(
             web_sys::WebGl2RenderingContext::TEXTURE_2D,
             Some(&texture_for_load),
         );
-        let _ = gl_for_load.tex_image_2d_with_u32_and_u32_and_html_image_element(
+        let result = gl_for_load.tex_image_2d_with_u32_and_u32_and_html_image_element(
             web_sys::WebGl2RenderingContext::TEXTURE_2D,
             0,
             web_sys::WebGl2RenderingContext::RGBA as i32,
@@ -1106,11 +1262,23 @@ fn create_milkrust_texture_from_data_url(
             web_sys::WebGl2RenderingContext::UNSIGNED_BYTE,
             &image_for_load,
         );
+        let result = result.map_err(|error| error.as_string().unwrap_or_else(|| "GPU upload failed".to_string()))
+            .and_then(|()| if gl_for_load.get_error() == web_sys::WebGl2RenderingContext::NO_ERROR { Ok(()) }
+                else { Err("GPU texture upload failed".to_string()) });
+        if result.is_ok() {
+            pixels_for_load.set(pixels_for_load.get().saturating_sub(allocated_for_load.get()) + pixels);
+            allocated_for_load.set(pixels);
+        }
+        *state_for_load.borrow_mut() = Some(result);
+    }));
+    let state_for_error = state.clone();
+    let onerror = Closure::<dyn FnMut(web_sys::Event)>::wrap(Box::new(move |_event| {
+        *state_for_error.borrow_mut() = Some(Err("Image could not be decoded".to_string()));
     }));
     image.set_onload(Some(onload.as_ref().unchecked_ref()));
-    onload.forget();
+    image.set_onerror(Some(onerror.as_ref().unchecked_ref()));
     image.set_src(data_url);
-    Ok(texture)
+    Ok(MilkRustTextureAsset { texture, image, state, total_pixels, allocated_pixels, _onload: onload, _onerror: onerror })
 }
 
 fn compile_milkrust_shader(
@@ -1130,10 +1298,9 @@ fn compile_milkrust_shader(
     {
         Ok(shader)
     } else {
-        Err(JsValue::from_str(
-            &gl.get_shader_info_log(&shader)
-                .unwrap_or_else(|| "MilkRust WebGL shader compile failed".to_string()),
-        ))
+        let error = gl.get_shader_info_log(&shader).unwrap_or_else(|| "MilkRust WebGL shader compile failed".to_string());
+        gl.delete_shader(Some(&shader));
+        Err(JsValue::from_str(&error))
     }
 }
 
@@ -1148,6 +1315,10 @@ fn link_milkrust_program(
     gl.attach_shader(&program, vertex_shader);
     gl.attach_shader(&program, fragment_shader);
     gl.link_program(&program);
+    gl.detach_shader(&program, vertex_shader);
+    gl.detach_shader(&program, fragment_shader);
+    gl.delete_shader(Some(vertex_shader));
+    gl.delete_shader(Some(fragment_shader));
     if gl
         .get_program_parameter(&program, web_sys::WebGl2RenderingContext::LINK_STATUS)
         .as_bool()
@@ -1155,10 +1326,9 @@ fn link_milkrust_program(
     {
         Ok(program)
     } else {
-        Err(JsValue::from_str(
-            &gl.get_program_info_log(&program)
-                .unwrap_or_else(|| "MilkRust WebGL program link failed".to_string()),
-        ))
+        let error = gl.get_program_info_log(&program).unwrap_or_else(|| "MilkRust WebGL program link failed".to_string());
+        gl.delete_program(Some(&program));
+        Err(JsValue::from_str(&error))
     }
 }
 
@@ -1173,9 +1343,25 @@ void main() {
 
 const MILKRUST_TRANSLATED_VERTEX_SHADER: &str = r#"#version 300 es
 in vec2 position;
+uniform vec4 motion;
+uniform float isWarp;
 out vec2 uv;
 void main() {
   uv = position * 0.5 + vec2(0.5);
+  if (isWarp > 0.5) {
+    float c = cos(motion.x), s = sin(motion.x);
+    uv = mat2(c, -s, s, c) * (uv - vec2(0.5) - motion.zw) / max(motion.y, 0.001) + vec2(0.5);
+  }
+  gl_Position = vec4(position, 0.0, 1.0);
+}
+"#;
+
+const MILKRUST_TRANSLATED_MESH_VERTEX_SHADER: &str = r#"#version 300 es
+in vec2 position;
+in vec2 sourceUv;
+out vec2 uv;
+void main() {
+  uv = sourceUv;
   gl_Position = vec4(position, 0.0, 1.0);
 }
 "#;

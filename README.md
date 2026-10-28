@@ -25,8 +25,10 @@ This repository is being prepared as the home for:
 - `examples`: small browser clients used for SDK verification.
 
 The naming migration preserves legacy `.milk` and `.milk2` document readers.
-It does not establish rendering compatibility: composite shader stages,
-shader-aware per-pixel meshes and saved `.milk2` blending remain incomplete.
+It does not establish rendering compatibility. The experimental WebGL source now
+has distinct warp/composite programs, shader-aware per-pixel meshes and explicit
+shader/texture failures; it has not been built or GPU-qualified in this session.
+Complete native rendering, HLSL semantics and saved `.milk2` blending remain open.
 See [GAPS.md](GAPS.md) for the current engine and integration gates.
 
 See [`docs/ROADMAP.md`](docs/ROADMAP.md) for the expanded plan covering the core engine, renderer backends, web SDK, CLI, preset packs, plugins, standalone player, Studio tooling, language SDKs, and host integrations. See [`docs/PLUGIN_API.md`](docs/PLUGIN_API.md), [`docs/PRESET_PACKS.md`](docs/PRESET_PACKS.md), [`docs/THIRD_PARTY_CONTENT_POLICY.md`](docs/THIRD_PARTY_CONTENT_POLICY.md), [`docs/THIRD_PARTY_CONTENT_AUDIT.generated.md`](docs/THIRD_PARTY_CONTENT_AUDIT.generated.md), [`docs/SOURCE_IMPORT_AUDIT.md`](docs/SOURCE_IMPORT_AUDIT.md), [`docs/RENDERER_AND_PLAYER_IMPORT_PLAN.md`](docs/RENDERER_AND_PLAYER_IMPORT_PLAN.md), and [`archive/slskdn-js-milkdrop-port`](archive/slskdn-js-milkdrop-port) for the current pack format, content policy, preserved slskdN JavaScript port, and import checklist.

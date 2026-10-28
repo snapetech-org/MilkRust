@@ -139,51 +139,36 @@ describe('createMilkRustEngine', () => {
     ]);
   });
 
-  it('loads pack js plugins through dynamic import', async () => {
-    const jsPluginUrl = `data:text/javascript,${encodeURIComponent(`
-      globalThis.__milkrustTestJsPluginCalls = globalThis.__milkrustTestJsPluginCalls || 0;
-      export const onFrameStart = () => {
-        globalThis.__milkrustTestJsPluginCalls += 1;
-      };
-    `)}`;
-    const manifest = validateMilkRustPackManifest({
-      id: 'demo',
-      name: 'Demo',
-      version: '0.1.0',
-      plugins: [{ id: 'js-hook', kind: 'javascript', entry: jsPluginUrl }],
-      presets: [],
-    });
-
-    const pluginState = await loadMilkRustPackPlugins(manifest, {
-      fetchImpl: async () => ({ ok: false }),
-    });
-
-    assert.equal(pluginState.valid, true);
-    assert.equal(pluginState.plugins.length, 1);
-    assert.equal(pluginState.plugins[0].kind, 'js');
-    assert.equal(pluginState.plugins[0].source, 'module');
-    assert.equal(typeof pluginState.plugins[0].api?.onFrameStart, 'function');
-
-    const analyser = createAnalyser();
-    const audioNode = {
-      connect: mock.fn(),
-      disconnect: mock.fn(),
-    };
-    const engine = await createMilkRustEngine({
-      audioContext: {
-        createAnalyser: () => analyser,
-        currentTime: 1,
-      },
-      audioNode,
-      canvas: {},
-    });
-
+  it('rejects executable pack plugins without fetching or evaluating their module', async () => {
     globalThis.__milkrustTestJsPluginCalls = 0;
-    engine.loadPlugins(pluginState.plugins);
-    engine.render();
-
-    assert.equal(globalThis.__milkrustTestJsPluginCalls, 1);
+    const jsPluginUrl = `data:text/javascript,${encodeURIComponent('globalThis.__milkrustTestJsPluginCalls += 1; export default {};')}`;
+    const manifest = validateMilkRustPackManifest({
+      id: 'demo', name: 'Demo', version: '0.1.0', presets: [],
+      plugins: [{ id: 'js-hook', kind: 'javascript', entry: jsPluginUrl }],
+    });
+    const fetchImpl = mock.fn(async () => { throw new Error('Executable asset must not be fetched'); });
+    const result = await loadMilkRustPackPlugins(manifest, { fetchImpl });
+    assert.equal(result.valid, false);
+    assert.equal(result.plugins.length, 0);
+    assert.match(result.errors[0], /executable pack plugins are disabled/);
+    assert.equal(fetchImpl.mock.calls.length, 0);
+    assert.equal(globalThis.__milkrustTestJsPluginCalls, 0);
     delete globalThis.__milkrustTestJsPluginCalls;
+  });
+
+  it('propagates a blocked executable entry into the aggregate pack result', async () => {
+    const requests = [];
+    const result = await loadMilkRustPack('http://localhost/packs/demo/', {
+      fetchImpl: async (url) => {
+        requests.push(url);
+        assert.match(url, /manifest\.json$/);
+        return { ok: true, json: async () => ({ id: 'demo', name: 'Demo', version: '0.1.0',
+          presets: [], plugins: [{ id: 'blocked', kind: 'js', entry: 'plugins/run.js' }] }) };
+      },
+    });
+    assert.equal(result.valid, false);
+    assert.match(result.errors[0], /blocked/);
+    assert.equal(requests.length, 1);
   });
 
   it('marks failed plugin loads without crashing the pack load', async () => {
@@ -340,6 +325,25 @@ describe('createMilkRustEngine', () => {
     assert.equal(renderArgs[10], -0.1);
     assert.match(renderArgs[4], /-1/);
     assert.deepEqual(rustEngine.resize.mock.calls[0].arguments, [320, 180]);
+  });
+
+  it('exposes renderer failures and clears the texture-loading state after upload', async () => {
+    let status = { state: 'failed', error: 'Composite shader failed' };
+    rustEngine.renderStatusJson = () => JSON.stringify(status);
+    const engine = await createMilkRustEngine({
+      audioContext: { createAnalyser, currentTime: 1 },
+      audioNode: { connect: mock.fn(), disconnect: mock.fn() }, canvas: {},
+    });
+    const onRenderFrame = mock.fn();
+    engine.loadPlugins([{ id: 'application-hook', api: { onRenderFrame } }]);
+    assert.deepEqual(engine.render(), { error: 'Composite shader failed', fidelity: 'not-assessed' });
+    assert.equal(onRenderFrame.mock.calls.length, 0);
+    status = { state: 'waiting-textures' };
+    assert.equal(engine.render().waitingForTextures, true);
+    status = { state: 'preview' };
+    assert.equal(engine.render().waitingForTextures, false);
+    assert.equal(engine.render(), null);
+    engine.dispose();
   });
 
   it('fires plugin hooks for engine lifecycle events', async () => {

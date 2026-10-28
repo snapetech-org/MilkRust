@@ -6,7 +6,7 @@ pub use renderer::{milkrust_renderer, MilkRustRenderer};
 use milkrust_core::{
     parse_milkrust_fragment, parse_milkrust_preset_set, parse_milkrust_sample_csv,
     milkrust_preset_name, milkrust_webgpu_batch_summary_json, serialize_milkrust_fragment,
-    serialize_milkrust_preset_set, validate_milkrust_import, MilkRustFrameSetRuntime,
+    serialize_milkrust_preset_set, validate_milkrust_webgl_import as validate_milkrust_import, MilkRustFrameSetRuntime,
     MilkRustIndexedEntry, MilkRustInputState, MilkRustValue,
 };
 use wasm_bindgen::prelude::*;
@@ -40,6 +40,8 @@ pub struct WasmMilkRustEngine {
     source: String,
     texture_assets: Rc<RefCell<BTreeMap<String, String>>>,
     title: String,
+    render_error: Option<String>,
+    waiting_for_textures: bool,
 }
 
 #[wasm_bindgen(js_class = MilkRustEngine)]
@@ -62,12 +64,23 @@ impl WasmMilkRustEngine {
             source,
             texture_assets,
             title,
+            render_error: None,
+            waiting_for_textures: false,
         })
     }
 
     #[wasm_bindgen(js_name = rendererLabel)]
     pub fn renderer_label(&self) -> String {
-        self.renderer.label().to_string()
+        if let Some(error) = &self.render_error { format!("Renderer stopped: {error}") }
+        else if self.waiting_for_textures { "Waiting for preset textures".to_string() }
+        else { self.renderer.label().to_string() }
+    }
+
+    #[wasm_bindgen(js_name = renderStatusJson)]
+    pub fn render_status_json(&self) -> String {
+        serde_json::json!({"state": if self.render_error.is_some() { "failed" }
+            else if self.waiting_for_textures { "waiting-textures" } else { "preview" },
+            "error": self.render_error, "fidelity": "not-assessed"}).to_string()
     }
 
     #[wasm_bindgen(js_name = loadPresetText)]
@@ -77,7 +90,11 @@ impl WasmMilkRustEngine {
         file_name: &str,
         texture_assets_json: &str,
     ) -> Result<String, JsValue> {
+        if file_name.to_ascii_lowercase().ends_with(".milk2") {
+            return Err(JsValue::from_str("Saved .milk2 blend patterns are not implemented"));
+        }
         let title = validate_milkrust_import(source).map_err(|error| JsValue::from_str(&error))?;
+        let texture_assets = Self::parse_texture_assets(texture_assets_json)?;
         self.source = source.to_string();
         self.title = if title.trim().is_empty() {
             if file_name.trim().is_empty() {
@@ -89,7 +106,10 @@ impl WasmMilkRustEngine {
             title
         };
         self.runtime = MilkRustFrameSetRuntime::default();
-        self.replace_texture_assets(texture_assets_json);
+        self.renderer.reset();
+        *self.texture_assets.borrow_mut() = texture_assets;
+        self.render_error = None;
+        self.waiting_for_textures = false;
         Ok(self.title.clone())
     }
 
@@ -298,6 +318,8 @@ impl WasmMilkRustEngine {
             "parameters": self.preset_parameter_summary_value(),
             "presetCount": parsed.presets.len(),
             "renderer": self.renderer_label(),
+            "renderError": self.render_error,
+            "fidelity": "not-assessed",
             "shaderSections": {
                 "comp": primary.is_some_and(|preset| !preset.comp_shader.trim().is_empty()),
                 "warp": primary.is_some_and(|preset| !preset.warp_shader.trim().is_empty())
@@ -327,6 +349,7 @@ impl WasmMilkRustEngine {
         mouse_dx: f64,
         mouse_dy: f64,
     ) {
+        if self.render_error.is_some() { return; }
         let input = MilkRustInputState {
             mouse_down,
             mouse_dx,
@@ -346,13 +369,23 @@ impl WasmMilkRustEngine {
             &spectrum,
             input,
         );
-        self.renderer.render_frame_set(&frame_set, time_seconds);
+        match self.renderer.render_frame_set(&frame_set, time_seconds) {
+            Ok(rendered) => self.waiting_for_textures = !rendered,
+            Err(error) => {
+                self.waiting_for_textures = false;
+                self.render_error = Some(error.as_string().unwrap_or_else(|| "Native WebGL operation failed".to_string()));
+            }
+        }
     }
 
     #[wasm_bindgen(js_name = resize)]
     pub fn resize(&self, width: u32, height: u32) {
-        self.canvas.set_width(width.max(1));
-        self.canvas.set_height(height.max(1));
+        let scale = (4096.0 / width.max(1) as f64).min(4096.0 / height.max(1) as f64)
+            .min((8.0 * 1024.0 * 1024.0 / (width.max(1) as f64 * height.max(1) as f64)).sqrt()).min(1.0);
+        let width = (width.max(1) as f64 * scale).floor().max(1.0) as u32;
+        let height = (height.max(1) as f64 * scale).floor().max(1.0) as u32;
+        if self.canvas.width() != width { self.canvas.set_width(width); }
+        if self.canvas.height() != height { self.canvas.set_height(height); }
     }
 }
 
@@ -364,26 +397,30 @@ impl WasmMilkRustEngine {
         )
     }
 
-    fn replace_texture_assets(&self, texture_assets_json: &str) {
-        let Ok(value) = serde_json::from_str::<serde_json::Value>(texture_assets_json) else {
-            return;
-        };
-        let Some(object) = value.as_object() else {
-            return;
-        };
-        let mut assets = self.texture_assets.borrow_mut();
-        assets.clear();
+    fn parse_texture_assets(texture_assets_json: &str) -> Result<BTreeMap<String, String>, JsValue> {
+        if texture_assets_json.len() > 32 * 1024 * 1024 {
+            return Err(JsValue::from_str("Embedded texture map exceeds 32 MiB"));
+        }
+        let value = serde_json::from_str::<serde_json::Value>(texture_assets_json)
+            .map_err(|_| JsValue::from_str("Malformed texture map"))?;
+        let object = value.as_object().ok_or_else(|| JsValue::from_str("Texture map must be an object"))?;
+        if object.len() > 64 { return Err(JsValue::from_str("Texture map exceeds 64 images")); }
+        let mut assets = BTreeMap::new();
         for (name, data_url) in object {
-            let Some(data_url) = data_url.as_str() else {
-                continue;
-            };
-            if !data_url.starts_with("data:image/") {
-                continue;
+            let data_url = data_url.as_str().ok_or_else(|| JsValue::from_str("Texture value must be an embedded image"))?;
+            if name.is_empty() || name.len() > 240 || data_url.len() > 24 * 1024 * 1024 ||
+                !["png", "jpeg", "gif", "webp", "bmp"].iter().any(|kind|
+                    data_url.starts_with(&format!("data:image/{kind};base64,"))) {
+                return Err(JsValue::from_str("Unsupported texture name, size or embedded raster format"));
             }
             for alias in milkrust_core::get_milkrust_texture_name_aliases(name) {
+                if assets.get(&alias).is_some_and(|existing| existing != data_url) {
+                    return Err(JsValue::from_str("Texture names have conflicting aliases"));
+                }
                 assets.insert(alias, data_url.to_string());
             }
         }
+        Ok(assets)
     }
 
     fn preset_parameter_summary_value(&self) -> serde_json::Value {

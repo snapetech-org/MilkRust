@@ -44,9 +44,11 @@ const buildPackFromCurrentSource = () => {
     id: `studio-${Math.random().toString(36).slice(2, 10)}`,
     name: title,
     version: '1.0.0',
-    author: 'MilkRust',
+    author: 'Unspecified (local editor export)',
     description: 'Exported from MilkRust Studio',
-    license: 'CC0',
+    license: 'NOASSERTION',
+    distributionStatus: 'local-only',
+    contentNotice: 'Local editor export. Authors and redistribution rights have not been verified; preserve original source notices before sharing.',
     requiredMilkRustVersion: '0.1.0',
     sourceUrls: [],
     presets: [{
@@ -271,6 +273,10 @@ const render = (time = 0) => {
     0,
     0,
   );
+  if (typeof engine.renderStatusJson === 'function') {
+    const status = JSON.parse(engine.renderStatusJson());
+    if (status.state === 'failed') report.textContent = `Renderer stopped: ${status.error}`;
+  }
   if (window.__milkrustCollectStats) {
     window.__milkrustStudioStats = readCanvasStats();
   }

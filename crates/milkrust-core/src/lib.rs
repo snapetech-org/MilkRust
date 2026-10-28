@@ -39,6 +39,9 @@ pub struct MilkRustFrame {
     pub shape_count: usize,
     pub shader_source: String,
     pub shader_texture_samplers: Vec<String>,
+    /// Independent programs/resources for feedback warp and final display.
+    /// The legacy single-shader fields above remain for older consumers only.
+    pub shader_stages: MilkRustShaderStages,
     pub textured_primitives: Vec<MilkRustTexturedPrimitive>,
     pub rotation: f64,
     pub treble: f64,
@@ -64,6 +67,7 @@ impl Default for MilkRustFrame {
             shape_count: 0,
             shader_source: String::new(),
             shader_texture_samplers: Vec::new(),
+            shader_stages: MilkRustShaderStages::default(),
             textured_primitives: Vec::new(),
             rotation: 0.0,
             treble: 0.0,
@@ -75,6 +79,20 @@ impl Default for MilkRustFrame {
             zoom: 1.0,
         }
     }
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct MilkRustShaderStage {
+    pub required: bool,
+    /// Empty while required means translation failed, not an absent shader.
+    pub source: String,
+    pub texture_samplers: Vec<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct MilkRustShaderStages {
+    pub warp: MilkRustShaderStage,
+    pub composite: MilkRustShaderStage,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -230,6 +248,7 @@ pub fn milkrust_frame(
         shape_count: 0,
         shader_source: String::new(),
         shader_texture_samplers: Vec::new(),
+        shader_stages: MilkRustShaderStages::default(),
         textured_primitives: Vec::new(),
         rotation: preset.rot + (time_seconds * 0.37).sin() * 0.035 + (treble - 0.5) * 0.05,
         treble,
@@ -568,6 +587,15 @@ fn translated_milkrust_shader_source(preset: &MilkRustPresetDocument) -> String 
     String::new()
 }
 
+fn milkrust_shader_stages(preset: &MilkRustPresetDocument) -> MilkRustShaderStages {
+    let stage = |source: &str| MilkRustShaderStage {
+        required: !source.trim().is_empty(),
+        source: create_translated_milkrust_fragment_shader_with_output(source, false),
+        texture_samplers: get_milkrust_shader_texture_samplers(source),
+    };
+    MilkRustShaderStages { warp: stage(&preset.warp_shader), composite: stage(&preset.comp_shader) }
+}
+
 fn milkrust_shader_texture_samplers(preset: &MilkRustPresetDocument) -> Vec<String> {
     for shader in [&preset.comp_shader, &preset.warp_shader] {
         if shader.trim().is_empty() {
@@ -734,6 +762,7 @@ fn build_milkrust_frame_from_scope(
         ) + (treble - 0.5) * 0.02,
         shader_source: translated_milkrust_shader_source(preset_document),
         shader_texture_samplers: milkrust_shader_texture_samplers(preset_document),
+        shader_stages: milkrust_shader_stages(preset_document),
         textured_primitives,
         treble,
         wave_color,
@@ -763,6 +792,7 @@ fn build_milkrust_frame_from_runtime_scope(
      scope: &mut BTreeMap<String, MilkRustValue>,
      translated_shader_source: Option<&str>,
      shader_texture_samplers: &[String],
+     shader_stages: &MilkRustShaderStages,
      time_seconds: f64,
      bass: f64,
      mid: f64,
@@ -825,6 +855,7 @@ fn build_milkrust_frame_from_runtime_scope(
          ) + (treble - 0.5) * 0.02,
          shader_source: translated_shader_source.unwrap_or_default().to_string(),
          shader_texture_samplers: shader_texture_samplers.to_vec(),
+         shader_stages: shader_stages.clone(),
          textured_primitives,
          treble,
          wave_color,
@@ -1041,6 +1072,7 @@ pub struct MilkRustRuntime {
      source: String,
      translated_shader_source: Option<String>,
      shader_texture_samplers: Vec<String>,
+     shader_stages: MilkRustShaderStages,
  }
 
 impl MilkRustRuntime {
@@ -1106,6 +1138,7 @@ impl MilkRustRuntime {
             self.translated_shader_source = translated_milkrust_shader_source(&preset_document)
                 .into();
             self.shader_texture_samplers = milkrust_shader_texture_samplers(&preset_document);
+            self.shader_stages = milkrust_shader_stages(&preset_document);
             self.source = source.to_string();
             self.preset_document = Some(preset_document);
             self.initialized = false;
@@ -1149,6 +1182,7 @@ impl MilkRustRuntime {
             &mut self.scope,
             self.translated_shader_source.as_deref(),
             self.shader_texture_samplers.as_slice(),
+            &self.shader_stages,
             time_seconds,
             bass,
             mid,
@@ -1168,6 +1202,7 @@ pub struct MilkRustFrameSetRuntime {
      scopes: Vec<BTreeMap<String, MilkRustValue>>,
      source: String,
      cached_preset_set: Option<MilkRustPresetSet>,
+     shader_stages: Vec<MilkRustShaderStages>,
  }
 
 impl MilkRustFrameSetRuntime {
@@ -1225,6 +1260,7 @@ if self.source != source || self.preset_documents.is_empty() {
                  source.to_ascii_lowercase().contains("[preset01]"),
              );
              self.cached_preset_set = Some(parsed.clone());
+             self.shader_stages = parsed.presets.iter().map(milkrust_shader_stages).collect();
              self.initialized = vec![false; parsed.presets.len()];
              self.scopes = parsed
                  .presets
@@ -1289,6 +1325,7 @@ if self.source != source || self.preset_documents.is_empty() {
                  scope,
                  Some(translated_shader_source.as_str()),
                  &shader_texture_samplers,
+                 &self.shader_stages[index],
                  time_seconds,
                  bass,
                  mid,
@@ -1339,12 +1376,25 @@ pub fn milkrust_preset_name(source: &str) -> String {
 }
 
 pub fn validate_milkrust_import(source: &str) -> Result<String, String> {
+    validate_milkrust_import_for_renderer(source, false)
+}
+
+/// Allows the experimental WebGL stage implementation without changing the
+/// cross-renderer compatibility ledger or claiming measured visual fidelity.
+pub fn validate_milkrust_webgl_import(source: &str) -> Result<String, String> {
+    validate_milkrust_import_for_renderer(source, true)
+}
+
+fn validate_milkrust_import_for_renderer(source: &str, webgl_stages: bool) -> Result<String, String> {
+    if source.len() > 2 * 1024 * 1024 || source.as_bytes().contains(&0) {
+        return Err("Preset text is binary or exceeds 2 MiB".to_string());
+    }
     let parsed =
         parse_milkrust_preset_set(source, source.to_ascii_lowercase().contains("[preset01]"));
     if parsed.presets.is_empty() {
         return Err("MilkRust preset is empty".to_string());
     };
-    let requires_milk2_saved_blend_state = parsed.format == "milk2" && parsed.presets.len() > 1;
+    let requires_milk2_saved_blend_state = parsed.format == "milk2";
     let errors = parsed
         .presets
         .iter()
@@ -1356,6 +1406,10 @@ pub fn validate_milkrust_import(source: &str) -> Result<String, String> {
                 "MilkRust preset content is empty".to_string()
             };
             let mut report = analyze_milkrust_preset_compatibility(preset);
+            if webgl_stages {
+                report.renderer_features.retain(|feature| !matches!(feature.as_str(),
+                    "separate-warp-and-composite-stage-rendering" | "shader-aware-per-pixel-mesh"));
+            }
             if requires_milk2_saved_blend_state {
                 report
                     .renderer_features
@@ -3872,10 +3926,10 @@ pub fn analyze_milkrust_preset_compatibility(
         shader_sections.push("comp_shader".to_string());
     }
 
-    // The current WebGL path chooses one translated shader for feedback and
-    // always displays through the built-in final pass. Even a comp-only preset
-    // therefore requires a distinct composite stage. A per-pixel mesh also
-    // currently bypasses the translated warp program entirely.
+    // Cross-renderer gates remain conservative. The experimental WebGL source
+    // now has separate stages and shader-aware meshes, but has no GPU/fidelity
+    // qualification; other renderer targets still lack these paths. The WebGL
+    // import gate opts into that implementation explicitly, not via this report.
     let renderer_features = if !preset.comp_shader.trim().is_empty() {
         vec!["separate-warp-and-composite-stage-rendering".to_string()]
     } else if !preset.warp_shader.trim().is_empty()
@@ -4441,7 +4495,6 @@ pub fn get_milkrust_shader_texture_samplers(source: &str) -> Vec<String> {
             rest = &after[after.find(',').unwrap_or(after.len())..];
         }
     }
-    samplers.truncate(4);
     samplers
 }
 
@@ -4584,6 +4637,7 @@ fn split_milkrust_shader_assignment(statement: &str) -> Option<(&str, &str, &str
 }
 
 fn parse_milkrust_shader_program(source: &str) -> Option<MilkRustShaderProgram> {
+    if source.len() > 128 * 1024 { return None; }
     let normalized_source = normalize_simple_milkrust_conditional_return(source);
     let lowered = normalized_source.to_ascii_lowercase();
     if lowered.contains("for (")
@@ -4671,6 +4725,10 @@ pub fn translate_milkrust_shader_expression(source: &str) -> String {
 }
 
 pub fn create_translated_milkrust_fragment_shader(source: &str) -> String {
+    create_translated_milkrust_fragment_shader_with_output(source, true)
+}
+
+fn create_translated_milkrust_fragment_shader_with_output(source: &str, legacy_feedback: bool) -> String {
     let Some(program) = parse_milkrust_shader_program(source) else {
         return String::new();
     };
@@ -4690,6 +4748,13 @@ pub fn create_translated_milkrust_fragment_shader(source: &str) -> String {
         .map(|(index, _)| format!("uniform sampler2D shaderTexture{index};"))
         .collect::<Vec<_>>()
         .join("\n");
+    let output = if legacy_feedback {
+        "vec3 previous = texture(previousFrame, clamp(uv, vec2(0.0), vec2(1.0))).rgb;\n  outColor = vec4(mix(ret, previous, feedback), outputAlpha);"
+    } else {
+        // A shader's output is its stage result. Mixing it with history again
+        // changes warp math and incorrectly feeds final composite into history.
+        "outColor = vec4(ret, outputAlpha);"
+    };
     format!(
         r#"#version 300 es
 precision highp float;
@@ -4724,8 +4789,7 @@ void main() {{
   float ang = atan(centeredUv.y, centeredUv.x);
   {}
   vec3 ret = vec3({});
-  vec3 previous = texture(previousFrame, clamp(uv, vec2(0.0), vec2(1.0))).rgb;
-  outColor = vec4(mix(ret, previous, feedback), outputAlpha);
+  {output}
 }}"#,
         program.declarations.join("\n  "),
         program.expression
@@ -7501,6 +7565,46 @@ comp_shader_2=ret = vec3(shifted, energy * bass_att);
                 "separate-warp-and-composite-stage-rendering".to_string()
             ]
         );
+    }
+
+    #[test]
+    fn webgl_frame_stages_preserve_independent_programs_and_resources() {
+        let real_format = include_str!("../tests/fixtures/warp-composite-order.milk");
+        assert!(validate_milkrust_webgl_import(real_format).is_ok());
+        let ordered = milkrust_frame_from_source(real_format, 0.0, 0.0, 0.0, 0.0);
+        assert!(ordered.shader_stages.warp.source.contains("*0.5+vec3(0.25,0,0)"));
+        assert!(ordered.shader_stages.composite.source.contains(".brg"));
+        let source = "name=Stage fixture\nper_pixel_1=dx=x*0.01;\nwarp_1=ret=tex2D(sampler_warp_asset,uv).rgb;\ncomp_1=ret=tex2D(sampler_composite_asset,uv).rgb;";
+        assert!(validate_milkrust_import(source).is_err()); // Conservative cross-renderer gate.
+        assert!(validate_milkrust_webgl_import(source).is_ok()); // Experimental WebGL load gate only.
+        let mut runtime = MilkRustRuntime::default();
+        let frame = runtime.render_source(source, 0.0, 0.1, 0.2, 0.3);
+        assert!(frame.warp_mesh.is_some());
+        assert!(frame.shader_stages.warp.required && frame.shader_stages.composite.required);
+        assert_eq!(frame.shader_stages.warp.texture_samplers, vec!["sampler_warp_asset"]);
+        assert_eq!(frame.shader_stages.composite.texture_samplers, vec!["sampler_composite_asset"]);
+        for stage in [&frame.shader_stages.warp, &frame.shader_stages.composite] {
+            assert!(stage.source.contains("outColor = vec4(ret, outputAlpha)"));
+            assert!(!stage.source.contains("mix(ret, previous, feedback)"));
+        }
+        let next = runtime.render_source(source, 0.1, 0.2, 0.3, 0.4);
+        assert_eq!(frame.shader_stages, next.shader_stages);
+
+        let composite_only = milkrust_frame_from_source("comp_1=ret=float3(0.1,0.2,0.3);", 0.0, 0.0, 0.0, 0.0);
+        assert!(!composite_only.shader_stages.warp.required);
+        assert!(composite_only.shader_stages.composite.required);
+        let unsupported = milkrust_frame_from_source("warp_1=for (int i=0;i<4;i++) { ret=0; }", 0.0, 0.0, 0.0, 0.0);
+        assert!(unsupported.shader_stages.warp.required);
+        assert!(unsupported.shader_stages.warp.source.is_empty());
+    }
+
+    #[test]
+    fn webgl_import_does_not_bypass_other_engine_or_saved_blend_gates() {
+        assert!(validate_milkrust_webgl_import("[preset00]\nzoom=1\n[preset01]\nzoom=1").is_err());
+        assert!(validate_milkrust_webgl_import("per_frame_1=q1=unknown_equation(1);\ncomp_1=ret=1;").is_err());
+        assert!(validate_milkrust_webgl_import("comp_1=for (int i=0;i<4;i++) { ret=0; }").is_err());
+        let samplers = get_milkrust_shader_texture_samplers("ret=tex2D(a,uv)+tex2D(b,uv)+tex2D(c,uv)+tex2D(d,uv)+tex2D(e,uv);");
+        assert_eq!(samplers, vec!["a", "b", "c", "d", "e"]);
     }
 
     #[test]

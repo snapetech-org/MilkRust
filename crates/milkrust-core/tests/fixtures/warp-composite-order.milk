@@ -1,0 +1,19 @@
+// Original conformance fixture; covered by the repository code license.
+// With other drawing disabled, warp accumulates red history and composite
+// maps it to green. Feeding composite back produces unintended blue history.
+MILKDROP_PRESET_VERSION=201
+PSVERSION=2
+[preset00]
+name=Warp history and composite channel order
+fDecay=1
+decay=1
+fWaveAlpha=0
+wave_a=0
+zoom=1
+rot=0
+warp_1=`shader_body {
+warp_2=`ret=tex2D(sampler_main,uv).rgb*0.5+float3(0.25,0,0);
+warp_3=`}
+comp_1=`shader_body {
+comp_2=`ret=tex2D(sampler_main,uv).brg;
+comp_3=`}

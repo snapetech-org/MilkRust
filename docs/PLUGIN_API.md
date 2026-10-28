@@ -15,13 +15,14 @@ pack manifest. It returns:
 Each plugin descriptor can come from:
 
 - **data plugin** (`kind: "data"`): JSON payload loaded from `plugin.url`
-- **js plugin** (`kind: "js"`): module loaded with dynamic `import()`
+- **js plugin** (`kind: "js"`): rejected by pack loading; downloaded preset packs cannot authorize code execution
 
 `kind` is normalized to accept `js`, `javascript`, and `module`.
 
 Data plugins can carry config, deck wiring metadata, presets, and heuristics.
-If a JS module load fails, the pack load returns `valid: false` with an `errors` entry and skips
-that plugin while continuing to process other entries.
+An executable entry makes the plugin and aggregate pack results `valid: false`
+with an `errors` entry. It is skipped without fetching/importing its code; other
+data entries may still load.
 
 ## Plugin hooks
 
@@ -79,3 +80,5 @@ export default { onFrameStart };
 - Dynamic js plugins are loaded from user-accessible URLs and are not sandboxed.
 - Plugin execution does not alter the Rust runtime contract; it can only mutate
   SDK-facing context and local orchestration decisions in the web layer.
+
+Pack loading only accepts declarative data entries. `loadMilkRustPackPlugins` reports an error for executable entries and never imports their URL. An application may still supply its own trusted, already-loaded hook objects to `engine.loadPlugins`; this is separate from loading community content.

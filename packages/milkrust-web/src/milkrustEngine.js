@@ -228,6 +228,9 @@ export const loadMilkRustPack = async (packUrl, { fetchImpl = globalThis.fetch }
   const plugins = await loadMilkRustPackPlugins(validation, { fetchImpl });
   return {
     ...validation,
+    valid: validation.valid && plugins.valid,
+    errors: [...(validation.errors || []), ...plugins.errors],
+    warnings: [...(validation.warnings || []), ...plugins.warnings],
     plugins,
     manifest: validation.manifest,
     presets,
@@ -279,21 +282,8 @@ export const loadMilkRustPackPlugins = async (
   const plugins = await Promise.all(normalized.plugins.map(async (plugin) => {
     try {
       if (plugin.kind === 'js') {
-        if (!plugin.url) {
-          warnings.push(`plugin ${plugin.id || '<missing>'} has no url`);
-          return null;
-        }
-        const loaded = await import(/* @vite-ignore */ plugin.url);
-        const api = loaded?.default ?? loaded;
-        if (!api || (typeof api !== 'object' && typeof api !== 'function')) {
-          throw new Error(`plugin ${plugin.id || '<missing>'} has no export object`);
-        }
-        return {
-          ...plugin,
-          source: 'module',
-          api,
-          module: loaded,
-        };
+        errors.push(`plugin ${plugin.id || '<missing>'}: executable pack plugins are disabled; only data entries may be loaded from a pack`);
+        return null;
       }
 
       if (!plugin.url) {
@@ -524,6 +514,7 @@ export const createMilkRustEngine = async ({
   const frameReader = createFrameReader(audioContext, audioNode);
   const webGpuStatus = getWebGpuStatus(rendererBackend);
   let presetIndex = 0;
+  let wasWaitingForTextures = false;
   let presetLibrary = [...milkrustPresets];
   let activePresetTitle = rustEngine.loadPresetText(
     presetLibrary[presetIndex].source,
@@ -861,13 +852,22 @@ export const createMilkRustEngine = async ({
         mouseState.mouse_dx,
         mouseState.mouse_dy,
       );
+      const renderStatus = typeof rustEngine.renderStatusJson === 'function'
+        ? parseJson(rustEngine.renderStatusJson()) : null;
+      if (renderStatus?.state === 'failed') {
+        return { error: renderStatus.error || 'Preset rendering failed', fidelity: 'not-assessed' };
+      }
+      const waitingForTextures = renderStatus?.state === 'waiting-textures';
+      const textureStateChanged = wasWaitingForTextures !== waitingForTextures;
+      wasWaitingForTextures = waitingForTextures;
       runPluginHooks('onRenderFrame', {
         now,
         frame,
         presetIndex,
         presetName: activePresetTitle,
       });
-      return automatedPresetName ? { presetName: automatedPresetName } : null;
+      return automatedPresetName || waitingForTextures || textureStateChanged
+        ? { presetName: automatedPresetName || activePresetTitle, waitingForTextures } : null;
     },
     resize: (width, height) => {
       rustEngine.resize(width, height);
