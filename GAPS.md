@@ -22,6 +22,7 @@ This audit replaces the older roadmap snapshot, which no longer matched the crat
 - Multi-state `.milk2` files are also marked unsupported by the current subset until saved blend patterns and transition state are implemented; the generic two-frame crossfade remains an intermediate representation.
 - Compatibility JSON now reports per-file read/parse/subset status, per-preset diagnostics, and explicit `renderStatus: not-run` / `fidelityStatus: not-assessed`; geometry statistics are labeled as non-render output. The community-report generator labels static-subset results and records a deterministic SHA-256 fingerprint for each source pack. The checked-in May 2026 report remains a historical snapshot until regenerated on the current branch.
 - npm scripts now call the filenames that actually exist under `tools/`.
+- Logical `&&` / `||` parsing now consumes both operands before combining their boolean values; regression fixtures cover false-left AND, true-left OR and precedence. This closes a parser token-consumption bug, not a renderer or full EEL-semantics gate.
 
 These changes close the identified false-positive and denominator-loss paths in source. The corpus totals and real renderer outcomes still require execution on the pinned source tree.
 

@@ -988,7 +988,8 @@ impl<'a> MilkRustExpressionParser<'a> {
     fn parse_logical_and(&mut self) -> Result<f64, String> {
         let mut value = self.parse_bitwise_or()?;
         while self.match_op("&&") {
-            value = (value != 0.0 && self.parse_bitwise_or()? != 0.0) as i32 as f64;
+            let right = self.parse_bitwise_or()?;
+            value = (value != 0.0 && right != 0.0) as i32 as f64;
         }
         Ok(value)
     }
@@ -996,7 +997,8 @@ impl<'a> MilkRustExpressionParser<'a> {
     fn parse_logical_or(&mut self) -> Result<f64, String> {
         let mut value = self.parse_logical_and()?;
         while self.match_op("||") {
-            value = (value != 0.0 || self.parse_logical_and()? != 0.0) as i32 as f64;
+            let right = self.parse_logical_and()?;
+            value = (value != 0.0 || right != 0.0) as i32 as f64;
         }
         Ok(value)
     }
@@ -1846,6 +1848,17 @@ mod tests {
         assert!((result - 1.0).abs() < 0.0001);
     }
 
+
+    #[test]
+    fn evaluate_logical_operators_parse_both_operands() {
+        let scope = BTreeMap::new();
+        assert_eq!(evaluate_milkrust_expression("0 && 1", &scope).unwrap(), 0.0);
+        assert_eq!(evaluate_milkrust_expression("1 || 0", &scope).unwrap(), 1.0);
+        assert_eq!(
+            evaluate_milkrust_expression("0 || 2 && 1", &scope).unwrap(),
+            1.0
+        );
+    }
 
     #[test]
     fn evaluate_equations() {
