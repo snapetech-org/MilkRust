@@ -33,6 +33,12 @@ count into `rendered` or `qualified` fields. Converter/report generation and
 packaging have **not run in this session**; no broader downloadable pack is
 claimed from the recipe alone.
 
+Promotion is now enforced by `tools/catalog_qualification.py`, not just this
+document. A broader pack without the complete immutable report described in
+[`content/qualification/README.md`](../content/qualification/README.md) fails
+catalog preparation. The app receives a signed report link and target list and
+shows qualification separately from redistribution clearance.
+
 Shader-bearing converted JSON stays in the source inventory for the shader
 track. Its GLSL is not falsely labeled original HLSL. The historical original
 MilkDrop and Cream of the Crop collections remain link/import-only until their

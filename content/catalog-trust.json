@@ -1,6 +1,7 @@
 {
   "schemaVersion": 1,
   "threshold": 1,
+  "minimumSequence": 1,
   "keys": {},
   "status": "not-provisioned"
 }

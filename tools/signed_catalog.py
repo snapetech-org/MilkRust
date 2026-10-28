@@ -23,6 +23,8 @@ import zipfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from catalog_qualification import FIXTURE, TARGETS, qualify
+
 DOMAIN = b"MilkRust.catalog.v1\n"
 MAX_PAYLOAD = 1024 * 1024
 MAX_ENVELOPE = 2 * MAX_PAYLOAD
@@ -101,6 +103,21 @@ def validate_payload(payload, now, allow_expired=False):
         require(re.fullmatch(r"[a-f0-9]{64}", entry.get("sha256", "")), "invalid archive digest")
         for key, limit in {"archiveBytes": MAX_ARCHIVE, "expandedBytes": MAX_EXPANDED, "presetCount": 2500}.items():
             require(type(entry.get(key)) is int and 0 < entry[key] <= limit, "invalid entry size")
+        qualification = entry.get("qualification")
+        require(isinstance(qualification, dict) and isinstance(qualification.get("targets"), list), "missing qualification metadata")
+        if qualification.get("status") == "sample-fixture-only":
+            require((entry["id"], entry["version"], entry["sha256"]) == FIXTURE
+                    and qualification["targets"] == []
+                    and "reportUrl" not in qualification and "reportSha256" not in qualification,
+                    "fixture qualification exception does not apply")
+        else:
+            require(qualification.get("status") == "qualified"
+                    and len(qualification["targets"]) == len(TARGETS)
+                    and all(isinstance(t, str) for t in qualification["targets"])
+                    and set(qualification["targets"]) == TARGETS, "incomplete qualification coverage")
+            require(re.fullmatch(r"https://raw\.githubusercontent\.com/snapetech-org/MilkRust/[a-f0-9]{40}/content/qualification/reports/[A-Za-z0-9_-]+\.json",
+                                 qualification.get("reportUrl", ""))
+                    and re.fullmatch(r"[a-f0-9]{64}", qualification.get("reportSha256", "")), "qualification report must be pinned")
     require(isinstance(data.get("revoked"), list) and len(data["revoked"]) <= 2000, "invalid revocations")
     for item in data["revoked"]:
         require(isinstance(item, str) and item.count("@") == 1, "invalid revocation")
@@ -118,7 +135,10 @@ def openssl(*args):
 
 def trust_root(path):
     data = decode(read(path, 16 * 1024))
-    require(isinstance(data, dict) and isinstance(data.get("keys"), dict), "invalid trust root")
+    require(isinstance(data, dict) and data.get("schemaVersion") == 1 and isinstance(data.get("keys"), dict), "invalid trust root")
+    require(data.get("status") == "active", "production trust root has not been activated")
+    require(type(data.get("minimumSequence")) is int and 0 < data["minimumSequence"] <= 9007199254740991,
+            "trust root is missing its release sequence floor")
     keys = data["keys"]
     require(0 < len(keys) <= 16 and type(data.get("threshold")) is int and 0 < data["threshold"] <= len(keys), "trust root is not provisioned")
     public_keys = set()
@@ -129,7 +149,7 @@ def trust_root(path):
     return data
 
 
-def verify(envelope, trust, now, allow_expired=False):
+def verify(envelope, trust, now, allow_expired=False, enforce_floor=True):
     require(len(envelope) <= MAX_ENVELOPE, "envelope too large")
     wrapper = decode(envelope)
     require(isinstance(wrapper, dict) and wrapper.get("schemaVersion") == 1, "unsupported envelope schema")
@@ -155,7 +175,9 @@ def verify(envelope, trust, now, allow_expired=False):
             result = subprocess.run(["openssl", "pkeyutl", "-verify", "-rawin", "-pubin", "-keyform", "DER", "-inkey", str(public), "-in", str(message), "-sigfile", str(sig)], capture_output=True, timeout=30)
             if result.returncode == 0: accepted.add(key_id)
     require(len(accepted) >= trust["threshold"], "signature quorum not met")
-    return validate_payload(payload, now, allow_expired)
+    verified = validate_payload(payload, now, allow_expired)
+    require(not enforce_floor or verified["sequence"] >= trust.get("minimumSequence", 1), "catalog predates this release trust root")
+    return verified
 
 
 def sign(payload, key_files, trust, now):
@@ -241,12 +263,13 @@ def prepare(config, sequence, days, now):
         digest = hashlib.sha256(data).hexdigest()
         require(item.get("sha256") == digest and item.get("archiveBytes") == len(data) and item.get("expandedBytes") == expanded
                 and item.get("presetCount") == len(manifest["presets"]), "reviewed catalog metadata differs from immutable archive")
+        qualification = qualify(item, manifest, data, git_bytes, decode)
         entries.append({"id": manifest["id"], "version": manifest["version"], "name": manifest["name"],
             "license": manifest["license"], "distributionStatus": "redistributable", "contentNotice": manifest["contentNotice"],
             "description": item.get("description", item.get("notes", manifest["name"])),
             "sourceUrl": item["sourceUrls"][0], "searchText": item.get("searchText", ""),
             "archiveUrl": item["archiveUrl"], "sha256": digest, "archiveBytes": len(data), "expandedBytes": expanded,
-            "presetCount": len(manifest["presets"])})
+            "presetCount": len(manifest["presets"]), "qualification": qualification})
     payload = encode({"schemaVersion": 1, "sequence": sequence,
         "issuedAt": now.isoformat(timespec="seconds").replace("+00:00", "Z"),
         "expiresAt": (now + timedelta(days=days)).isoformat(timespec="seconds").replace("+00:00", "Z"),
@@ -286,7 +309,9 @@ def publish(envelope, trust, now, bootstrap=False):
         commit = api("GET", prefix + "/git/commits/" + parent, token)
         base_tree = commit["tree"]["sha"]
         old_file = api("GET", prefix + "/contents/visualizer-catalog.json?ref=" + parent, token)
-        previous = verify(base64.b64decode(old_file["content"]), trust, now, allow_expired=True)
+        # Authenticate history even when a new app root advances its sequence
+        # floor beyond the old publication. The new envelope still obeys it.
+        previous = verify(base64.b64decode(old_file["content"]), trust, now, allow_expired=True, enforce_floor=False)
         require(next_catalog["sequence"] > previous["sequence"], "catalog sequence must increase")
         require(set(previous["revoked"]) <= set(next_catalog["revoked"]), "revocations are cumulative; publish a new pack version to restore")
     blob = api("POST", prefix + "/git/blobs", token, {"encoding": "base64", "content": base64.b64encode(envelope).decode()})

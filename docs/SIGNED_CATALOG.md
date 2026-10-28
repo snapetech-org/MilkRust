@@ -25,15 +25,25 @@ there is no downloaded crypto package or execution of preset content.
 1. Generate Ed25519 keys in the organization's approved key custody system.
    Back them up and limit access to the protected catalog environment. This
    repository intentionally contains no production private key or invented key.
-2. Review and commit public 32-byte base64 keys plus quorum in
-   `content/catalog-trust.json`. Configure the corresponding private PEM map as
+2. Export only Ed25519 public keys from that custody system. Use
+   `tools/catalog_trust.py --public-key ID=PUBLIC.pem --threshold N
+   --minimum-sequence S --output content/catalog-trust.json` (repeat
+   `--public-key` for each independent key). This accepts public SPKI PEM/DER,
+   rejects private-key input and emits `status: active`; it does not provision
+   custody or GitHub settings. Review and commit the resulting public root.
+   Configure the corresponding private PEM map as
    `MILKRUST_CATALOG_PRIVATE_KEYS` in the protected `visualizer-catalog`
    environment. Confirm compatible private ephemeral JIT runner capacity and
    broker routing for `catalog-publish` before dispatch.
-3. Ship those same public keys in PlezyNG using `MILKRUST_CATALOG_KEYS` (JSON map)
-   and `MILKRUST_CATALOG_THRESHOLD` release defines. Empty keys disable remote
-   updates; included packs and local imports continue to work.
-4. Merge reviewed immutable archives/catalog metadata, then dispatch **Publish
+3. Pin that exact public file and immutable MilkRust revision in PlezyNG with
+   `scripts/visualizer/configure_catalog_trust.py --input PUBLIC_ROOT.json
+   --source-revision COMMIT --sha256 REVIEWED_ROOT_SHA256`. Commit its generated
+   Dart source in an app release. Every platform compiles the same reviewed
+   root; build-environment defines no longer replace it. Empty keys explicitly
+   disable remote updates; included packs and local imports continue to work.
+   The release sequence floor also protects first install, before checkpoints.
+4. Merge reviewed immutable archives/catalog metadata and the required
+   [qualification evidence](../content/qualification/README.md), then dispatch **Publish
    signed visualizer catalog** from protected `main` with a new sequence. The
    first publication explicitly uses `bootstrap`. Verify the public endpoint
    through the app, including cancellation, expiry, rollback and offline use.
@@ -56,6 +66,9 @@ new remote installation but does not hide installed files. Downloads recheck
 current authorization immediately before activation. No fetch occurs merely
 because music starts playing. Local storage tampering, loss of all checkpoints,
 and maliciously changing the device clock are outside this network rollback model.
+The publisher authenticates old history even below a newly raised release floor,
+but refuses to sign/publish a new envelope below that floor. Keep overlapping
+verification keys until the old publication has been migrated.
 
 ## Current evidence
 
