@@ -1344,6 +1344,7 @@ pub fn validate_milkrust_import(source: &str) -> Result<String, String> {
     if parsed.presets.is_empty() {
         return Err("MilkRust preset is empty".to_string());
     };
+    let requires_milk2_saved_blend_state = parsed.format == "milk2" && parsed.presets.len() > 1;
     let errors = parsed
         .presets
         .iter()
@@ -1354,7 +1355,12 @@ pub fn validate_milkrust_import(source: &str) -> Result<String, String> {
             } else {
                 "MilkRust preset content is empty".to_string()
             };
-            let report = analyze_milkrust_preset_compatibility(preset);
+            let mut report = analyze_milkrust_preset_compatibility(preset);
+            if requires_milk2_saved_blend_state {
+                report
+                    .renderer_features
+                    .push("milk2-saved-blend-pattern-and-transition-state".to_string());
+            }
             let compatibility_error = milkrust_compatibility_error(&report);
             let error = [content_error, compatibility_error]
                 .into_iter()
@@ -4139,11 +4145,17 @@ pub fn build_milkrust_compatibility_entry(
     force_milk2: bool,
 ) -> MilkRustCompatibilityEntry {
     let parsed = parse_milkrust_preset_set(source, force_milk2);
+    let requires_milk2_saved_blend_state = parsed.format == "milk2" && parsed.presets.len() > 1;
     let preset_reports = parsed
         .presets
         .iter()
         .map(|preset| {
-            let report = analyze_milkrust_preset_compatibility(preset);
+            let mut report = analyze_milkrust_preset_compatibility(preset);
+            if requires_milk2_saved_blend_state {
+                report
+                    .renderer_features
+                    .push("milk2-saved-blend-pattern-and-transition-state".to_string());
+            }
             let webgpu_shader_sections = webgpu_shader_sections(preset);
             let content_error = if milkrust_preset_has_content(preset) {
                 String::new()
@@ -6279,8 +6291,8 @@ shape00_a=0.22
             },
             ImportedMilkdropFixture {
                 id: "milk2-double",
-                supported: true,
-                expected_error: "",
+                supported: false,
+                expected_error: "renderer features pending: milk2-saved-blend-pattern-and-transition-state",
                 source: r#"
 [preset00]
 name=Fixture Double Left
@@ -6296,8 +6308,8 @@ per_frame_1=q34=cos(time);
             },
             ImportedMilkdropFixture {
                 id: "milkdrop3-q-registers",
-                supported: true,
-                expected_error: "",
+                supported: false,
+                expected_error: "renderer features pending: milk2-saved-blend-pattern-and-transition-state",
                 source: r#"
 [preset00]
 name=Fixture Q Register Coverage A
@@ -7305,8 +7317,8 @@ comp_shader_2=ret = vec3(shifted, energy * bass_att);
 
         assert_eq!(summary.total_count, 6);
         assert_eq!(summary.preset_count, 8);
-        assert_eq!(summary.supported_count, 4);
-        assert_eq!(summary.unsupported_count, 2);
+        assert_eq!(summary.supported_count, 2);
+        assert_eq!(summary.unsupported_count, 4);
         assert_eq!(summary.max_shape_count, 40);
         assert_eq!(summary.max_sprite_count, 1);
         assert_eq!(summary.max_wave_count, 20);
@@ -7318,7 +7330,10 @@ comp_shader_2=ret = vec3(shifted, energy * bass_att);
         );
         assert_eq!(
             summary.unsupported_renderer_features,
-            vec!["separate-warp-and-composite-stage-rendering".to_string()]
+            vec![
+                "milk2-saved-blend-pattern-and-transition-state".to_string(),
+                "separate-warp-and-composite-stage-rendering".to_string()
+            ]
         );
     }
 
