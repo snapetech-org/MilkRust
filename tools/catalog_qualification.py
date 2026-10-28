@@ -14,7 +14,7 @@ import zipfile
 TARGETS = frozenset({
     "linux-x64", "linux-arm64", "windows-x64", "windows-arm64",
     "macos-x64", "macos-arm64", "ios-arm64", "tvos-arm64",
-    "android-arm64", "android-armv7", "android-x64", "webos-arm64", "tizen-arm",
+    "android-arm64", "android-armv7", "android-x64", "webos-arm", "tizen-arm",
 })
 HEX = re.compile(r"[a-f0-9]{64}\Z")
 COMMIT = re.compile(r"[a-f0-9]{40}\Z")
@@ -119,7 +119,9 @@ def qualify(item, manifest, archive, git_bytes, decode):
             require(evidence.get("packSha256") == archive_digest and evidence.get("presetSha256") == expected[name]
                     and evidence.get("target") == target["id"]
                     and evidence.get("engineRevision") == target["engineRevision"]
-                    and evidence.get("hostRevision") == target["hostRevision"], "evidence identity mismatch")
+                    and evidence.get("hostRevision") == target["hostRevision"]
+                    and evidence.get("engineArtifactSha256") == target["engineArtifactSha256"]
+                    and evidence.get("hostArtifactSha256") == target["hostArtifactSha256"], "evidence identity mismatch")
             for field in ("render", "referenceComparison", "audioSync", "resourceLimits", "lifecycle"):
                 check = evidence.get(field)
                 require(isinstance(check, dict) and check.get("status") == "pass", "qualification check is missing or failed")

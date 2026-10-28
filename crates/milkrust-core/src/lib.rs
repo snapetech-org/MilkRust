@@ -4546,6 +4546,8 @@ fn strip_milkrust_shader_comments(source: &str) -> String {
         if ch == '/' && chars.peek() == Some(&'*') {
             let _ = chars.next();
             in_block = true;
+            // A comment separates tokens; deleting it must not fuse names.
+            output.push(' ');
             continue;
         }
         if ch == '/' && chars.peek() == Some(&'/') {
@@ -4559,62 +4561,79 @@ fn strip_milkrust_shader_comments(source: &str) -> String {
         }
         output.push(ch);
     }
+    if in_block { return "/* unterminated shader comment".to_string(); }
     output.trim().to_string()
 }
 
 fn unwrap_milkrust_shader_body(source: &str) -> String {
-    let mut source = strip_milkrust_shader_comments(source);
-    let lower = source.to_ascii_lowercase();
-    if let Some(index) = lower.find("shader_body") {
-        source.replace_range(index..index + "shader_body".len(), "");
-    }
+    let source = strip_milkrust_shader_comments(source);
     let trimmed = source.trim();
-    let trimmed = trimmed.strip_prefix('{').unwrap_or(trimmed).trim();
-    let trimmed = trimmed.strip_suffix('}').unwrap_or(trimmed).trim();
+    let trimmed = match trimmed.strip_prefix("shader_body") {
+        Some(rest) if rest.trim_start().starts_with('{') => rest.trim_start(),
+        _ => trimmed,
+    };
+    let trimmed = trimmed.strip_prefix('{').and_then(|body| body.strip_suffix('}'))
+        .unwrap_or(trimmed).trim();
     trimmed.to_string()
 }
 
 fn normalize_simple_milkrust_conditional_return(source: &str) -> String {
     let unwrapped = unwrap_milkrust_shader_body(source);
-    let compact = unwrapped
-        .replace(['{', '}'], " ")
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ");
-    let lower = compact.to_ascii_lowercase();
-    if !lower.starts_with("if") || !lower.contains(" else ") {
-        return source.to_string();
+    fn convert(source: &str) -> Option<String> {
+        let after_if = source.strip_prefix("if")?.trim_start();
+        let condition = after_if.strip_prefix('(')?;
+        let mut depth = 1usize;
+        let mut end = None;
+        for (index, ch) in condition.char_indices() {
+            match ch {
+                '(' => { depth += 1; if depth > 64 { return None; } }
+                ')' => { depth -= 1; if depth == 0 { end = Some(index); break; } }
+                _ => {}
+            }
+        }
+        let end = end?;
+        fn branch(source: &str) -> Option<(&str, &str)> {
+            let source = source.trim_start();
+            let braced = source.starts_with('{');
+            let source = if braced { source[1..].trim_start() } else { source };
+            let value = source.strip_prefix("ret")?.trim_start().strip_prefix('=')?.trim_start();
+            if value.starts_with('=') { return None; }
+            let (expression, rest) = value.split_once(';')?;
+            if expression.trim().is_empty() || expression.contains(['{', '}']) { return None; }
+            let rest = rest.trim_start();
+            let rest = if braced { rest.strip_prefix('}')?.trim_start() } else { rest };
+            Some((expression.trim(), rest))
+        }
+        let (when_true, rest) = branch(&condition[end + 1..])?;
+        let rest = rest.strip_prefix("else")?;
+        // Require an actual keyword boundary (not, for example, else_ret).
+        if !rest.starts_with(|c: char| c.is_whitespace() || c == '{') { return None; }
+        let (when_false, rest) = branch(rest)?;
+        if !rest.trim().is_empty() { return None; }
+        // HLSL identifiers are case-sensitive; preserve both branch expressions.
+        Some(format!("ret = ({}) ? ({when_true}) : ({when_false});", &condition[..end]))
     }
-    let Some(condition_start) = compact.find('(') else {
-        return source.to_string();
-    };
-    let Some(condition_end) = compact[condition_start + 1..].find(')') else {
-        return source.to_string();
-    };
-    let condition_end = condition_start + 1 + condition_end;
-    let condition = compact[condition_start + 1..condition_end].trim();
-    let rest = compact[condition_end + 1..].trim();
-    let lower_rest = rest.to_ascii_lowercase();
-    let Some(else_index) = lower_rest.find(" else ") else {
-        return source.to_string();
-    };
-    let true_part = rest[..else_index].trim();
-    let false_part = rest[else_index + " else ".len()..].trim();
-    let extract_ret = |part: &str| -> Option<String> {
-        let part = part.trim();
-        let lower = part.to_ascii_lowercase();
-        let value = lower.strip_prefix("ret")?;
-        let value = value.trim_start();
-        let value = value.strip_prefix('=')?.trim();
-        Some(value.trim_end_matches(';').trim().to_string())
-    };
-    let Some(true_ret) = extract_ret(true_part) else {
-        return source.to_string();
-    };
-    let Some(false_ret) = extract_ret(false_part) else {
-        return source.to_string();
-    };
-    format!("ret = ({condition}) ? ({true_ret}) : ({false_ret});")
+    convert(&unwrapped).unwrap_or_else(|| source.to_string())
+}
+
+/// Locate an exact function token, allowing whitespace before `(`. Substrings
+/// of user-defined identifiers are never built-in function names.
+fn find_milkrust_shader_call(source: &str, wanted: &str) -> Option<(usize, usize)> {
+    let bytes = source.as_bytes();
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index].is_ascii_alphabetic() || bytes[index] == b'_' {
+            let start = index;
+            index += 1;
+            while index < bytes.len() && (bytes[index].is_ascii_alphanumeric() || bytes[index] == b'_') { index += 1; }
+            if &source[start..index] == wanted {
+                let mut paren = index;
+                while paren < bytes.len() && bytes[paren].is_ascii_whitespace() { paren += 1; }
+                if bytes.get(paren) == Some(&b'(') { return Some((start, paren)); }
+            }
+        } else { index += 1; }
+    }
+    None
 }
 
 fn is_milkrust_main_sampler(name: &str) -> bool {
@@ -4627,10 +4646,10 @@ fn is_milkrust_main_sampler(name: &str) -> bool {
 pub fn get_milkrust_shader_texture_samplers(source: &str) -> Vec<String> {
     let cleaned = strip_milkrust_shader_comments(source);
     let mut samplers = Vec::new();
-    for marker in ["tex2D(", "tex("] {
+    for marker in ["tex2D", "tex"] {
         let mut rest = cleaned.as_str();
-        while let Some(index) = rest.to_ascii_lowercase().find(&marker.to_ascii_lowercase()) {
-            let after = &rest[index + marker.len()..];
+        while let Some((_, paren)) = find_milkrust_shader_call(rest, marker) {
+            let after = &rest[paren + 1..];
             let sampler = after
                 .trim_start()
                 .chars()
@@ -4649,61 +4668,64 @@ pub fn get_milkrust_shader_texture_samplers(source: &str) -> Vec<String> {
 }
 
 fn normalize_milkrust_shader_expression(expression: &str) -> String {
-    expression
-        .replace("float4(", "vec4(")
-        .replace("float3(", "vec3(")
-        .replace("float2(", "vec2(")
-        .replace("saturate(", "clamp01(")
-        .replace("lerp(", "mix(")
-        .replace("frac(", "fract(")
-        .replace("fmod(", "mod(")
-        .replace("rsqrt(", "inversesqrt(")
-        .replace("atan2(", "atan(")
+    let bytes = expression.as_bytes();
+    let (mut index, mut copied) = (0, 0);
+    let mut output = String::with_capacity(expression.len());
+    while index < bytes.len() {
+        if bytes[index].is_ascii_alphabetic() || bytes[index] == b'_' {
+            let start = index;
+            index += 1;
+            while index < bytes.len() && (bytes[index].is_ascii_alphanumeric() || bytes[index] == b'_') { index += 1; }
+            let mut paren = index;
+            while paren < bytes.len() && bytes[paren].is_ascii_whitespace() { paren += 1; }
+            if bytes.get(paren) != Some(&b'(') { continue; }
+            let replacement = match &expression[start..index] {
+                "float4" => "vec4", "float3" => "vec3", "float2" => "vec2",
+                "saturate" => "clamp01", "lerp" => "mix", "frac" => "fract",
+                "fmod" => "milkrust_hlsl_fmod", "rsqrt" => "inversesqrt", "atan2" => "atan",
+                _ => continue,
+            };
+            output.push_str(&expression[copied..start]);
+            output.push_str(replacement);
+            copied = paren; // Normalize whitespace only for this built-in call.
+            index = paren;
+        } else { index += 1; }
+    }
+    output.push_str(&expression[copied..]);
+    output
 }
 
 fn normalize_milkrust_shader_type(shader_type: &str) -> String {
-    shader_type
-        .to_ascii_lowercase()
-        .replace("float2", "vec2")
-        .replace("float3", "vec3")
-        .replace("float4", "vec4")
+    match shader_type {
+        "float2" => "vec2", "float3" => "vec3", "float4" => "vec4",
+        value => value,
+    }.to_string()
 }
 
 fn normalize_milkrust_shader_source(source: &str, texture_samplers: &[String]) -> String {
     let mut normalized =
         unwrap_milkrust_shader_body(&normalize_simple_milkrust_conditional_return(source));
     for sampler in ["tex2D", "tex"] {
-        loop {
-            let Some(index) = normalized
-                .to_ascii_lowercase()
-                .find(&format!("{}(", sampler.to_ascii_lowercase()))
-            else {
-                break;
-            };
-            let start = index + sampler.len() + 1;
-            let after = &normalized[start..];
-            let name = after
-                .trim_start()
-                .chars()
-                .take_while(|ch| ch.is_ascii_alphanumeric() || *ch == '_')
-                .collect::<String>();
-            if name.is_empty() {
-                break;
-            }
+        let input = std::mem::take(&mut normalized);
+        let mut rest = input.as_str();
+        while let Some((index, paren)) = find_milkrust_shader_call(rest, sampler) {
+            let after = &rest[paren + 1..];
+            let name = after.trim_start().chars()
+                .take_while(|ch| ch.is_ascii_alphanumeric() || *ch == '_').collect::<String>();
+            if name.is_empty() { break; }
             let whitespace = after.len() - after.trim_start().len();
-            let name_start = start + whitespace;
-            let name_end = name_start + name.len();
             let replacement = if is_milkrust_main_sampler(&name) {
                 "previousFrame".to_string()
-            } else if let Some(texture_index) =
-                texture_samplers.iter().position(|value| value == &name)
-            {
+            } else if let Some(texture_index) = texture_samplers.iter().position(|value| value == &name) {
                 format!("shaderTexture{texture_index}")
             } else {
                 name.clone()
             };
-            normalized.replace_range(index..name_end, &format!("texture({replacement}"));
+            normalized.push_str(&rest[..index]);
+            normalized.push_str(&format!("texture({replacement}"));
+            rest = &after[whitespace + name.len()..];
         }
+        normalized.push_str(rest);
     }
     normalized
 }
@@ -4735,7 +4757,7 @@ fn is_safe_milkrust_shader_expression(expression: &str) -> bool {
                     | ':'
                     | '('
                     | ')'
-                    | ' '
+                    | ' ' | '\t' | '\n' | '\r'
             )
     }) {
         return false;
@@ -4755,10 +4777,11 @@ fn split_milkrust_shader_declaration(statement: &str) -> Option<(&str, &str, &st
         let Some(rest) = statement.strip_prefix(shader_type) else {
             continue;
         };
+        if !rest.starts_with(char::is_whitespace) { continue; }
         let rest = rest.trim_start();
         let (name, expression) = rest.split_once('=')?;
         let name = name.trim();
-        if !name
+        if !name.starts_with(|ch: char| ch.is_ascii_alphabetic() || ch == '_') || !name
             .chars()
             .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
         {
@@ -4775,7 +4798,7 @@ fn split_milkrust_shader_assignment(statement: &str) -> Option<(&str, &str, &str
             continue;
         };
         let name = name.trim();
-        if !name
+        if !name.starts_with(|ch: char| ch.is_ascii_alphabetic() || ch == '_') || !name
             .chars()
             .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
         {
@@ -4928,6 +4951,17 @@ float clamp01(float value) {{ return clamp(value, 0.0, 1.0); }}
 vec2 clamp01(vec2 value) {{ return clamp(value, vec2(0.0), vec2(1.0)); }}
 vec3 clamp01(vec3 value) {{ return clamp(value, vec3(0.0), vec3(1.0)); }}
 vec4 clamp01(vec4 value) {{ return clamp(value, vec4(0.0), vec4(1.0)); }}
+// HLSL fmod uses truncation, whereas GLSL mod uses floor for negative inputs.
+float milkrust_hlsl_fmod(float x, float y) {{ return x-y*trunc(x/y); }}
+vec2 milkrust_hlsl_fmod(vec2 x, vec2 y) {{ return x-y*trunc(x/y); }}
+vec3 milkrust_hlsl_fmod(vec3 x, vec3 y) {{ return x-y*trunc(x/y); }}
+vec4 milkrust_hlsl_fmod(vec4 x, vec4 y) {{ return x-y*trunc(x/y); }}
+vec2 milkrust_hlsl_fmod(vec2 x, float y) {{ return x-y*trunc(x/y); }}
+vec3 milkrust_hlsl_fmod(vec3 x, float y) {{ return x-y*trunc(x/y); }}
+vec4 milkrust_hlsl_fmod(vec4 x, float y) {{ return x-y*trunc(x/y); }}
+vec2 milkrust_hlsl_fmod(float x, vec2 y) {{ return x-y*trunc(x/y); }}
+vec3 milkrust_hlsl_fmod(float x, vec3 y) {{ return x-y*trunc(x/y); }}
+vec4 milkrust_hlsl_fmod(float x, vec4 y) {{ return x-y*trunc(x/y); }}
 float get_fft(float position) {{ int index = int(clamp(position, 0.0, 1.0) * 63.0); return fftBins[index]; }}
 float get_fft_hz(float hz) {{ float nyquist = max(sampleRate * 0.5, 1.0); return get_fft(hz / nyquist); }}
 float get_waveform(float position) {{ int index = int(clamp(position, 0.0, 1.0) * 63.0); return waveformBins[index]; }}
@@ -5049,6 +5083,7 @@ pub fn create_translated_milkrust_wgsl_shader(source: &str) -> String {
                 || statement.contains('^')
                 || statement.contains('~')
                 || statement.contains('?')
+                || statement.contains("milkrust_hlsl_fmod") // WGSL overload lowering is not implemented.
         })
     {
         return String::new();

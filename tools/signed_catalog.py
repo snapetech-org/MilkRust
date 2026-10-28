@@ -128,9 +128,17 @@ def validate_payload(payload, now, allow_expired=False):
 
 
 def openssl(*args):
-    result = subprocess.run(["openssl", *map(str, args)], capture_output=True, timeout=30)
+    result = subprocess.run(["openssl", *map(str, args)], capture_output=True, timeout=30,
+                            env=crypto_environment())
     require(result.returncode == 0, "OpenSSL operation failed")
     return result.stdout
+
+
+def crypto_environment():
+    # Child crypto processes need the selected key file, never the entire key
+    # map or a publication credential inherited from a runner environment.
+    return {key: value for key, value in os.environ.items()
+            if key not in ("MILKRUST_CATALOG_PRIVATE_KEYS", "GITHUB_TOKEN")}
 
 
 def trust_root(path):
@@ -172,7 +180,7 @@ def verify(envelope, trust, now, allow_expired=False, enforce_floor=True):
             public.write_bytes(SPKI_PREFIX + base64.b64decode(trust["keys"][key_id], validate=True))
             sig = folder / "signature"
             sig.write_bytes(signature)
-            result = subprocess.run(["openssl", "pkeyutl", "-verify", "-rawin", "-pubin", "-keyform", "DER", "-inkey", str(public), "-in", str(message), "-sigfile", str(sig)], capture_output=True, timeout=30)
+            result = subprocess.run(["openssl", "pkeyutl", "-verify", "-rawin", "-pubin", "-keyform", "DER", "-inkey", str(public), "-in", str(message), "-sigfile", str(sig)], capture_output=True, timeout=30, env=crypto_environment())
             if result.returncode == 0: accepted.add(key_id)
     require(len(accepted) >= trust["threshold"], "signature quorum not met")
     verified = validate_payload(payload, now, allow_expired)
@@ -357,7 +365,7 @@ def main():
             # JIT runner secret: JSON map of key ID to PEM. Temporary key files
             # stay mode 0600 inside a 0700 directory and are never artifacts.
             with tempfile.TemporaryDirectory(prefix="milkrust-keys-") as scratch:
-                secrets = decode(os.environ.get("MILKRUST_CATALOG_PRIVATE_KEYS", "{}"))
+                secrets = decode(os.environ.pop("MILKRUST_CATALOG_PRIVATE_KEYS", "{}"))
                 require(isinstance(secrets, dict) and len(secrets) <= 16, "invalid signing configuration")
                 for key_id, pem in secrets.items():
                     require(KEY_ID.fullmatch(key_id) and key_id not in key_files and isinstance(pem, str) and len(pem) <= 16384, "invalid signing configuration")

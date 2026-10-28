@@ -32,7 +32,8 @@ class QualificationTests(unittest.TestCase):
                                         "basis": "Synthetic unit fixture", "evidence": rights}, "targets": []}
         for target in sorted(TARGETS):
             evidence = {"schemaVersion": 1, "packSha256": self.sha, "presetSha256": self.preset_sha,
-                        "target": target, "engineRevision": self.revision, "hostRevision": self.revision}
+                        "target": target, "engineRevision": self.revision, "hostRevision": self.revision,
+                        "engineArtifactSha256": "e" * 64, "hostArtifactSha256": "f" * 64}
             for field in ("render", "referenceComparison", "audioSync", "resourceLimits", "lifecycle"):
                 evidence[field] = {"status": "pass", "method": "Synthetic test, never actually rendered"}
             evidence["render"].update(frames=300, captureSha256="b" * 64, audioFixtureSha256="c" * 64)

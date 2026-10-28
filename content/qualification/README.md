@@ -5,8 +5,8 @@ No qualification reports exist yet. No empty example report is a pass.
 `tools/catalog_qualification.py` is called by the catalog preparation step.
 It checks immutable evidence for the exact archive, every preset and every
 target in `all-native-hosts-v1`: Linux x64/arm64, Windows x64/arm64, macOS
-x64/arm64, iOS/tvOS arm64, Android arm64/armv7/x64, webOS arm64 and Tizen ARM.
-Tizen's current TV package is 32-bit ARM; the x64 emulator is not device proof.
+x64/arm64, iOS/tvOS arm64, Android arm64/armv7/x64, webOS ARM and Tizen ARM.
+The current webOS/Tizen TV packages are 32-bit ARM; x64 emulators are not device proof.
 Each report also pins engine/host revisions, artifact hashes, physical GPU and
 driver, private JIT run URL, rights review and source/evidence digests. A target
 matrix change is a reviewed protocol/policy change in both MilkRust and PlezyNG.

@@ -9,7 +9,7 @@ import argparse
 import base64
 import os
 from pathlib import Path
-import re
+import subprocess
 
 from signed_catalog import KEY_ID, SPKI_PREFIX, encode, openssl, read, require
 
@@ -59,5 +59,5 @@ def main():
 if __name__ == "__main__":
     try:
         main()
-    except (ValueError, TypeError, OSError):
+    except (ValueError, TypeError, OSError, subprocess.SubprocessError):
         raise SystemExit("Public root configuration rejected; no signing or publication was performed.") from None
