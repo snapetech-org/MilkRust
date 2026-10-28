@@ -90,9 +90,6 @@ impl WasmMilkRustEngine {
         file_name: &str,
         texture_assets_json: &str,
     ) -> Result<String, JsValue> {
-        if file_name.to_ascii_lowercase().ends_with(".milk2") {
-            return Err(JsValue::from_str("Saved .milk2 blend patterns are not implemented"));
-        }
         let title = validate_milkrust_import(source).map_err(|error| JsValue::from_str(&error))?;
         let texture_assets = Self::parse_texture_assets(texture_assets_json)?;
         self.source = source.to_string();

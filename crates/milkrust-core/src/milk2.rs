@@ -40,8 +40,8 @@ impl SavedBlend {
         true
     }
 
-    /// Only this family currently has an exact implemented spatial mask. Other
-    /// patterns must not silently turn into an ordinary temporal cross-fade.
+    /// Uniform Fade has no spatial mask. Other patterns must not silently turn
+    /// into an ordinary temporal cross-fade.
     pub fn supports_uniform_composite(&self) -> bool {
         self.pattern.eq_ignore_ascii_case("fade")
             && self.has_only_supported_trailer_metadata()

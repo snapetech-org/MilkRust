@@ -22,12 +22,16 @@ CC-BY-NC implementation is copied into MilkRust. See also the upstream MilkDrop3
 README's documented saved progress, direction and random values.
 
 The experimental WebGL and native GL routes support a uniform **Fade** envelope
-with only known saved metadata. Other named spatial patterns and embedded sprites
-retain explicit renderer requirements. Parsing and round-trip preservation do
-not imply visual equivalence. Generic renderer qualification remains conservative.
-Regression cases are source only and have not run. Full `.milk2` compatibility
-remains open until all saved spatial patterns, extension behavior and reference
-GPU sequences are implemented and qualified.
+with only known saved metadata. The WebGL import path accepts `.milk2` files when
+the content passes this same gate; the filename extension does not widen the
+supported format subset. The uniform Fade uses the saved progress directly;
+directional spatial-mask semantics remain unsupported. Other named spatial
+patterns and embedded sprites retain explicit renderer requirements and fail
+closed. Parsing and round-trip
+preservation do not imply visual equivalence. Generic renderer qualification
+remains conservative. Regression cases are source only and have not run. Full
+`.milk2` compatibility remains open until all saved spatial patterns, extension
+behavior and reference GPU sequences are implemented and qualified.
 
 Observed format source: [MDropDX12 564407e](https://github.com/shanevbg/MDropDX12/tree/564407e127c4bef5c5dfbb23fb8f5d1d8afb6120), `src/mDropDX12/engine_presets.cpp` and `engine.cpp`. This citation records format facts, not permission to incorporate its rendering implementation.
 
