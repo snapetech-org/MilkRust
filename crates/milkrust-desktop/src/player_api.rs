@@ -221,6 +221,7 @@ pub enum DesktopPlayerError {
     PresetNotFound(String),
     InvalidPresetInput(String),
     PresetLoadFailed { path: String, source: String },
+    PresetEvaluationFailed { path: String, source: String },
     InvalidConfig(&'static str),
 }
 
@@ -236,6 +237,9 @@ impl fmt::Display for DesktopPlayerError {
             }
             Self::PresetLoadFailed { path, source } => {
                 write!(formatter, "failed to load preset '{path}': {source}")
+            }
+            Self::PresetEvaluationFailed { path, source } => {
+                write!(formatter, "preset evaluation failed for '{path}': {source}")
             }
             Self::InvalidConfig(message) => write!(formatter, "invalid player config: {message}"),
         }
@@ -573,7 +577,7 @@ impl DesktopPlayerEngine {
             return Ok(None);
         }
 
-        let frame_set = self.host.render_frame_set(
+        let frame_set = self.host.try_render_frame_set(
             &preset.0,
             time_seconds,
             frame_context.bass,
@@ -582,6 +586,15 @@ impl DesktopPlayerEngine {
             &audio.waveform,
             &audio.spectrum,
         );
+        let frame_set = match frame_set {
+            Ok(frame) => frame,
+            Err(source) => {
+                self.running = false;
+                return Err(DesktopPlayerError::PresetEvaluationFailed {
+                    path: preset.2.to_string_lossy().into_owned(), source,
+                });
+            }
+        };
         let report = report_frame_set(&frame_set);
 
         let mut render_context = DesktopPluginRenderContext {

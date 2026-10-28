@@ -19,9 +19,10 @@ texture-unit, framebuffer, draw and context-loss failures stop the current
 preview. `renderStatusJson` reports the reason; reloading resets the failure and
 resources. Images still loading delay drawing. The Canvas fallback cannot claim
 shader or warp-mesh support. Browser image decoding happens before the upload
-dimension check, so this is not a complete decoder memory sandbox. Per-expression work/depth limits are now implemented in source; aggregate frame
-work, propagation of all equation errors, compiler time limits and hung-driver
-recovery remain open.
+dimension check, so this is not a complete decoder memory sandbox. Per-expression work/depth and shared frame equation-work limits are implemented
+in source. Checked runtime failures stop the preview before drawing. Aggregate
+memory/allocation budgets, compiler time limits and hung-driver recovery remain
+open.
 
 Bounds in this source: 2 MiB preset text, 128 KiB per translated shader,
 32 MiB embedded-image map, 64 images, 24 MiB per encoded image, 4096 pixels per

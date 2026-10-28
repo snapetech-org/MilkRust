@@ -245,6 +245,15 @@ pub fn strip_milkrust_equation_comments(text: &str) -> String {
 /// assert_eq!(tokens.len(), 3);
 /// ```
 pub fn tokenize_milkrust_expression(expression: &str) -> Result<Vec<MilkRustToken>, MilkRustError> {
+    limits::check_frame_budget().map_err(|message| MilkRustError::Parse {
+        expression: expression.chars().take(256).collect(), message,
+    })?;
+    let result = tokenize_milkrust_expression_inner(expression);
+    if let Err(error) = &result { limits::record_frame_error(&error.to_string()); }
+    result
+}
+
+fn tokenize_milkrust_expression_inner(expression: &str) -> Result<Vec<MilkRustToken>, MilkRustError> {
     validate_expression_source(expression).map_err(|message| MilkRustError::Tokenize {
         expression: expression.chars().take(256).collect(), position: 0, message,
     })?;
@@ -803,6 +812,12 @@ impl<'a> MilkRustExpressionParser<'a> {
     }
 
     fn parse(&mut self) -> Result<f64, String> {
+        let result = self.parse_inner();
+        if let Err(error) = &result { limits::record_frame_error(error); }
+        result
+    }
+
+    fn parse_inner(&mut self) -> Result<f64, String> {
         let _depth = self.budget.enter()?;
         self.budget.spend(self.tokens.len())?;
         if self.index == 0 {
@@ -1338,11 +1353,11 @@ fn evaluate_milkrust_expression_with_scope(
     variables: &BTreeMap<String, MilkRustValue>,
     rand_counter: usize,
 ) -> Result<(f64, BTreeMap<String, MilkRustValue>, usize), MilkRustError> {
+    let tokens = tokenize_milkrust_expression(expression)?;
     let scope = variables
         .iter()
         .map(|(key, value)| (key.to_ascii_lowercase(), value.clone()))
         .collect::<BTreeMap<_, _>>();
-    let tokens = tokenize_milkrust_expression(expression)?;
     let mut parser = MilkRustExpressionParser::new(&tokens, scope, rand_counter, expression, true);
     let value = parser.parse().map_err(|e| MilkRustError::Parse {
         expression: expression.to_string(),

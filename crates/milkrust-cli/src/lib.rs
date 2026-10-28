@@ -6,7 +6,7 @@ use std::{
 
 use milkrust_core::{
     build_milkrust_compatibility_entry, parse_milkrust_preset_set,
-    milkrust_frame_set_from_source_with_audio, milkrust_preset_name,
+    MilkRustFrameSetRuntime, MilkRustInputState, milkrust_preset_name,
     summarize_milkrust_compatibility_matrix, validate_milkrust_import,
     MilkRustCompatibilityEntry,
 };
@@ -112,7 +112,7 @@ pub fn run_milkrust_cli(args: &[String]) -> MilkRustCliResult {
         "pack-validate" => pack_validate_command(args.get(1)),
         "render-stats" => match read_one_path(args.get(1)) {
             Ok((path, source)) => {
-                let frame_set = milkrust_frame_set_from_source_with_audio(
+                let frame_set = MilkRustFrameSetRuntime::default().try_render_source_with_audio_and_input(
                     &source,
                     1.0,
                     0.55,
@@ -120,7 +120,12 @@ pub fn run_milkrust_cli(args: &[String]) -> MilkRustCliResult {
                     0.25,
                     &[-1.0, -0.25, 0.0, 0.25, 1.0],
                     &[0.0, 0.2, 0.7, 1.0, 0.4],
+                    MilkRustInputState::default(),
                 );
+                let frame_set = match frame_set {
+                    Ok(frame) => frame,
+                    Err(error) => return MilkRustCliResult::err(1, format!("preset equation evaluation failed: {error}\n")),
+                };
                 let batches = create_headless_batches(&frame_set);
                 let mut renderer = MilkRustHeadlessRenderer::new();
                 let stats = match renderer.render_frame_set(&frame_set) {

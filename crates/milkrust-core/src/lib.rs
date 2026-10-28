@@ -1070,6 +1070,7 @@ pub fn milkrust_frame_set_from_source(
 
 #[derive(Clone, Debug, Default)]
 pub struct MilkRustRuntime {
+    last_error: Option<String>,
      initialized: bool,
      preset_document: Option<MilkRustPresetDocument>,
      scope: BTreeMap<String, MilkRustValue>,
@@ -1116,6 +1117,57 @@ impl MilkRustRuntime {
 
 #[allow(clippy::too_many_arguments)]
     pub fn render_source_with_audio_and_input(
+        &mut self,
+        source: &str,
+        time_seconds: f64,
+        bass: f64,
+        mid: f64,
+        treble: f64,
+        waveform: &[f64],
+        spectrum: &[f64],
+        input: MilkRustInputState,
+    ) -> MilkRustFrame {
+        match self.try_render_source_with_audio_and_input(source, time_seconds, bass, mid, treble, waveform, spectrum, input) {
+            Ok(frame) => frame,
+            Err(_) => milkrust_frame(&MilkRustPreset::default(), time_seconds, bass, mid, treble),
+        }
+    }
+
+    /// Returns the latest checked frame error. Legacy callers must inspect this
+    /// before treating a fallback as rendered preset output.
+    pub fn render_error(&self) -> Option<&str> { self.last_error.as_deref() }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn try_render_source_with_audio_and_input(
+        &mut self,
+        source: &str,
+        time_seconds: f64,
+        bass: f64,
+        mid: f64,
+        treble: f64,
+        waveform: &[f64],
+        spectrum: &[f64],
+        input: MilkRustInputState,
+    ) -> Result<MilkRustFrame, String> {
+        self.last_error = None;
+        if let Err(error) = validate_preset_source(source) {
+            self.last_error = Some(error.clone());
+            return Err(error);
+        }
+        let budget = milkrust_expr::limits::FrameEvaluation::begin();
+        let frame = self.render_source_inner(source, time_seconds, bass, mid, treble, waveform, spectrum, input);
+        if let Some(error) = budget.error() {
+            // Equations may have partially mutated registers before failure.
+            // A later explicit retry starts with fresh state.
+            *self = Self::default();
+            self.last_error = Some(error.clone());
+            return Err(error);
+        }
+        Ok(frame)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn render_source_inner(
         &mut self,
         source: &str,
         time_seconds: f64,
@@ -1201,6 +1253,7 @@ impl MilkRustRuntime {
 
 #[derive(Clone, Debug, Default)]
 pub struct MilkRustFrameSetRuntime {
+    last_error: Option<String>,
      initialized: Vec<bool>,
      preset_documents: Vec<MilkRustPresetDocument>,
      scopes: Vec<BTreeMap<String, MilkRustValue>>,
@@ -1248,6 +1301,58 @@ impl MilkRustFrameSetRuntime {
 
     #[allow(clippy::too_many_arguments)]
     pub fn render_source_with_audio_and_input(
+        &mut self,
+        source: &str,
+        time_seconds: f64,
+        bass: f64,
+        mid: f64,
+        treble: f64,
+        waveform: &[f64],
+        spectrum: &[f64],
+        input: MilkRustInputState,
+    ) -> MilkRustFrameSet {
+        match self.try_render_source_with_audio_and_input(source, time_seconds, bass, mid, treble, waveform, spectrum, input) {
+            Ok(frame) => frame,
+            Err(_) => MilkRustFrameSet { entries: Vec::new(), preset_count: 0, title: String::new(),
+                    transition_mode: "none".to_string(), transition_seconds: 0.0 },
+        }
+    }
+
+    /// Returns the latest checked frame error. Legacy callers must inspect this
+    /// before treating a fallback as rendered preset output.
+    pub fn render_error(&self) -> Option<&str> { self.last_error.as_deref() }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn try_render_source_with_audio_and_input(
+        &mut self,
+        source: &str,
+        time_seconds: f64,
+        bass: f64,
+        mid: f64,
+        treble: f64,
+        waveform: &[f64],
+        spectrum: &[f64],
+        input: MilkRustInputState,
+    ) -> Result<MilkRustFrameSet, String> {
+        self.last_error = None;
+        if let Err(error) = validate_preset_source(source) {
+            self.last_error = Some(error.clone());
+            return Err(error);
+        }
+        let budget = milkrust_expr::limits::FrameEvaluation::begin();
+        let frame = self.render_source_inner(source, time_seconds, bass, mid, treble, waveform, spectrum, input);
+        if let Some(error) = budget.error() {
+            // Equations may have partially mutated registers before failure.
+            // A later explicit retry starts with fresh state.
+            *self = Self::default();
+            self.last_error = Some(error.clone());
+            return Err(error);
+        }
+        Ok(frame)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn render_source_inner(
         &mut self,
         source: &str,
         time_seconds: f64,
@@ -5014,6 +5119,13 @@ enum MilkRustToken {
 }
 
 fn tokenize_milkrust_expression(expression: &str) -> Result<Vec<MilkRustToken>, String> {
+    milkrust_expr::limits::check_frame_budget()?;
+    let result = tokenize_milkrust_expression_inner(expression);
+    if let Err(error) = &result { milkrust_expr::limits::record_frame_error(&error.to_string()); }
+    result
+}
+
+fn tokenize_milkrust_expression_inner(expression: &str) -> Result<Vec<MilkRustToken>, String> {
     validate_expression_source(expression)?;
     let chars = expression.chars().collect::<Vec<_>>();
     let mut tokens = Vec::new();
@@ -5555,6 +5667,12 @@ fn evaluate_arg_tokens(&mut self, tokens: &[MilkRustToken]) -> Result<f64, Strin
     }
 
 fn parse(&mut self) -> Result<f64, String> {
+        let result = self.parse_inner();
+        if let Err(error) = &result { milkrust_expr::limits::record_frame_error(error); }
+        result
+    }
+
+    fn parse_inner(&mut self) -> Result<f64, String> {
         let _depth = self.budget.enter()?;
         self.budget.spend(self.tokens.len())?;
          if self.index == 0 {
@@ -6054,11 +6172,11 @@ fn evaluate_milkrust_expression_with_scope(
     variables: &BTreeMap<String, MilkRustValue>,
     rand_counter: usize,
 ) -> Result<(f64, BTreeMap<String, MilkRustValue>, usize), String> {
+    let tokens = tokenize_milkrust_expression(expression)?;
     let scope = variables
         .iter()
         .map(|(key, value)| (key.to_ascii_lowercase(), value.clone()))
         .collect::<BTreeMap<_, _>>();
-    let tokens = tokenize_milkrust_expression(expression)?;
     let mut parser = MilkRustExpressionParser::new(&tokens, scope, rand_counter);
     let value = parser.parse()?;
     Ok((value, parser.scope, parser.rand_counter))

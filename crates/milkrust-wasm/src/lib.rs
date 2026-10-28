@@ -362,7 +362,7 @@ impl WasmMilkRustEngine {
         };
         let waveform = parse_milkrust_sample_csv(waveform_csv);
         let spectrum = parse_milkrust_sample_csv(spectrum_csv);
-        let frame_set = self.runtime.render_source_with_audio_and_input(
+        let frame_set = self.runtime.try_render_source_with_audio_and_input(
             &self.source,
             time_seconds,
             bass,
@@ -372,6 +372,14 @@ impl WasmMilkRustEngine {
             &spectrum,
             input,
         );
+        let frame_set = match frame_set {
+            Ok(frame) => frame,
+            Err(error) => {
+                self.waiting_for_textures = false;
+                self.render_error = Some(error);
+                return;
+            }
+        };
         match self.renderer.render_frame_set(&frame_set, time_seconds) {
             Ok(rendered) => self.waiting_for_textures = !rendered,
             Err(error) => {

@@ -73,3 +73,47 @@ fn oversized_and_binary_text_cannot_fall_back_to_fragment_parsing() {
         assert!(fragment.entries.is_empty());
     }
 }
+
+#[test]
+fn frame_budget_spans_independent_expressions_and_nested_frame_scopes() {
+    use milkrust_expr::limits::FrameEvaluation;
+    let scope = BTreeMap::new();
+    let frame = FrameEvaluation::begin();
+    let mut error = None;
+    for _ in 0..1000 {
+        match evaluate_milkrust_expression("loop(4000,1)", &scope) {
+            Ok(_) => {},
+            Err(value) => { error = Some(value.to_string()); break; },
+        }
+    }
+    assert!(error.unwrap().contains("Frame expression work budget"));
+    {
+        let nested = FrameEvaluation::begin();
+        assert!(evaluate_milkrust_expression("1+2", &scope).is_err());
+        assert!(nested.error().is_some());
+    }
+    assert!(frame.error().is_some());
+    drop(frame);
+    let recovered = FrameEvaluation::begin();
+    assert_eq!(evaluate_milkrust_expression("1+2", &scope).unwrap(), 3.0);
+    assert!(recovered.error().is_none());
+}
+
+#[test]
+fn checked_runtimes_report_equation_failures_and_recover_with_fresh_state() {
+    use milkrust_core::{MilkRustFrameSetRuntime, MilkRustRuntime, MilkRustInputState};
+    let mut frames = MilkRustFrameSetRuntime::default();
+    let mut single = MilkRustRuntime::default();
+    for equation in ["q1=while(1);", "q1=@;"] {
+        let source = format!("name=failed\nper_frame_1={equation}");
+        assert!(frames.try_render_source_with_audio_and_input(&source, 0.0, 0.0, 0.0, 0.0, &[], &[], MilkRustInputState::default()).is_err());
+        assert!(frames.render_error().is_some());
+        assert!(single.try_render_source_with_audio_and_input(&source, 0.0, 0.0, 0.0, 0.0, &[], &[], MilkRustInputState::default()).is_err());
+        assert!(single.render_error().is_some());
+    }
+    let source = "name=recovered\nper_frame_1=wave_r=0.5;";
+    assert!(frames.try_render_source_with_audio_and_input(source, 0.0, 0.0, 0.0, 0.0, &[], &[], MilkRustInputState::default()).is_ok());
+    assert!(frames.render_error().is_none());
+    assert!(single.try_render_source_with_audio_and_input(source, 0.0, 0.0, 0.0, 0.0, &[], &[], MilkRustInputState::default()).is_ok());
+    assert!(single.render_error().is_none());
+}

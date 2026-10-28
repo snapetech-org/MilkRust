@@ -103,8 +103,18 @@ without executing loops or memory writes. Regression source covers nested loops,
 while loops, memory operations, deep syntax, token/byte bounds, ordinary/lazy
 results and input-rejection accounting. These cases have not been run.
 
-These are per-expression limits, not complete wall-clock or render-frame limits.
-Existing higher-level runtime paths can still discard equation errors; surfacing
-all of those errors, aggregate frame work/memory budgets, allocation containment,
-and compiler/driver hang isolation remain release gates. No arbitrary-input
-safety or complete expression-conformance claim follows from these changes.
+Checked stateful frame APIs also share a 2,000,000-unit expression-work budget
+across the whole frame, including nested frame scopes. Tokenization, parse and
+budget failures are retained even when an internal legacy evaluator tries to use
+a fallback. Both runtimes expose `try_render_source_with_audio_and_input` and
+`render_error`; failures reset partially mutated state. WASM stops before drawing,
+the desktop player reports a preset-evaluation error and stops, and CLI/headless
+session statistics fail instead of emitting partial-success reports. Regression
+source covers cumulative limits, nested scopes and recovery; it remains unrun.
+
+These counters are not wall-clock limits or complete memory-allocation budgets.
+Legacy stateless geometry APIs are not a qualified execution boundary; callers
+should use the checked stateful API. Aggregate memory limits, remaining legacy
+caller migration, allocation containment and compiler/driver hang isolation
+remain release gates. No arbitrary-input safety or complete expression-conformance
+claim follows from these changes.
