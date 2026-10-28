@@ -5,11 +5,20 @@ share a restricted expression/declaration translator, not a complete HLSL
 front end. A GL compiler accepting generated text is not a fidelity result.
 
 The current source corrects exact function-token recognition (including
-whitespace), named sampler discovery, identifier case in simple conditional
-returns, comment token boundaries and HLSL `fmod` truncation. The previous
-GLSL `mod` substitution was wrong for negative inputs. Helpers cover scalar
-and float2/3/4 operands, including scalar/vector combinations. No GPU comparison
-has run. WGSL rejects that helper until its typed overload lowering exists.
+whitespace), balanced argument discovery, nested calls, named sampler discovery,
+identifier case in simple conditional returns, comment token boundaries and
+HLSL `fmod` truncation. The previous GLSL `mod` substitution was wrong for
+negative inputs. Helpers cover scalar and float2/3/4 operands, including
+scalar/vector combinations.
+
+The native and WebGL shader paths now lower these common legacy 2D sampling
+forms when the sampler resolves to a known MilkDrop texture binding:
+`tex2D`/`tex`, `tex2Dlod`, `tex2Dbias`, `tex2Dproj`, and `tex2Dgrad`. Nested
+sampling expressions are bounded; malformed arity, excessive nesting or
+unresolved sampler names fail closed. This is intrinsic lowering inside the
+existing restricted expression/declaration translator, not broad shader
+compatibility. WebGPU keeps these added operations disabled because its current
+binding path cannot lower their sampling semantics. No GPU comparison has run.
 
 Full HLSL remains separate work: a licensed compiler/front end, macros and
 scopes, functions, arrays, structs, typed matrices and `mul`, control flow,
