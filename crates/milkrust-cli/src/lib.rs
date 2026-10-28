@@ -168,6 +168,7 @@ fn compat_command(path: Option<&String>) -> MilkRustCliResult {
     }
 
     let mut file_read_errors = Vec::new();
+    let mut encoding_warnings = Vec::new();
     let entries = files
         .iter()
         .map(|file| {
@@ -181,13 +182,31 @@ fn compat_command(path: Option<&String>) -> MilkRustCliResult {
                 .extension()
                 .and_then(|extension| extension.to_str())
                 .is_some_and(|extension| extension.eq_ignore_ascii_case("milk2"));
-            match fs::read_to_string(file) {
-                Ok(source) => build_milkrust_compatibility_entry(
-                    &id,
-                    &file_name,
-                    &source,
-                    is_milk2,
-                ),
+            match fs::read(file) {
+                Ok(bytes) => match String::from_utf8(bytes) {
+                    Ok(source) => build_milkrust_compatibility_entry(
+                        &id,
+                        &file_name,
+                        &source,
+                        is_milk2,
+                    ),
+                    Err(error) => {
+                        encoding_warnings.push(serde_json::json!({
+                            "fileName": file_name,
+                            "error": "non-UTF-8 preset; compatibility is reported unsupported",
+                        }));
+                        let source = String::from_utf8_lossy(error.as_bytes());
+                        let mut entry = build_milkrust_compatibility_entry(
+                            &id,
+                            &file_name,
+                            &source,
+                            is_milk2,
+                        );
+                        entry.supported = false;
+                        entry.webgpu_supported = false;
+                        entry
+                    }
+                },
                 Err(error) => {
                     file_read_errors.push(serde_json::json!({
                         "fileName": file_name,
@@ -213,6 +232,8 @@ fn compat_command(path: Option<&String>) -> MilkRustCliResult {
             "totalCount": summary.total_count,
             "fileReadErrorCount": file_read_errors.len(),
             "fileReadErrors": file_read_errors,
+            "encodingWarningCount": encoding_warnings.len(),
+            "encodingWarnings": encoding_warnings,
             "presetCount": summary.preset_count,
             "supportedCount": summary.supported_count,
             "unsupportedCount": summary.unsupported_count,

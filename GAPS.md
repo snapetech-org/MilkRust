@@ -16,7 +16,7 @@ This audit replaces the older roadmap snapshot, which no longer matched the crat
 - The parser accepts additional indexed shape, sprite and wave key forms, including `shapecode_N_*`, `shape_N_*`, `spritecode_N_*`, `wave_N_*` and the existing forms.
 - `per_frame_init_N` and `frame_init_N` now populate the initialization equation scope before generic frame-equation matching.
 - Two-preset frame generation resolves each preset's shader and texture-sampler data from its own document instead of reusing the first preset's shader data for both entries.
-- The compatibility CLI now retains every discovered file in the file denominator. Read/encoding failures are returned in `fileReadErrors` and count as unsupported files instead of silently disappearing.
+- The compatibility CLI now retains every discovered file in the file denominator. I/O failures appear in `fileReadErrors`; non-UTF-8 files appear in `encodingWarnings` and are forced unsupported after a lossy diagnostic parse. No file disappears from the denominator.
 - npm scripts now call the filenames that actually exist under `tools/`.
 
 These changes close the identified false-positive and denominator-loss paths in source. The corpus totals and real renderer outcomes still require execution on the pinned source tree.
