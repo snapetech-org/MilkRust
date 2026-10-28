@@ -44,7 +44,7 @@ These changes close the identified false-positive and denominator-loss paths in 
 - Build only packs whose redistribution rights are clear. `NOASSERTION` community entries remain source links/import targets unless permission is established; a disclaimer does not confer rights.
 - Add a signed remote catalog and broader cleared-pack availability. PlezyNG's first pinned catalog entry verifies the archive and per-file index, bounds extraction, validates notices and activates atomically; signed remote updates and resumable transfer qualification remain open; the app has source for cancel/retry, version-aware updates and replacement recovery.
 - PlezyNG PR #55 now contains library selection, search, per-profile favorites/preferences, named playlists with reference import/export, shuffle/lock/timing/transitions/quality/fullscreen, and bounded pack download/import/replacement recovery, a bundled offline CC0 starter, portable path/image/library budgets, and local folder snapshots preserving textures/notices. Previews, broader content distribution, complete diagnostics and executed interaction checks remain open.
-- PlezyNG PR #55 contains pinned projectM/mpv extension patches, a playback-owned PCM tap, and a Linux worker/Flutter texture host. The PCM patch composes with the 23 existing common/Linux patches in the active mpv-build source revision. There are no new native artifacts or runtime qualification results. This projectM adapter does not complete the custom MilkRust renderer. The six original scenes still use analyzed loudness or ambient animation.
+- PlezyNG PR #55 contains pinned projectM/mpv extension patches, a playback-owned PCM tap, and a Linux worker/Flutter texture host. The PCM patch composes with the 23 existing common/Linux patches in the active mpv-build source revision. There are no new native artifacts or runtime qualification results. This projectM adapter does not complete the custom MilkRust renderer. The original scenes preserve current main's Plex loudness, compact live centroid/flatness metadata and ambient fallback, including local/source audio. These measurements are not waveform or frequency-bin arrays.
 - Keep platform support, audio capability, rendering fidelity, distribution status and release availability as separate states.
 
 ## Reproducible command map
@@ -84,3 +84,27 @@ Remote pack loading no longer executes JavaScript plugin entries. App-authored
 hook objects can still be supplied explicitly through `loadPlugins`. Studio
 exports use `NOASSERTION`/local-only metadata rather than assigning CC0 to
 arbitrary imported content.
+
+
+## Input and expression budgets — source implementation, unqualified
+
+Preset/fragment parsing now checks the 2 MiB byte limit, NUL bytes, line/key/record
+limits and a maximum index of 63 for each object family before sparse arrays are
+allocated. Overflowing integer indices are rejected as well. The bounded parser
+returns explicit `parse_errors`; compatibility rows retain these inputs as
+unsupported with `parseErrors` instead of dropping them or treating an empty
+fallback as accepted. CLI reads stop after 2 MiB plus one sentinel byte.
+
+Both expression evaluators share deterministic work and recursion limits through
+`milkrust-expr::limits`: 64 KiB source, 16,384 tokens, 64 guarded recursive entries,
+and 200,000 work units per expression. Nested calls inherit the caller's budget;
+loop iterations and memory helpers consume it. Compilation validates syntax
+without executing loops or memory writes. Regression source covers nested loops,
+while loops, memory operations, deep syntax, token/byte bounds, ordinary/lazy
+results and input-rejection accounting. These cases have not been run.
+
+These are per-expression limits, not complete wall-clock or render-frame limits.
+Existing higher-level runtime paths can still discard equation errors; surfacing
+all of those errors, aggregate frame work/memory budgets, allocation containment,
+and compiler/driver hang isolation remain release gates. No arbitrary-input
+safety or complete expression-conformance claim follows from these changes.

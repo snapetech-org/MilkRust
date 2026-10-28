@@ -1,4 +1,8 @@
+use milkrust_expr::limits::{ExpressionBudget, MAX_EXPRESSION_TOKENS, validate_expression_source};
 use std::collections::BTreeMap;
+
+pub mod input_limits;
+use input_limits::validate_preset_source;
 
 pub struct MilkRustPreset {
     pub decay: f64,
@@ -1386,9 +1390,7 @@ pub fn validate_milkrust_webgl_import(source: &str) -> Result<String, String> {
 }
 
 fn validate_milkrust_import_for_renderer(source: &str, webgl_stages: bool) -> Result<String, String> {
-    if source.len() > 2 * 1024 * 1024 || source.as_bytes().contains(&0) {
-        return Err("Preset text is binary or exceeds 2 MiB".to_string());
-    }
+    validate_preset_source(source)?;
     let parsed =
         parse_milkrust_preset_set(source, source.to_ascii_lowercase().contains("[preset01]"));
     if parsed.presets.is_empty() {
@@ -1505,6 +1507,7 @@ pub struct MilkRustIndexedEntry {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct MilkRustPresetDocument {
+    pub parse_errors: Vec<String>,
     pub base_values: BTreeMap<String, MilkRustValue>,
     pub comp_shader: String,
     pub format: String,
@@ -1522,6 +1525,7 @@ pub struct MilkRustPresetDocument {
 impl MilkRustPresetDocument {
     fn new(source: &str, index: usize) -> Self {
         Self {
+            parse_errors: Vec::new(),
             base_values: BTreeMap::new(),
             comp_shader: String::new(),
             equations: MilkRustEquations::default(),
@@ -1751,6 +1755,13 @@ fn parse_milkrust_preset_text(text: &str, index: usize) -> MilkRustPresetDocumen
 }
 
 pub fn parse_milkrust_preset_set(source: &str, force_milk2: bool) -> MilkRustPresetSet {
+    if let Err(error) = validate_preset_source(source) {
+        let format = if force_milk2 { "milk2" } else { "milk" }.to_string();
+        let mut preset = MilkRustPresetDocument::new("", 0);
+        preset.format = format.clone();
+        preset.parse_errors.push(error);
+        return MilkRustPresetSet { format, presets: vec![preset] };
+    }
     let chunks = split_milkrust_preset_pair(source);
     let format = if force_milk2 || chunks.len() > 1 {
         "milk2"
@@ -1772,6 +1783,7 @@ pub fn parse_milkrust_preset_set(source: &str, force_milk2: bool) -> MilkRustPre
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct MilkRustFragment {
+    pub parse_errors: Vec<String>,
     pub entries: Vec<MilkRustIndexedEntry>,
     pub fragment_type: String,
     pub source: String,
@@ -1822,6 +1834,10 @@ pub fn parse_milkrust_fragment(
     requested_type: &str,
 ) -> MilkRustFragment {
     let fragment_type = milkrust_fragment_type(file_name, requested_type);
+    if let Err(error) = validate_preset_source(source) {
+        return MilkRustFragment { entries: Vec::new(), fragment_type,
+            source: String::new(), parse_errors: vec![error] };
+    }
     let parsed = parse_milkrust_preset_set(source, false);
     let parsed_entries = if fragment_type == "wave" {
         parsed
@@ -1850,6 +1866,7 @@ pub fn parse_milkrust_fragment(
         vec![parse_standalone_milkrust_fragment_entry(source)]
     };
     MilkRustFragment {
+        parse_errors: Vec::new(),
         entries,
         fragment_type,
         source: source.to_string(),
@@ -3790,6 +3807,7 @@ fn create_milkrust_frame_primitives_and_textures_stateful(
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct MilkRustPresetCompatibility {
+    pub parse_errors: Vec<String>,
     pub renderer_features: Vec<String>,
     pub shader_sections: Vec<String>,
     pub unsupported_functions: Vec<String>,
@@ -3941,6 +3959,7 @@ pub fn analyze_milkrust_preset_compatibility(
     };
 
     MilkRustPresetCompatibility {
+        parse_errors: preset.parse_errors.clone(),
         renderer_features,
         shader_sections,
         unsupported_functions,
@@ -3948,7 +3967,7 @@ pub fn analyze_milkrust_preset_compatibility(
 }
 
 pub fn milkrust_compatibility_error(report: &MilkRustPresetCompatibility) -> String {
-    let mut messages = Vec::new();
+    let mut messages = report.parse_errors.clone();
     if !report.unsupported_functions.is_empty() {
         messages.push(format!(
             "unsupported functions: {}",
@@ -3986,6 +4005,7 @@ pub struct MilkRustPresetMetrics {
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct MilkRustCompatibilityPresetReport {
+    pub parse_errors: Vec<String>,
     pub error: String,
     pub index: usize,
     pub metrics: MilkRustPresetMetrics,
@@ -4234,6 +4254,7 @@ pub fn build_milkrust_compatibility_entry(
                 .collect::<Vec<_>>()
                 .join("; ");
             MilkRustCompatibilityPresetReport {
+                parse_errors: report.parse_errors.clone(),
                 error,
                 index: preset.index,
                 metrics: milkrust_preset_metrics(preset),
@@ -4242,7 +4263,8 @@ pub fn build_milkrust_compatibility_entry(
                 title: preset.title.clone(),
                 unsupported_functions: report.unsupported_functions,
                 webgpu_renderer_features: webgpu_renderer_features.clone(),
-                webgpu_supported: milkrust_preset_has_content(preset)
+                webgpu_supported: preset.parse_errors.is_empty()
+                    && milkrust_preset_has_content(preset)
                     && equations_supported
                     && webgpu_shader_sections.is_empty()
                     && webgpu_renderer_features.is_empty(),
@@ -4992,10 +5014,12 @@ enum MilkRustToken {
 }
 
 fn tokenize_milkrust_expression(expression: &str) -> Result<Vec<MilkRustToken>, String> {
+    validate_expression_source(expression)?;
     let chars = expression.chars().collect::<Vec<_>>();
     let mut tokens = Vec::new();
     let mut index = 0usize;
     while index < chars.len() {
+        if tokens.len() > MAX_EXPRESSION_TOKENS { return Err("Expression token limit exceeded".to_string()); }
         let ch = chars[index];
         if ch.is_whitespace() {
             index += 1;
@@ -5086,6 +5110,7 @@ fn tokenize_milkrust_expression(expression: &str) -> Result<Vec<MilkRustToken>, 
             "Unsupported MilkRust expression syntax: {expression}"
         ));
     }
+    if tokens.len() > MAX_EXPRESSION_TOKENS { return Err("Expression token limit exceeded".to_string()); }
     Ok(tokens)
 }
 
@@ -5178,6 +5203,7 @@ const MILKRUST_MAX_LOOP_ITERATIONS: usize = 200_000;
 const MILKRUST_MEMORY_LENGTH: usize = 8_388_608;
 
 struct MilkRustExpressionParser<'a> {
+    budget: ExpressionBudget,
      rand_counter: usize,
      scope: BTreeMap<String, MilkRustValue>,
      tokens: &'a [MilkRustToken],
@@ -5201,6 +5227,7 @@ struct MilkRustExpressionParser<'a> {
          evaluate: bool,
      ) -> Self {
          Self {
+            budget: ExpressionBudget::default(),
              rand_counter,
              scope,
              tokens,
@@ -5249,6 +5276,8 @@ fn remaining_call_args(&mut self, name: &str) -> Result<Vec<&'a [MilkRustToken]>
      }
 
 fn evaluate_arg_tokens(&mut self, tokens: &[MilkRustToken]) -> Result<f64, String> {
+        let _depth = self.budget.enter()?;
+        self.budget.spend(tokens.len())?;
         if self.evaluate {
             if let Some((target_tokens, operator, value_tokens)) = self.assignment_arg_parts(tokens) {
                 let Some(key) = self.lvalue_key(target_tokens)? else {
@@ -5267,6 +5296,7 @@ fn evaluate_arg_tokens(&mut self, tokens: &[MilkRustToken]) -> Result<f64, Strin
             self.rand_counter,
             self.evaluate,
         );
+        parser.budget = self.budget.clone();
         let value = parser.parse()?;
         self.scope = parser.scope;
         self.rand_counter = parser.rand_counter;
@@ -5294,6 +5324,8 @@ fn evaluate_arg_tokens(&mut self, tokens: &[MilkRustToken]) -> Result<f64, Strin
     }
 
     fn lvalue_key(&mut self, tokens: &[MilkRustToken]) -> Result<Option<String>, String> {
+        let _depth = self.budget.enter()?;
+        self.budget.spend(tokens.len())?;
         match tokens {
             [MilkRustToken::Ident(name)] => Ok(Some(name.to_ascii_lowercase())),
             [MilkRustToken::Ident(name), MilkRustToken::Op(open), rest @ .., MilkRustToken::Op(close)]
@@ -5345,6 +5377,7 @@ fn evaluate_arg_tokens(&mut self, tokens: &[MilkRustToken]) -> Result<f64, Strin
                 .trunc()
                 .clamp(0.0, MILKRUST_MAX_LOOP_ITERATIONS as f64) as usize;
             let count = requested.min(MILKRUST_MEMORY_LENGTH - destination);
+            self.budget.spend(count)?;
             for offset in 0..count {
                 self.scope.insert(
                     milkrust_buffer_key("megabuf", (destination + offset) as f64),
@@ -5361,6 +5394,7 @@ fn evaluate_arg_tokens(&mut self, tokens: &[MilkRustToken]) -> Result<f64, Strin
             let count = requested
                 .min(MILKRUST_MEMORY_LENGTH - destination)
                 .min(MILKRUST_MEMORY_LENGTH - source);
+            self.budget.spend(count.saturating_mul(2))?;
             let values = (0..count)
                 .map(|offset| {
                     milkrust_number(
@@ -5433,6 +5467,7 @@ fn evaluate_arg_tokens(&mut self, tokens: &[MilkRustToken]) -> Result<f64, Strin
                      as usize;
                  let mut last = 0.0;
                  for _ in 0..count {
+                    self.budget.spend(1)?;
                      for arg in &args[1..] {
                          last = self.evaluate_arg_tokens(arg)?;
                      }
@@ -5445,6 +5480,7 @@ fn evaluate_arg_tokens(&mut self, tokens: &[MilkRustToken]) -> Result<f64, Strin
                  }
                  let mut last = 0.0;
                  for _ in 0..MILKRUST_MAX_LOOP_ITERATIONS {
+                    self.budget.spend(1)?;
                      let condition = self.evaluate_milkrust_while_condition(args[0])?;
                      if !milkrust_truthy(condition) {
                          break;
@@ -5519,6 +5555,8 @@ fn evaluate_arg_tokens(&mut self, tokens: &[MilkRustToken]) -> Result<f64, Strin
     }
 
 fn parse(&mut self) -> Result<f64, String> {
+        let _depth = self.budget.enter()?;
+        self.budget.spend(self.tokens.len())?;
          if self.index == 0 {
              if let Some((assignment_index, operator)) =
                  find_milkrust_top_level_assignment_token(self.tokens)
@@ -5701,6 +5739,7 @@ fn parse(&mut self) -> Result<f64, String> {
     }
 
     fn parse_unary_sign(&mut self) -> Result<f64, String> {
+        let _depth = self.budget.enter()?;
         if self.match_op("+") {
             return self.parse_unary_sign();
         }
@@ -5722,6 +5761,7 @@ fn parse(&mut self) -> Result<f64, String> {
     }
 
     fn parse_power_operand(&mut self) -> Result<f64, String> {
+        let _depth = self.budget.enter()?;
         if self.match_op("!") {
             let value = self.parse_power()?;
             return Ok(if self.evaluate {
@@ -5876,6 +5916,7 @@ fn parse(&mut self) -> Result<f64, String> {
     }
 
     fn parse_conditional(&mut self) -> Result<f64, String> {
+        let _depth = self.budget.enter()?;
         let condition = self.parse_logical_or()?;
         if !self.match_op("?") {
             return Ok(condition);
@@ -6056,7 +6097,7 @@ fn split_milkrust_equation_statements(equations: &str) -> Vec<String> {
 }
 
 /// A pre-compiled MilkRust expression that can be evaluated repeatedly
-/// without re-tokenizing or re-parsing the source string.
+/// without re-tokenizing the source string. Evaluation still parses the tokens.
 #[derive(Clone, Debug, PartialEq)]
 pub struct CompiledMilkRustExpression {
     tokens: Vec<MilkRustToken>,
@@ -6066,7 +6107,7 @@ pub struct CompiledMilkRustExpression {
 impl CompiledMilkRustExpression {
     pub fn compile(expression: &str) -> Result<Self, String> {
         let tokens = tokenize_milkrust_expression(expression)?;
-        let mut parser = MilkRustExpressionParser::new(&tokens, BTreeMap::new(), 0);
+        let mut parser = MilkRustExpressionParser::new_with_evaluate(&tokens, BTreeMap::new(), 0, false);
         parser.parse().map_err(|e| format!("Parse error: {e}"))?;
         Ok(Self { tokens, expression: expression.to_string() })
     }

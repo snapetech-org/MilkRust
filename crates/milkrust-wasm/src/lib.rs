@@ -136,6 +136,9 @@ impl WasmMilkRustEngine {
     ) -> Result<String, JsValue> {
         let mut parsed = self.parsed_source();
         let fragment = parse_milkrust_fragment(source, file_name, requested_type);
+        if !fragment.parse_errors.is_empty() {
+            return Err(JsValue::from_str(&fragment.parse_errors.join("; ")));
+        }
         let Some(target) = parsed.presets.first_mut() else {
             return Err(JsValue::from_str("MilkRust preset is empty"));
         };

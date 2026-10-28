@@ -1,5 +1,6 @@
 use std::{
     fs,
+    io::{self, Read},
     path::{Path, PathBuf},
 };
 
@@ -185,7 +186,7 @@ fn compat_command(path: Option<&String>) -> MilkRustCliResult {
                 .extension()
                 .and_then(|extension| extension.to_str())
                 .is_some_and(|extension| extension.eq_ignore_ascii_case("milk2"));
-            match fs::read(file) {
+            match read_bounded_preset(file) {
                 Ok(bytes) => match String::from_utf8(bytes) {
                     Ok(source) => {
                         source_read_statuses.push("readable-utf8");
@@ -283,6 +284,7 @@ fn compat_command(path: Option<&String>) -> MilkRustCliResult {
                     "read-failed" => "not-run",
                     "readable-non-utf8" => "lossy-diagnostic-only",
                     _ if entry.preset_count == 0 => "no-presets-parsed",
+                    _ if entry.preset_reports.iter().any(|report| !report.parse_errors.is_empty()) => "rejected-input-limits",
                     _ => "parsed",
                 },
                 "featureSubsetStatus": match source_read_statuses[index] {
@@ -307,6 +309,7 @@ fn compat_command(path: Option<&String>) -> MilkRustCliResult {
                     "index": report.index,
                     "title": report.title,
                     "error": report.error,
+                    "parseErrors": report.parse_errors,
                     "supportedByCurrentSubset": report.error.is_empty(),
                     "unsupportedFunctions": report.unsupported_functions,
                     "rendererFeatures": report.renderer_features,
@@ -425,12 +428,27 @@ fn is_preset_file(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
+fn read_bounded_preset(path: &Path) -> io::Result<Vec<u8>> {
+    const LIMIT: usize = milkrust_core::input_limits::MAX_PRESET_BYTES;
+    let file = fs::File::open(path)?;
+    if !file.metadata()?.is_file() {
+        return Err(io::Error::new(io::ErrorKind::InvalidInput, "Preset is not a regular file"));
+    }
+    let mut bytes = Vec::new();
+    file.take((LIMIT + 1) as u64).read_to_end(&mut bytes)?;
+    if bytes.len() > LIMIT {
+        return Err(io::Error::new(io::ErrorKind::InvalidData, "Preset exceeds 2 MiB"));
+    }
+    Ok(bytes)
+}
+
 fn read_one_path(path: Option<&String>) -> Result<(PathBuf, String), MilkRustCliResult> {
     let Some(path) = path else {
         return Err(MilkRustCliResult::err(2, usage()));
     };
     let path = PathBuf::from(path);
-    match fs::read_to_string(&path) {
+    match read_bounded_preset(&path).and_then(|bytes|
+        String::from_utf8(bytes).map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))) {
         Ok(source) => Ok((path, source)),
         Err(error) => Err(MilkRustCliResult::err(
             1,
@@ -668,4 +686,22 @@ mod tests {
         assert_eq!(result.code, 2);
         assert!(result.stderr.contains("usage"));
     }
+    #[test]
+    fn compatibility_reports_resource_rejections_without_dropping_files() {
+        let root = temp_path("resource-limits");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("sparse.milk"), "shapecode_999999999_enabled=1").unwrap();
+        fs::write(root.join("oversized.milk"), vec![b'x'; milkrust_core::input_limits::MAX_PRESET_BYTES + 1]).unwrap();
+        let result = run_milkrust_cli(&["compat".to_string(), root.to_string_lossy().into_owned()]);
+        let report: serde_json::Value = serde_json::from_str(&result.stdout).unwrap();
+        assert_eq!(report["totalCount"], 2);
+        assert_eq!(report["unsupportedCount"], 2);
+        assert_eq!(report["fileReadErrorCount"], 1);
+        let entries = report["entries"].as_array().unwrap();
+        let sparse = entries.iter().find(|entry| entry["fileName"].as_str().unwrap().ends_with("sparse.milk")).unwrap();
+        assert_eq!(sparse["parseStatus"], "rejected-input-limits");
+        assert!(!sparse["presetReports"][0]["parseErrors"].as_array().unwrap().is_empty());
+        fs::remove_dir_all(root).unwrap();
+    }
+
 }

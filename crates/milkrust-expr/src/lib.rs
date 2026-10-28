@@ -25,6 +25,9 @@
 use std::collections::BTreeMap;
 use std::fmt;
 
+pub mod limits;
+use limits::{ExpressionBudget, MAX_EXPRESSION_TOKENS, validate_expression_source};
+
 /// Error returned by MilkRust expression evaluation.
 #[derive(Clone, Debug, PartialEq)]
 pub enum MilkRustError {
@@ -242,10 +245,14 @@ pub fn strip_milkrust_equation_comments(text: &str) -> String {
 /// assert_eq!(tokens.len(), 3);
 /// ```
 pub fn tokenize_milkrust_expression(expression: &str) -> Result<Vec<MilkRustToken>, MilkRustError> {
+    validate_expression_source(expression).map_err(|message| MilkRustError::Tokenize {
+        expression: expression.chars().take(256).collect(), position: 0, message,
+    })?;
     let chars = expression.chars().collect::<Vec<_>>();
     let mut tokens = Vec::new();
     let mut index = 0usize;
     while index < chars.len() {
+        if tokens.len() > MAX_EXPRESSION_TOKENS { return Err(MilkRustError::Tokenize { expression: expression.chars().take(256).collect(), position: index, message: "Expression token limit exceeded".to_string() }); }
         let ch = chars[index];
         if ch.is_whitespace() {
             index += 1;
@@ -344,6 +351,7 @@ pub fn tokenize_milkrust_expression(expression: &str) -> Result<Vec<MilkRustToke
             message: format!("Unsupported character: '{}'", ch),
         });
     }
+    if tokens.len() > MAX_EXPRESSION_TOKENS { return Err(MilkRustError::Tokenize { expression: expression.chars().take(256).collect(), position: index, message: "Expression token limit exceeded".to_string() }); }
     Ok(tokens)
 }
 
@@ -436,6 +444,7 @@ const RUSTYMILK_MAX_LOOP_ITERATIONS: usize = 200_000;
 const MILKRUST_MEMORY_LENGTH: usize = 8_388_608;
 
 struct MilkRustExpressionParser<'a> {
+    budget: ExpressionBudget,
     rand_counter: usize,
     scope: BTreeMap<String, MilkRustValue>,
     tokens: &'a [MilkRustToken],
@@ -453,6 +462,7 @@ impl<'a> MilkRustExpressionParser<'a> {
         evaluate: bool,
     ) -> Self {
         Self {
+            budget: ExpressionBudget::default(),
             rand_counter,
             scope,
             tokens,
@@ -502,6 +512,8 @@ impl<'a> MilkRustExpressionParser<'a> {
     }
 
     fn evaluate_arg_tokens(&mut self, tokens: &[MilkRustToken]) -> Result<f64, String> {
+        let _depth = self.budget.enter()?;
+        self.budget.spend(tokens.len())?;
         if !self.evaluate {
             let mut parser = MilkRustExpressionParser::new(
                 tokens,
@@ -510,6 +522,7 @@ impl<'a> MilkRustExpressionParser<'a> {
                 self.expression,
                 false,
             );
+            parser.budget = self.budget.clone();
             parser.parse()?;
             return Ok(0.0);
         }
@@ -530,6 +543,7 @@ impl<'a> MilkRustExpressionParser<'a> {
             self.expression,
             self.evaluate,
         );
+        parser.budget = self.budget.clone();
         let value = parser.parse()?;
         self.scope = parser.scope;
         self.rand_counter = parser.rand_counter;
@@ -557,6 +571,8 @@ impl<'a> MilkRustExpressionParser<'a> {
     }
 
     fn lvalue_key(&mut self, tokens: &[MilkRustToken]) -> Result<Option<String>, String> {
+        let _depth = self.budget.enter()?;
+        self.budget.spend(tokens.len())?;
         match tokens {
             [MilkRustToken::Ident(name)] => Ok(Some(name.to_ascii_lowercase())),
             [MilkRustToken::Ident(name), MilkRustToken::Op(open), rest @ .., MilkRustToken::Op(close)]
@@ -608,6 +624,7 @@ impl<'a> MilkRustExpressionParser<'a> {
                 .trunc()
                 .clamp(0.0, RUSTYMILK_MAX_LOOP_ITERATIONS as f64) as usize;
             let count = requested.min(MILKRUST_MEMORY_LENGTH - destination);
+            self.budget.spend(count)?;
             for offset in 0..count {
                 self.scope.insert(
                     milkrust_buffer_key("megabuf", (destination + offset) as f64),
@@ -624,6 +641,7 @@ impl<'a> MilkRustExpressionParser<'a> {
             let count = requested
                 .min(MILKRUST_MEMORY_LENGTH - destination)
                 .min(MILKRUST_MEMORY_LENGTH - source);
+            self.budget.spend(count.saturating_mul(2))?;
             let values = (0..count)
                 .map(|offset| {
                     milkrust_number(
@@ -696,6 +714,7 @@ impl<'a> MilkRustExpressionParser<'a> {
                     as usize;
                 let mut last = 0.0;
                 for _ in 0..count {
+                    self.budget.spend(1)?;
                     for arg in &args[1..] {
                         last = self.evaluate_arg_tokens(arg)?;
                     }
@@ -708,6 +727,7 @@ impl<'a> MilkRustExpressionParser<'a> {
                 }
                 let mut last = 0.0;
                 for _ in 0..RUSTYMILK_MAX_LOOP_ITERATIONS {
+                    self.budget.spend(1)?;
                     let condition = self.evaluate_milkrust_while_condition(args[0])?;
                     if !milkrust_truthy(condition) {
                         break;
@@ -783,6 +803,8 @@ impl<'a> MilkRustExpressionParser<'a> {
     }
 
     fn parse(&mut self) -> Result<f64, String> {
+        let _depth = self.budget.enter()?;
+        self.budget.spend(self.tokens.len())?;
         if self.index == 0 {
             if let Some((assignment_index, operator)) =
                 find_milkrust_top_level_assignment_token(self.tokens)
@@ -965,6 +987,7 @@ impl<'a> MilkRustExpressionParser<'a> {
     }
 
     fn parse_unary_sign(&mut self) -> Result<f64, String> {
+        let _depth = self.budget.enter()?;
         if self.match_op("+") {
             return self.parse_unary_sign();
         }
@@ -986,6 +1009,7 @@ impl<'a> MilkRustExpressionParser<'a> {
     }
 
     fn parse_power_operand(&mut self) -> Result<f64, String> {
+        let _depth = self.budget.enter()?;
         if self.match_op("!") {
             let value = self.parse_power()?;
             return Ok(if self.evaluate {
@@ -1140,6 +1164,7 @@ impl<'a> MilkRustExpressionParser<'a> {
     }
 
     fn parse_conditional(&mut self) -> Result<f64, String> {
+        let _depth = self.budget.enter()?;
         let condition = self.parse_logical_or()?;
         if !self.match_op("?") {
             return Ok(condition);
@@ -1327,7 +1352,7 @@ fn evaluate_milkrust_expression_with_scope(
 }
 
 /// A pre-compiled MilkRust expression that can be evaluated repeatedly
-/// without re-tokenizing or re-parsing the source string.
+/// without re-tokenizing the source string. Evaluation still parses the tokens.
 ///
 /// This is useful in real-time rendering contexts where the same expression
 /// is evaluated every frame with different variable values.
@@ -1353,7 +1378,7 @@ impl CompiledMilkRustExpression {
     /// Compile a MilkDrop expression string into a reusable expression.
     ///
     /// Tokenizes and validates the expression at compile time, so that
-    /// subsequent evaluations skip parsing entirely.
+    /// subsequent evaluations reuse tokens without executing code at compile time.
     ///
     /// # Errors
     ///
@@ -1361,7 +1386,7 @@ impl CompiledMilkRustExpression {
     pub fn compile(expression: &str) -> Result<Self, MilkRustError> {
         let tokens = tokenize_milkrust_expression(expression)?;
         // Validate by parsing with an empty scope (catches syntax errors)
-        let mut parser = MilkRustExpressionParser::new(&tokens, BTreeMap::new(), 0, expression, true);
+        let mut parser = MilkRustExpressionParser::new(&tokens, BTreeMap::new(), 0, expression, false);
         parser.parse().map_err(|e| MilkRustError::Parse {
             expression: expression.to_string(),
             message: e,
@@ -1485,8 +1510,8 @@ enum CompiledEquationStatement {
 impl CompiledMilkRustEquations {
     /// Compile a block of MilkRust equation statements.
     ///
-    /// Pre-tokenizes and pre-parses each sub-expression so that subsequent
-    /// evaluations skip the parsing phase entirely.
+    /// Pre-tokenizes and checks each sub-expression without executing it.
+    /// Evaluation reuses tokens and still parses them.
     ///
     /// # Errors
     ///
