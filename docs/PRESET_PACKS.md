@@ -15,11 +15,11 @@ licenses/
 integrity.json        # generated inside .rmpack archives
 ```
 
-Only `manifest.json` is mandatory for an editable folder pack. Every published archive must additionally declare a known `distributionStatus`, license identifier, and one or more shipped license/attribution notices. Asset paths in the manifest must be relative and stay inside the pack directory.
+Only `manifest.json` is mandatory for an editable folder pack. Every published archive must additionally declare a known `distributionStatus`, license identifier, non-empty content notice, source URLs and shipped license/attribution notices. Its `assets` array must account for every content file other than `manifest.json` and the notice files. Each asset record carries its path, kind, license, author or rights holder, HTTPS source URL and matching notice file. Asset paths in the manifest must be relative and stay inside the pack directory.
 
 ## Archive packaging
 
-`tools/package-rmpack.py` builds a stable archive from a source folder. The pack must explicitly set `distributionStatus` to `redistributable`; the builder refuses unreviewed or `NOASSERTION` community content. File order, timestamps, compression and mode bits are normalized. The archive includes `integrity.json` with the relative path, byte length and SHA-256 digest of each source file. A separate catalog records the archive SHA-256 and download size.
+`tools/package-rmpack.py` builds a stable archive from a source folder. The pack must explicitly set `distributionStatus` to `redistributable`; the builder refuses unreviewed or `NOASSERTION` community content. It validates per-asset attribution and notice coverage before writing the archive. File order, timestamps, compression and mode bits are normalized. The archive includes `integrity.json` with the relative path, byte length and SHA-256 digest of each source file. A separate catalog records the archive SHA-256 and download size.
 
 The checked-in `content/downloads/catalog.json` contains the CC0 MilkRust sample pack and link-only entries for sources without redistribution permission. The sample pack proves the archive path; it does not establish broad MilkDrop rendering compatibility. The PlezyNG app must verify the catalog-pinned archive digest before extraction, enforce byte/file limits, validate paths and dependencies, and activate the install atomically. User imports must remain distinct from built-in packs.
 
@@ -36,8 +36,21 @@ Hash verification protects the archive against accidental or in-transit changes.
   "author": "MilkRust",
   "description": "Small local fixture pack.",
   "license": "CC0-1.0",
+  "distributionStatus": "redistributable",
+  "licenseFiles": ["licenses/CC0-1.0.txt"],
+  "contentNotice": "MilkRust-authored sample fixture.",
   "requiredMilkRustVersion": "0.1.0",
   "sourceUrls": ["https://github.com/snapetech/MilkRust"],
+  "assets": [
+    {
+      "path": "presets/warm-scope.milk",
+      "kind": "preset",
+      "license": "CC0-1.0",
+      "author": "MilkRust",
+      "sourceUrl": "https://github.com/snapetech/MilkRust/blob/<commit>/examples/sample-pack/presets/warm-scope.milk",
+      "licenseFile": "licenses/CC0-1.0.txt"
+    }
+  ],
   "presets": [
     {
       "id": "warm-scope",

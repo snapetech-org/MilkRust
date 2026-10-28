@@ -34,7 +34,7 @@ These changes close the identified false-positive and denominator-loss paths in 
 
 ## Remaining packs and app integration
 
-- Extend versioned archive packs with immutable content addresses, dependency handling, schema migration and published compatibility records. The reproducible builder, per-file integrity index, distribution gate and one CC0 fixture archive now exist.
+- Extend versioned archive packs with immutable content addresses, dependency handling, schema migration and published compatibility records. The reproducible builder now requires per-file author, license, HTTPS source URL and shipped-notice records, checks full content-file coverage, and emits an integrity index; one CC0 fixture archive exists.
 - Build only packs whose redistribution rights are clear. `NOASSERTION` community entries remain source links/import targets unless permission is established; a disclaimer does not confer rights.
 - Add a signed remote catalog and broader cleared-pack availability. PlezyNG's first pinned catalog entry verifies the archive and per-file index, bounds extraction, validates notices and activates atomically; catalog updates, cancellation/resume/restart and update rollback remain open.
 - PlezyNG has a basic library sheet with one download, link-only sources and local `.milk`/`.milk2` import. Search, favorites, playlists, previews, local-import removal recovery, and per-preset compatibility diagnostics remain open.

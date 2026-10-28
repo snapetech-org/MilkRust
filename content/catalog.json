@@ -17,11 +17,11 @@
       },
       "archive": {
         "path": "content/downloads/milkrust-sample-pack-0.1.0.rmpack",
-        "sha256": "4471b5a1ff98b3f8e0421dced0c902a44cf2354542e2d2f3382d2a01e37207d4",
-        "compressedBytes": 2776,
-        "expandedBytes": 4011
+        "sha256": "175a042deb4edb224055a6334f67a1c492f32e447dc3c90a54f22849c43a27df",
+        "compressedBytes": 2927,
+        "expandedBytes": 5467
       },
-      "notes": "MilkRust-owned fixture pack used by CLI, SDK, player, and Studio integration tests."
+      "notes": "MilkRust-owned fixture pack used by CLI, SDK, player, and Studio integration. Every content asset has author, license, source URL and shipped notice metadata."
     },
     {
       "id": "butterchurn-presets-2.4.7",

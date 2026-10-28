@@ -13,7 +13,41 @@
   "contentNotice": "MilkRust-authored sample fixtures; no third-party presets or textures are included.",
   "requiredMilkRustVersion": "0.1.0",
   "sourceUrls": [
-    "https://github.com/snapetech-org/MilkRust"
+    "https://github.com/snapetech-org/MilkRust/tree/7b6f108d850c67e6f56e5f6148ed2e22ebc9e551/examples/sample-pack"
+  ],
+  "assets": [
+    {
+      "path": "presets/warm-scope.milk",
+      "kind": "preset",
+      "license": "CC0-1.0",
+      "author": "MilkRust",
+      "sourceUrl": "https://github.com/snapetech-org/MilkRust/blob/7b6f108d850c67e6f56e5f6148ed2e22ebc9e551/examples/sample-pack/presets/warm-scope.milk",
+      "licenseFile": "licenses/CC0-1.0.txt"
+    },
+    {
+      "path": "presets/blue-shape.milk",
+      "kind": "preset",
+      "license": "CC0-1.0",
+      "author": "MilkRust",
+      "sourceUrl": "https://github.com/snapetech-org/MilkRust/blob/7b6f108d850c67e6f56e5f6148ed2e22ebc9e551/examples/sample-pack/presets/blue-shape.milk",
+      "licenseFile": "licenses/CC0-1.0.txt"
+    },
+    {
+      "path": "fragments/center-polygon.json",
+      "kind": "shape-fragment",
+      "license": "CC0-1.0",
+      "author": "MilkRust",
+      "sourceUrl": "https://github.com/snapetech-org/MilkRust/blob/7b6f108d850c67e6f56e5f6148ed2e22ebc9e551/examples/sample-pack/fragments/center-polygon.json",
+      "licenseFile": "licenses/CC0-1.0.txt"
+    },
+    {
+      "path": "plugins/default-playlist.json",
+      "kind": "playlist-data",
+      "license": "CC0-1.0",
+      "author": "MilkRust",
+      "sourceUrl": "https://github.com/snapetech-org/MilkRust/blob/7b6f108d850c67e6f56e5f6148ed2e22ebc9e551/examples/sample-pack/plugins/default-playlist.json",
+      "licenseFile": "licenses/CC0-1.0.txt"
+    }
   ],
   "presets": [
     {
