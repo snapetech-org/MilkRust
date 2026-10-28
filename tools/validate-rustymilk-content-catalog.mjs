@@ -266,6 +266,9 @@ for (const [index, entry] of (downloadsCatalog.packs || []).entries()) {
   if (archiveUrl && (archiveUrl.protocol !== 'https:' || archiveUrl.hostname !== 'raw.githubusercontent.com')) {
     errors.push(`${label}: archiveUrl must use the pinned raw.githubusercontent.com host`);
   }
+  if (archiveUrl && !/^\/[^/]+\/[^/]+\/[a-f0-9]{40}\/content\/downloads\/[^/]+\.rmpack$/i.test(archiveUrl.pathname)) {
+    errors.push(`${label}: archiveUrl must pin a commit and point to a .rmpack under content/downloads`);
+  }
 }
 for (const [index, source] of (downloadsCatalog.linkOnlySources || []).entries()) {
   const label = source.id || `downloads.linkOnlySources[${index}]`;

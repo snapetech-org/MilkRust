@@ -18,6 +18,7 @@ This audit replaces the older roadmap snapshot, which no longer matched the crat
 - Two-preset frame generation resolves each preset's shader and texture-sampler data from its own document instead of reusing the first preset's shader data for both entries.
 - The compatibility CLI now retains every discovered file in the file denominator and emits per-file read, parse and current-subset status plus per-preset diagnostics. I/O failures appear in `fileReadErrors`; non-UTF-8 files appear in `encodingWarnings` and are forced unsupported after a lossy diagnostic parse. Render and visual-fidelity stages are explicitly `not-run` / `not-assessed`; no file disappears from the denominator.
 - Blank and comments-only preset files now fail the import and compatibility gates instead of being counted as supported merely because no unsupported syntax was encountered.
+- Static compatibility results now enumerate known renderer-feature blockers separately from parser/function/shader-subset findings. In particular, presets with both warp and composite shader bodies are unsupported until those bodies have separate render stages; the diagnostic does not imply a working renderer.
 - Compatibility JSON now reports per-file read/parse/subset status, per-preset diagnostics, and explicit `renderStatus: not-run` / `fidelityStatus: not-assessed`; geometry statistics are labeled as non-render output. The community-report generator labels static-subset results and records a deterministic SHA-256 fingerprint for each source pack. The checked-in May 2026 report remains a historical snapshot until regenerated on the current branch.
 - npm scripts now call the filenames that actually exist under `tools/`.
 
@@ -27,7 +28,7 @@ These changes close the identified false-positive and denominator-loss paths in 
 
 - Establish a versioned conformance corpus and emit per-file discovered/read/parse/compile/render/fidelity states, including missing textures and exclusions.
 - Compare classic `.milk` state, wave/shape equations, mesh warp, feedback, blur/noise resources, transitions, shader semantics and color/coordinate behavior against a reference renderer.
-- Complete and qualify distinct warp and composite shader stages; the current translator handles a subset and cannot be described as a complete HLSL implementation.
+- Complete and qualify distinct warp and composite shader stages; the current translator handles a subset and cannot be described as a complete HLSL implementation. Static diagnostics now flag presets requiring both stages, but do not compile or render either stage.
 - Complete `.milk2` double-preset state, separate render targets, saved blend pattern/progress/direction/random values and transitions from actual MilkDrop 3 samples. The current two-frame container and generic alpha remain an intermediate representation.
 - Implement real GPU renderers on each claimed target. The headless batching path and desktop shell are not equivalent to a native full-fidelity player.
 - Define safe, bounded support for imported formats. Do not execute downloaded JavaScript or remote shader includes.

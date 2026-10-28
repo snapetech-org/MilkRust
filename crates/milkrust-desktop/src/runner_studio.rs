@@ -294,9 +294,15 @@ fn print_studio_json(
                 "unsupportedFunctions": report.compatibility_entry
                     .as_ref()
                     .map(|entry| &entry.unsupported_functions),
+                "rendererFeatures": report.compatibility_entry
+                    .as_ref()
+                    .map(|entry| &entry.renderer_features),
                 "unsupportedShaderSections": report.compatibility_entry
                     .as_ref()
                     .map(|entry| &entry.shader_sections),
+                "webGpuRendererFeatures": report.compatibility_entry
+                    .as_ref()
+                    .map(|entry| &entry.webgpu_renderer_features),
             })
         })
         .collect::<Vec<_>>();
@@ -310,7 +316,9 @@ fn print_studio_json(
         "webGpuSupportedCount": summary.webgpu_supported_count,
         "webGpuUnsupportedCount": summary.webgpu_unsupported_count,
         "unsupportedFunctions": summary.unsupported_functions,
+        "unsupportedRendererFeatures": summary.unsupported_renderer_features,
         "unsupportedShaderSections": summary.unsupported_shader_sections,
+        "webGpuUnsupportedRendererFeatures": summary.webgpu_unsupported_renderer_features,
         "webGpuUnsupportedShaderSections": summary.webgpu_unsupported_shader_sections,
         "packPlugins": {
             "count": pack_plugins.len(),

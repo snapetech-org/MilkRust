@@ -23,6 +23,8 @@ Only `manifest.json` is mandatory for an editable folder pack. Every published a
 
 The checked-in `content/downloads/catalog.json` contains the CC0 MilkRust sample pack and link-only entries for sources without redistribution permission. The sample pack proves the archive path; it does not establish broad MilkDrop rendering compatibility. The PlezyNG app must verify the catalog-pinned archive digest before extraction, enforce byte/file limits, validate paths and dependencies, and activate the install atomically. User imports must remain distinct from built-in packs.
 
+MilkRust's compatibility output is static parser/function/shader/render-feature analysis. A preset that passes that subset has not been compiled on a GPU, rendered, or visually compared. Known stage gaps are returned as blockers when found; for example, a preset containing both warp and composite shader bodies requires separate render stages that are not yet implemented.
+
 Hash verification protects the archive against accidental or in-transit changes. A runtime-fetched catalog must also be authenticated by a pinned signature before authorizing new URLs or hashes. PlezyNG's initial catalog is embedded in app code with the expected archive digest rather than trusting a mutable catalog endpoint.
 
 ## Manifest

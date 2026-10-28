@@ -3730,6 +3730,7 @@ fn create_milkrust_frame_primitives_and_textures_stateful(
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct MilkRustPresetCompatibility {
+    pub renderer_features: Vec<String>,
     pub shader_sections: Vec<String>,
     pub unsupported_functions: Vec<String>,
 }
@@ -3863,7 +3864,16 @@ pub fn analyze_milkrust_preset_compatibility(
         shader_sections.push("comp_shader".to_string());
     }
 
+    let renderer_features = if !preset.warp_shader.trim().is_empty()
+        && !preset.comp_shader.trim().is_empty()
+    {
+        vec!["separate-warp-and-composite-stage-rendering".to_string()]
+    } else {
+        Vec::new()
+    };
+
     MilkRustPresetCompatibility {
+        renderer_features,
         shader_sections,
         unsupported_functions,
     }
@@ -3881,6 +3891,12 @@ pub fn milkrust_compatibility_error(report: &MilkRustPresetCompatibility) -> Str
         messages.push(format!(
             "shader translation pending: {}",
             report.shader_sections.join(", ")
+        ));
+    }
+    if !report.renderer_features.is_empty() {
+        messages.push(format!(
+            "renderer features pending: {}",
+            report.renderer_features.join(", ")
         ));
     }
     if messages.is_empty() {
@@ -3905,9 +3921,11 @@ pub struct MilkRustCompatibilityPresetReport {
     pub error: String,
     pub index: usize,
     pub metrics: MilkRustPresetMetrics,
+    pub renderer_features: Vec<String>,
     pub shader_sections: Vec<String>,
     pub title: String,
     pub unsupported_functions: Vec<String>,
+    pub webgpu_renderer_features: Vec<String>,
     pub webgpu_shader_sections: Vec<String>,
     pub webgpu_supported: bool,
 }
@@ -3920,9 +3938,11 @@ pub struct MilkRustCompatibilityEntry {
     pub metrics: MilkRustCompatibilitySummary,
     pub preset_count: usize,
     pub preset_reports: Vec<MilkRustCompatibilityPresetReport>,
+    pub renderer_features: Vec<String>,
     pub shader_sections: Vec<String>,
     pub supported: bool,
     pub unsupported_functions: Vec<String>,
+    pub webgpu_renderer_features: Vec<String>,
     pub webgpu_shader_sections: Vec<String>,
     pub webgpu_supported: bool,
 }
@@ -3942,9 +3962,11 @@ pub struct MilkRustCompatibilitySummary {
     pub total_waves: usize,
     pub unsupported_count: usize,
     pub unsupported_functions: Vec<String>,
+    pub unsupported_renderer_features: Vec<String>,
     pub unsupported_shader_sections: Vec<String>,
     pub webgpu_supported_count: usize,
     pub webgpu_unsupported_count: usize,
+    pub webgpu_unsupported_renderer_features: Vec<String>,
     pub webgpu_unsupported_shader_sections: Vec<String>,
 }
 
@@ -4129,6 +4151,8 @@ pub fn build_milkrust_compatibility_entry(
                 "preset content is empty".to_string()
             };
             let compatibility_error = milkrust_compatibility_error(&report);
+            let renderer_features = report.renderer_features;
+            let webgpu_renderer_features = renderer_features.clone();
             let error = [content_error, compatibility_error]
                 .into_iter()
                 .filter(|value| !value.is_empty())
@@ -4138,11 +4162,14 @@ pub fn build_milkrust_compatibility_entry(
                 error,
                 index: preset.index,
                 metrics: milkrust_preset_metrics(preset),
+                renderer_features,
                 shader_sections: report.shader_sections,
                 title: preset.title.clone(),
                 unsupported_functions: report.unsupported_functions,
+                webgpu_renderer_features: webgpu_renderer_features.clone(),
                 webgpu_supported: milkrust_preset_has_content(preset)
-                    && webgpu_shader_sections.is_empty(),
+                    && webgpu_shader_sections.is_empty()
+                    && webgpu_renderer_features.is_empty(),
                 webgpu_shader_sections,
             }
         })
@@ -4163,6 +4190,18 @@ pub fn build_milkrust_compatibility_entry(
         preset_reports
             .iter()
             .flat_map(|report| report.unsupported_functions.clone())
+            .collect(),
+    );
+    let renderer_features = merge_milkrust_unique(
+        preset_reports
+            .iter()
+            .flat_map(|report| report.renderer_features.clone())
+            .collect(),
+    );
+    let webgpu_renderer_features = merge_milkrust_unique(
+        preset_reports
+            .iter()
+            .flat_map(|report| report.webgpu_renderer_features.clone())
             .collect(),
     );
     let webgpu_shader_sections = merge_milkrust_unique(
@@ -4189,9 +4228,11 @@ pub fn build_milkrust_compatibility_entry(
         metrics,
         preset_count: preset_reports.len(),
         preset_reports,
+        renderer_features,
         shader_sections,
         supported,
         unsupported_functions,
+        webgpu_renderer_features,
         webgpu_shader_sections,
         webgpu_supported,
     }
@@ -4221,11 +4262,17 @@ pub fn summarize_milkrust_compatibility_matrix(
             .unsupported_functions
             .extend(entry.unsupported_functions.clone());
         summary
+            .unsupported_renderer_features
+            .extend(entry.renderer_features.clone());
+        summary
             .unsupported_shader_sections
             .extend(entry.shader_sections.clone());
         summary
             .webgpu_unsupported_shader_sections
             .extend(entry.webgpu_shader_sections.clone());
+        summary
+            .webgpu_unsupported_renderer_features
+            .extend(entry.webgpu_renderer_features.clone());
     }
     summary.q_registers = merge_milkrust_unique(summary.q_registers);
     summary.q_registers.sort_by_key(|register| {
@@ -4235,10 +4282,14 @@ pub fn summarize_milkrust_compatibility_matrix(
             .unwrap_or_default()
     });
     summary.unsupported_functions = merge_milkrust_unique(summary.unsupported_functions);
+    summary.unsupported_renderer_features =
+        merge_milkrust_unique(summary.unsupported_renderer_features);
     summary.unsupported_shader_sections =
         merge_milkrust_unique(summary.unsupported_shader_sections);
     summary.webgpu_unsupported_shader_sections =
         merge_milkrust_unique(summary.webgpu_unsupported_shader_sections);
+    summary.webgpu_unsupported_renderer_features =
+        merge_milkrust_unique(summary.webgpu_unsupported_renderer_features);
     summary
 }
 
@@ -6203,8 +6254,8 @@ wavecode_0_per_point2=y=0.1+sample*0.65;
             },
             ImportedMilkdropFixture {
                 id: "shader-subset",
-                supported: true,
-                expected_error: "",
+                supported: false,
+                expected_error: "renderer features pending: separate-warp-and-composite-stage-rendering",
                 source: r#"
 name=Fixture Shader Subset
 decay=0.78
@@ -7254,8 +7305,8 @@ comp_shader_2=ret = vec3(shifted, energy * bass_att);
 
         assert_eq!(summary.total_count, 6);
         assert_eq!(summary.preset_count, 8);
-        assert_eq!(summary.supported_count, 5);
-        assert_eq!(summary.unsupported_count, 1);
+        assert_eq!(summary.supported_count, 4);
+        assert_eq!(summary.unsupported_count, 2);
         assert_eq!(summary.max_shape_count, 40);
         assert_eq!(summary.max_sprite_count, 1);
         assert_eq!(summary.max_wave_count, 20);
@@ -7264,6 +7315,10 @@ comp_shader_2=ret = vec3(shifted, energy * bass_att);
         assert_eq!(
             summary.unsupported_shader_sections,
             vec!["comp_shader".to_string()]
+        );
+        assert_eq!(
+            summary.unsupported_renderer_features,
+            vec!["separate-warp-and-composite-stage-rendering".to_string()]
         );
     }
 

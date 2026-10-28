@@ -211,6 +211,17 @@ fn compat_command(path: Option<&String>) -> MilkRustCliResult {
                         );
                         entry.supported = false;
                         entry.webgpu_supported = false;
+                        for report in &mut entry.preset_reports {
+                            let encoding_diagnostic =
+                                "source encoding is not UTF-8; support is unverified";
+                            if !report.error.contains(encoding_diagnostic) {
+                                if !report.error.is_empty() {
+                                    report.error.push_str("; ");
+                                }
+                                report.error.push_str(encoding_diagnostic);
+                            }
+                            report.webgpu_supported = false;
+                        }
                         entry
                     }
                 },
@@ -236,9 +247,9 @@ fn compat_command(path: Option<&String>) -> MilkRustCliResult {
     MilkRustCliResult::ok(format!(
         "{}\n",
         serde_json::json!({
-            "reportSchemaVersion": 2,
+            "reportSchemaVersion": 3,
             "source": path.display().to_string(),
-            "analysisScope": "static parser/function/shader-subset analysis only",
+            "analysisScope": "static parser/function/shader-subset/render-feature analysis only",
             "renderStatus": "not-run",
             "fidelityStatus": "not-assessed",
             "renderedCount": 0,
@@ -259,7 +270,9 @@ fn compat_command(path: Option<&String>) -> MilkRustCliResult {
             "maxQRegisterIndex": summary.max_q_register_index,
             "qRegisters": summary.q_registers,
             "unsupportedFunctions": summary.unsupported_functions,
+            "unsupportedRendererFeatures": summary.unsupported_renderer_features,
             "unsupportedShaderSections": summary.unsupported_shader_sections,
+            "webGpuUnsupportedRendererFeatures": summary.webgpu_unsupported_renderer_features,
             "webGpuUnsupportedShaderSections": summary.webgpu_unsupported_shader_sections,
             "entries": entries.iter().enumerate().map(|(index, entry)| serde_json::json!({
                 "id": entry.id,
@@ -286,7 +299,9 @@ fn compat_command(path: Option<&String>) -> MilkRustCliResult {
                 "supported": entry.supported,
                 "webGpuSupported": entry.webgpu_supported,
                 "unsupportedFunctions": entry.unsupported_functions,
+                "rendererFeatures": entry.renderer_features,
                 "shaderSections": entry.shader_sections,
+                "webGpuRendererFeatures": entry.webgpu_renderer_features,
                 "webGpuShaderSections": entry.webgpu_shader_sections,
                 "presetReports": entry.preset_reports.iter().map(|report| serde_json::json!({
                     "index": report.index,
@@ -294,7 +309,9 @@ fn compat_command(path: Option<&String>) -> MilkRustCliResult {
                     "error": report.error,
                     "supportedByCurrentSubset": report.error.is_empty(),
                     "unsupportedFunctions": report.unsupported_functions,
+                    "rendererFeatures": report.renderer_features,
                     "shaderSections": report.shader_sections,
+                    "webGpuRendererFeatures": report.webgpu_renderer_features,
                     "webGpuShaderSections": report.webgpu_shader_sections,
                     "webGpuShaderSubsetSupported": report.webgpu_supported,
                     "shapeCount": report.metrics.shape_count,
