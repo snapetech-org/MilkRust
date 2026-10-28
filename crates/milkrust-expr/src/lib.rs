@@ -351,6 +351,11 @@ fn milkrust_truthy(value: f64) -> bool {
     value.abs() > 0.00001
 }
 
+// checked_rem covers zero and i64::MIN % -1 without panicking on preset input.
+fn milkrust_remainder(left: f64, right: f64) -> f64 {
+    (left.trunc() as i64).checked_rem(right.trunc() as i64).unwrap_or(0) as f64
+}
+
 fn milkrust_pow(base: f64, exponent: f64) -> f64 {
     if base.abs() < 0.00001 && exponent < 0.0 {
         return 0.0;
@@ -551,18 +556,6 @@ impl<'a> MilkRustExpressionParser<'a> {
         None
     }
 
-    fn assign_arg_tokens(
-        &mut self,
-        target_tokens: &[MilkRustToken],
-        value: f64,
-    ) -> Result<f64, String> {
-        let Some(key) = self.lvalue_key(target_tokens)? else {
-            return Err("assign() requires a variable or buffer target.".to_string());
-        };
-        self.scope.insert(key, MilkRustValue::Number(value));
-        Ok(value)
-    }
-
     fn lvalue_key(&mut self, tokens: &[MilkRustToken]) -> Result<Option<String>, String> {
         match tokens {
             [MilkRustToken::Ident(name)] => Ok(Some(name.to_ascii_lowercase())),
@@ -598,7 +591,7 @@ impl<'a> MilkRustExpressionParser<'a> {
         }
     }
 
-        fn memory_intrinsic_target(
+    fn memory_intrinsic_target(
         &mut self,
         name: &str,
         args: &[&[MilkRustToken]],
@@ -651,7 +644,7 @@ impl<'a> MilkRustExpressionParser<'a> {
         Ok(Some(milkrust_buffer_key("megabuf", destination as f64)))
     }
 
-fn call_special_function(
+    fn call_special_function(
         &mut self,
         name: &str,
         args: &[&[MilkRustToken]],
@@ -726,7 +719,7 @@ fn call_special_function(
                 }
                 Ok(Some(last))
             }
-                        "freembuf" => {
+            "freembuf" => {
                 if let Some(index) = args.first() {
                     self.evaluate_arg_tokens(index)?;
                 }
@@ -740,7 +733,7 @@ fn call_special_function(
                         .unwrap_or(0.0),
                 ))
             }
-_ => Ok(None),
+            _ => Ok(None),
         }
     }
 
@@ -801,13 +794,12 @@ _ => Ok(None),
                     self.index = self.tokens.len();
                     return Ok(0.0);
                 }
-                let current = self
-                    .lvalue_key(target_tokens)?
-                    .map(|key| milkrust_number(&self.scope, &key))
-                    .unwrap_or(0.0);
+                let key = self.lvalue_key(target_tokens)?
+                    .ok_or_else(|| "Assignment requires a variable or buffer target.".to_string())?;
+                let current = milkrust_number(&self.scope, &key);
                 let next = self.evaluate_arg_tokens(expression_tokens)?;
                 let value = apply_milkrust_assignment_operator(current, operator, next);
-                self.assign_arg_tokens(target_tokens, value)?;
+                self.scope.insert(key, MilkRustValue::Number(value));
                 self.index = self.tokens.len();
                 return Ok(value);
             }
@@ -938,14 +930,7 @@ _ => Ok(None),
             "max" => arg(0, 0.0).max(arg(1, 0.0)),
             "megabuf" => milkrust_buffer_number(&self.scope, name, arg(0, 0.0)),
             "min" => arg(0, 0.0).min(arg(1, 0.0)),
-            "mod" => {
-                let right = arg(1, 0.0).trunc() as i64;
-                if right == 0 {
-                    0.0
-                } else {
-                    (arg(0, 0.0).trunc() as i64 % right) as f64
-                }
-            }
+            "mod" => milkrust_remainder(arg(0, 0.0), arg(1, 0.0)),
             "pow" => milkrust_pow(arg(0, 0.0), arg(1, 0.0)),
             "rand" => {
                 let upper = arg(0, 1.0).trunc().max(0.0);
@@ -1039,14 +1024,7 @@ _ => Ok(None),
                         value / right
                     }
                 }
-                "%" => {
-                    let divisor = right.trunc() as i64;
-                    if divisor == 0 {
-                        0.0
-                    } else {
-                        (value.trunc() as i64 % divisor) as f64
-                    }
-                }
+                "%" => milkrust_remainder(value, right),
                 _ => value,
             };
         }
@@ -1822,14 +1800,7 @@ fn apply_milkrust_assignment_operator(current: f64, operator: &str, next: f64) -
         "/=" => {
             if next.abs() < 0.00001 { 0.0 } else { current / next }
         }
-        "%=" => {
-            let divisor = next.trunc() as i64;
-            if divisor == 0 {
-                0.0
-            } else {
-                (current.trunc() as i64 % divisor) as f64
-            }
-        }
+        "%=" => milkrust_remainder(current, next),
         "^=" => milkrust_pow(current, next),
         "&=" => ((current.trunc() as i64) & (next.trunc() as i64)) as f64,
         "|=" => ((current.trunc() as i64) | (next.trunc() as i64)) as f64,
@@ -2106,6 +2077,20 @@ mod tests {
         let result = compiled.evaluate(&scope).unwrap();
         assert!(result.contains_key("x"));
         assert!(result.contains_key("__rand_counter"));
+    }
+
+    #[test]
+    fn assignment_target_runs_once_and_remainder_never_overflows() {
+        let scope = BTreeMap::new();
+        let changed = evaluate_milkrust_equations(
+            "i=0; memset(assign(i,i+1),0.5,1)=0.75; x=-9223372036854775808; x%=-1",
+            &scope,
+        ).unwrap();
+        assert_eq!(changed["i"], MilkRustValue::Number(1.0));
+        assert_eq!(changed["megabuf_1"], MilkRustValue::Number(0.75));
+        assert_eq!(changed["x"], MilkRustValue::Number(0.0));
+        assert_eq!(evaluate_milkrust_expression("mod(-9223372036854775808,-1)", &scope).unwrap(), 0.0);
+        assert_eq!(evaluate_milkrust_expression("-9223372036854775808 % -1", &scope).unwrap(), 0.0);
     }
 
     #[test]

@@ -50,3 +50,7 @@ These changes close the identified false-positive and denominator-loss paths in 
 ## Reproducible command map
 
 Root npm scripts now target the checked-in RustyMilk-named tool files. For current pack and compatibility commands see `package.json`, `docs/PRESET_PACKS.md` and `AGENTS.md`. Build, test, scan and release work follows the repository's private ephemeral JIT runner policy.
+
+## Source review follow-up — 2026-10-28
+
+Fixed the core memory helper loop-budget constant, resolved assignment targets once (including side effects in memory-call targets), and made all integer-remainder paths non-panicking for zero divisors and signed-minimum overflow. Regression source covers these cases; it has not been executed. This source review does not establish build or runtime conformance.
