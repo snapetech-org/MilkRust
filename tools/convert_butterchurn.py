@@ -15,7 +15,7 @@ from pathlib import Path
 from urllib.parse import quote
 
 SOURCE = Path("content/third-party/butterchurn-presets-2.4.7")
-SOURCE_URL = "https://github.com/jberg/butterchurn-presets/tree/v2.4.7"
+SOURCE_URL = "https://github.com/jberg/butterchurn-presets"
 MAX_SOURCE = 2 * 1024 * 1024
 MAX_EQUATIONS = 65536
 # Pinned reference defaults and MIT notice are shipped beside this tool.

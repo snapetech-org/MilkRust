@@ -121,8 +121,11 @@ def trust_root(path):
     require(isinstance(data, dict) and isinstance(data.get("keys"), dict), "invalid trust root")
     keys = data["keys"]
     require(0 < len(keys) <= 16 and type(data.get("threshold")) is int and 0 < data["threshold"] <= len(keys), "trust root is not provisioned")
+    public_keys = set()
     for key_id, raw in keys.items():
         require(KEY_ID.fullmatch(key_id) and len(base64.b64decode(raw, validate=True)) == 32, "invalid Ed25519 public key")
+        public_keys.add(base64.b64decode(raw, validate=True))
+    require(len(public_keys) == len(keys), "each catalog key ID must pin a distinct public key")
     return data
 
 

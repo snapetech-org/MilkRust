@@ -2,6 +2,7 @@
 members = [
     "crates/milkrust-cli",
     "crates/milkrust-core",
+    "crates/milkrust-native",
     "crates/milkrust-expr",
     "crates/milkrust-pack",
     "crates/milkrust-renderer-core",

@@ -547,6 +547,13 @@ name = "milkrust-expr"
 version = "0.1.0"
 
 [[package]]
+name = "milkrust-native"
+version = "0.1.0"
+dependencies = [
+ "milkrust-core",
+]
+
+[[package]]
 name = "milkrust-pack"
 version = "0.1.0"
 dependencies = [
