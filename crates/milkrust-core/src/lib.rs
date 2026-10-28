@@ -1168,8 +1168,6 @@ pub struct MilkRustFrameSetRuntime {
      scopes: Vec<BTreeMap<String, MilkRustValue>>,
      source: String,
      cached_preset_set: Option<MilkRustPresetSet>,
-     translated_shader_source: Option<String>,
-     shader_texture_samplers: Vec<String>,
  }
 
 impl MilkRustFrameSetRuntime {
@@ -1233,10 +1231,6 @@ if self.source != source || self.preset_documents.is_empty() {
                  .iter()
                  .map(|preset| create_milkrust_scope(preset, time_seconds, bass, mid, treble))
                  .collect();
-             let preset_document = parsed.presets.first().cloned().unwrap_or_else(|| MilkRustPresetDocument::new(source, 0));
-             self.translated_shader_source =
-                 translated_milkrust_shader_source(&preset_document).into();
-             self.shader_texture_samplers = milkrust_shader_texture_samplers(&preset_document);
              self.preset_documents = parsed.presets;
              self.source = source.to_string();
          }
@@ -1250,6 +1244,8 @@ if self.source != source || self.preset_documents.is_empty() {
          for index in 0..self.preset_documents.len() {
              let preset_document = &mut self.preset_documents[index];
              let scope = &mut self.scopes[index];
+             let translated_shader_source = translated_milkrust_shader_source(preset_document);
+             let shader_texture_samplers = milkrust_shader_texture_samplers(preset_document);
              let next_frame = milkrust_scope_number(scope, "frame", 0.0) + 1.0;
              update_milkrust_scope_audio(
                  scope,
@@ -1291,8 +1287,8 @@ if self.source != source || self.preset_documents.is_empty() {
  let frame = build_milkrust_frame_from_runtime_scope(
                   preset_document,
                  scope,
-                 self.translated_shader_source.as_deref(),
-                 &self.shader_texture_samplers,
+                 Some(translated_shader_source.as_str()),
+                 &shader_texture_samplers,
                  time_seconds,
                  bass,
                  mid,
