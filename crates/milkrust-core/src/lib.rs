@@ -4636,6 +4636,99 @@ fn find_milkrust_shader_call(source: &str, wanted: &str) -> Option<(usize, usize
     None
 }
 
+/// Split the arguments of a shader call without treating commas inside nested
+/// constructors or calls as argument separators. `open_paren` is the byte
+/// offset returned by `find_milkrust_shader_call`.
+fn parse_milkrust_shader_call_arguments(source: &str, open_paren: usize) -> Option<(Vec<&str>, usize)> {
+    let bytes = source.as_bytes();
+    if bytes.get(open_paren) != Some(&b'(') { return None; }
+    let mut depth = 0usize;
+    let mut argument_start = open_paren + 1;
+    let mut arguments = Vec::new();
+    for index in open_paren..bytes.len() {
+        match bytes[index] {
+            b'(' => { depth += 1; if depth > 64 { return None; } }
+            b')' => {
+                depth = depth.checked_sub(1)?;
+                if depth == 0 {
+                    let last = source[argument_start..index].trim();
+                    if !last.is_empty() || !arguments.is_empty() { arguments.push(last); }
+                    return Some((arguments, index + 1));
+                }
+            }
+            b',' if depth == 1 => {
+                arguments.push(source[argument_start..index].trim());
+                argument_start = index + 1;
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+const MILKRUST_HLSL_TEXTURE_CALLS: [&str; 6] = [
+    "tex2Dlod", "tex2Dbias", "tex2Dproj", "tex2Dgrad", "tex2D", "tex",
+];
+
+fn milkrust_shader_sampler_uniform(name: &str, texture_samplers: &[String]) -> Option<String> {
+    if is_milkrust_main_sampler(name) {
+        Some("previousFrame".to_string())
+    } else {
+        texture_samplers.iter().position(|value| value == name)
+            .map(|index| format!("shaderTexture{index}"))
+    }
+}
+
+/// Lower the common legacy HLSL 2D sampling intrinsics used by MilkDrop.
+/// Invalid arity, nesting, or an undeclared sampler fails translation instead
+/// of emitting GLSL that appears to be supported but cannot compile.
+fn normalize_milkrust_hlsl_texture_calls_inner(
+    source: &str,
+    texture_samplers: &[String],
+    depth: usize,
+) -> Option<String> {
+    if depth > 32 { return None; }
+    let mut output = String::with_capacity(source.len());
+    let mut rest = source;
+    loop {
+        let found = MILKRUST_HLSL_TEXTURE_CALLS.iter().filter_map(|name| {
+            find_milkrust_shader_call(rest, name).map(|(index, paren)| (index, paren, *name))
+        }).min_by_key(|(index, _, _)| *index);
+        let Some((index, paren, name)) = found else { break; };
+        let (arguments, end) = parse_milkrust_shader_call_arguments(rest, paren)?;
+        let expected = if name == "tex2Dgrad" { 4 } else { 2 };
+        if arguments.len() != expected || arguments.iter().any(|value| value.is_empty()) { return None; }
+        let sampler = arguments[0].trim();
+        if !sampler.starts_with(|ch: char| ch.is_ascii_alphabetic() || ch == '_')
+            || !sampler.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+        { return None; }
+        let sampler = milkrust_shader_sampler_uniform(sampler, texture_samplers)?;
+        // Lower nested sample calls inside the coordinate or gradient
+        // expressions before replacing the outer call. This avoids leaving
+        // legacy intrinsics in generated GLSL.
+        let lowered_arguments = arguments.iter().skip(1)
+            .map(|argument| normalize_milkrust_hlsl_texture_calls_inner(argument, texture_samplers, depth + 1))
+            .collect::<Option<Vec<_>>>()?;
+        let expression = match name {
+            "tex2Dlod" => format!("milkrust_tex2Dlod({sampler}, {})", lowered_arguments[0]),
+            "tex2Dbias" => format!("milkrust_tex2Dbias({sampler}, {})", lowered_arguments[0]),
+            "tex2Dproj" => format!("textureProj({sampler}, {})", lowered_arguments[0]),
+            "tex2Dgrad" => format!("textureGrad({sampler}, {}, {}, {})", lowered_arguments[0], lowered_arguments[1], lowered_arguments[2]),
+            "tex2D" | "tex" => format!("texture({sampler}, {})", lowered_arguments[0]),
+            _ => return None,
+        };
+        output.push_str(&rest[..index]);
+        output.push_str(&expression);
+        rest = &rest[end..];
+    }
+    output.push_str(rest);
+    Some(output)
+}
+
+fn normalize_milkrust_hlsl_texture_calls(source: &str, texture_samplers: &[String]) -> Option<String> {
+    normalize_milkrust_hlsl_texture_calls_inner(source, texture_samplers, 0)
+}
+
 fn is_milkrust_main_sampler(name: &str) -> bool {
     matches!(
         name.to_ascii_lowercase().as_str(),
@@ -4646,22 +4739,19 @@ fn is_milkrust_main_sampler(name: &str) -> bool {
 pub fn get_milkrust_shader_texture_samplers(source: &str) -> Vec<String> {
     let cleaned = strip_milkrust_shader_comments(source);
     let mut samplers = Vec::new();
-    for marker in ["tex2D", "tex"] {
+    for marker in MILKRUST_HLSL_TEXTURE_CALLS {
         let mut rest = cleaned.as_str();
         while let Some((_, paren)) = find_milkrust_shader_call(rest, marker) {
-            let after = &rest[paren + 1..];
-            let sampler = after
-                .trim_start()
-                .chars()
-                .take_while(|ch| ch.is_ascii_alphanumeric() || *ch == '_')
-                .collect::<String>();
+            let sampler = parse_milkrust_shader_call_arguments(rest, paren)
+                .and_then(|(arguments, _)| arguments.first().map(|value| value.trim().to_string()))
+                .unwrap_or_default();
             if !sampler.is_empty()
                 && !is_milkrust_main_sampler(&sampler)
                 && !samplers.contains(&sampler)
             {
                 samplers.push(sampler);
             }
-            rest = &after[after.find(',').unwrap_or(after.len())..];
+            rest = &rest[paren + 1..];
         }
     }
     samplers
@@ -4702,32 +4792,9 @@ fn normalize_milkrust_shader_type(shader_type: &str) -> String {
     }.to_string()
 }
 
-fn normalize_milkrust_shader_source(source: &str, texture_samplers: &[String]) -> String {
-    let mut normalized =
-        unwrap_milkrust_shader_body(&normalize_simple_milkrust_conditional_return(source));
-    for sampler in ["tex2D", "tex"] {
-        let input = std::mem::take(&mut normalized);
-        let mut rest = input.as_str();
-        while let Some((index, paren)) = find_milkrust_shader_call(rest, sampler) {
-            let after = &rest[paren + 1..];
-            let name = after.trim_start().chars()
-                .take_while(|ch| ch.is_ascii_alphanumeric() || *ch == '_').collect::<String>();
-            if name.is_empty() { break; }
-            let whitespace = after.len() - after.trim_start().len();
-            let replacement = if is_milkrust_main_sampler(&name) {
-                "previousFrame".to_string()
-            } else if let Some(texture_index) = texture_samplers.iter().position(|value| value == &name) {
-                format!("shaderTexture{texture_index}")
-            } else {
-                name.clone()
-            };
-            normalized.push_str(&rest[..index]);
-            normalized.push_str(&format!("texture({replacement}"));
-            rest = &after[whitespace + name.len()..];
-        }
-        normalized.push_str(rest);
-    }
-    normalized
+fn normalize_milkrust_shader_source(source: &str, texture_samplers: &[String]) -> Option<String> {
+    let normalized = unwrap_milkrust_shader_body(&normalize_simple_milkrust_conditional_return(source));
+    normalize_milkrust_hlsl_texture_calls(&normalized, texture_samplers)
 }
 
 fn is_safe_milkrust_shader_expression(expression: &str) -> bool {
@@ -4811,7 +4878,8 @@ fn split_milkrust_shader_assignment(statement: &str) -> Option<(&str, &str, &str
 
 fn parse_milkrust_shader_program(source: &str) -> Option<MilkRustShaderProgram> {
     if source.len() > 128 * 1024 { return None; }
-    let normalized_source = normalize_simple_milkrust_conditional_return(source);
+    let source_without_comments = strip_milkrust_shader_comments(source);
+    let normalized_source = normalize_simple_milkrust_conditional_return(&source_without_comments);
     let lowered = normalized_source.to_ascii_lowercase();
     if lowered.contains("for (")
         || lowered.contains("while (")
@@ -4826,7 +4894,7 @@ fn parse_milkrust_shader_program(source: &str) -> Option<MilkRustShaderProgram> 
         return None;
     }
     let texture_samplers = get_milkrust_shader_texture_samplers(&normalized_source);
-    let cleaned = normalize_milkrust_shader_source(&normalized_source, &texture_samplers);
+    let cleaned = normalize_milkrust_shader_source(&normalized_source, &texture_samplers)?;
     let mut declarations = Vec::new();
     let mut mutable_variables = Vec::new();
     let mut expression = String::new();
@@ -4951,6 +5019,8 @@ float clamp01(float value) {{ return clamp(value, 0.0, 1.0); }}
 vec2 clamp01(vec2 value) {{ return clamp(value, vec2(0.0), vec2(1.0)); }}
 vec3 clamp01(vec3 value) {{ return clamp(value, vec3(0.0), vec3(1.0)); }}
 vec4 clamp01(vec4 value) {{ return clamp(value, vec4(0.0), vec4(1.0)); }}
+vec4 milkrust_tex2Dlod(sampler2D samplerValue, vec4 coordinate) {{ return textureLod(samplerValue, coordinate.xy, coordinate.w); }}
+vec4 milkrust_tex2Dbias(sampler2D samplerValue, vec4 coordinate) {{ return texture(samplerValue, coordinate.xy, coordinate.w); }}
 // HLSL fmod uses truncation, whereas GLSL mod uses floor for negative inputs.
 float milkrust_hlsl_fmod(float x, float y) {{ return x-y*trunc(x/y); }}
 vec2 milkrust_hlsl_fmod(vec2 x, vec2 y) {{ return x-y*trunc(x/y); }}
@@ -5074,6 +5144,12 @@ pub fn create_translated_milkrust_wgsl_shader(source: &str) -> String {
     let Some(program) = parse_milkrust_shader_program(source) else {
         return String::new();
     };
+    // These HLSL operations currently have no equivalent in this limited WGSL
+    // binding path. Keep WebGPU closed rather than emit invalid sampling calls.
+    let source_without_comments = strip_milkrust_shader_comments(source);
+    if ["tex2Dlod", "tex2Dbias", "tex2Dproj", "tex2Dgrad"].iter()
+        .any(|name| find_milkrust_shader_call(&source_without_comments, name).is_some())
+    { return String::new(); }
     if std::iter::once(&program.expression)
         .chain(program.declarations.iter())
         .map(|statement| normalize_milkrust_wgsl_expression(statement))
