@@ -30,3 +30,7 @@ remains open until all saved spatial patterns, extension behavior and reference
 GPU sequences are implemented and qualified.
 
 Observed format source: [MDropDX12 564407e](https://github.com/shanevbg/MDropDX12/tree/564407e127c4bef5c5dfbb23fb8f5d1d8afb6120), `src/mDropDX12/engine_presets.cpp` and `engine.cpp`. This citation records format facts, not permission to incorporate its rendering implementation.
+
+## Reference-source boundary
+
+The inspected [MilkDrop3 source snapshot at `6b39088`](https://github.com/milkdrop2077/MilkDrop3/tree/6b39088f789441e18cc1665519ee7ffe439cece5/code/vis_milk2) documents `.milk2` blending in its README, but the checked-in renderer source does not contain a consumer for the saved wrapper/header records described above. It has a randomized preset-transition helper; that helper is not evidence for the frozen, serialized `.milk2` blend field. The available source snapshot therefore cannot serve as a complete implementation reference for the saved patterns. This is a source-availability finding, not a claim that MilkDrop3 itself lacks the feature. A port still needs authoritative per-pattern semantics and reference output for real saved files.
