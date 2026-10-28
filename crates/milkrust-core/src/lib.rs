@@ -2,6 +2,8 @@ use milkrust_expr::limits::{ExpressionBudget, MAX_EXPRESSION_TOKENS, validate_ex
 use std::collections::BTreeMap;
 
 pub mod input_limits;
+pub mod milk2;
+pub mod classic_keys;
 use input_limits::validate_preset_source;
 
 pub struct MilkRustPreset {
@@ -194,7 +196,7 @@ pub fn parse_milkrust_preset(source: &str) -> MilkRustPreset {
         let Ok(value) = raw_value.trim().parse::<f64>() else {
             continue;
         };
-        match key.as_str() {
+        match classic_keys::runtime_name(&key) {
             "decay" => preset.decay = clamp_range(value, 0.5, 0.99),
             "rot" => preset.rot = clamp_range(value, -0.5, 0.5),
             "wave_a" => preset.wave_a = clamp_unit(value),
@@ -211,9 +213,7 @@ pub fn parse_milkrust_preset(source: &str) -> MilkRustPreset {
 
 fn milkrust_preset_from_document(preset_document: &MilkRustPresetDocument) -> MilkRustPreset {
     let get = |key: &str, default: f64| {
-        preset_document
-            .base_values
-            .get(key)
+        classic_keys::value(&preset_document.base_values, key)
             .and_then(|v| v.as_number())
             .unwrap_or(default)
     };
@@ -290,8 +290,7 @@ fn milkrust_base_number(
     key: &str,
     fallback: f64,
 ) -> f64 {
-    values
-        .get(key)
+    classic_keys::value(values, key)
         .and_then(MilkRustValue::as_number)
         .filter(|value| value.is_finite())
         .unwrap_or(fallback)
@@ -304,8 +303,7 @@ fn milkrust_base_number_any(
 ) -> f64 {
     keys.iter()
         .find_map(|key| {
-            values
-                .get(*key)
+            classic_keys::value(values, key)
                 .and_then(MilkRustValue::as_number)
                 .filter(|value| value.is_finite())
         })
@@ -420,7 +418,7 @@ fn create_milkrust_scope(
     mid: f64,
     treble: f64,
 ) -> BTreeMap<String, MilkRustValue> {
-     let mut scope = preset.base_values.clone();
+     let mut scope = classic_keys::scope(&preset.base_values);
      for key in &Q_REGISTER_KEYS {
          scope.entry(key.to_string()).or_insert(MilkRustValue::Number(0.0));
      }
@@ -702,9 +700,7 @@ fn build_milkrust_frame_from_scope(
     spectrum: &[f64],
 ) -> MilkRustFrame {
     let fallback = |key: &str, default: f64| {
-        preset_document
-            .base_values
-            .get(key)
+        classic_keys::value(&preset_document.base_values, key)
             .and_then(|v| v.as_number())
             .unwrap_or(default)
     };
@@ -763,7 +759,7 @@ fn build_milkrust_frame_from_scope(
             milkrust_scope_number(scope, "rot", fallback("rot", 0.012)),
             -0.5,
             0.5,
-        ) + (treble - 0.5) * 0.02,
+        ),
         shader_source: translated_milkrust_shader_source(preset_document),
         shader_texture_samplers: milkrust_shader_texture_samplers(preset_document),
         shader_stages: milkrust_shader_stages(preset_document),
@@ -856,7 +852,7 @@ fn build_milkrust_frame_from_runtime_scope(
              milkrust_scope_number(scope, "rot", preset.rot),
              -0.5,
              0.5,
-         ) + (treble - 0.5) * 0.02,
+         ),
          shader_source: translated_shader_source.unwrap_or_default().to_string(),
          shader_texture_samplers: shader_texture_samplers.to_vec(),
          shader_stages: shader_stages.clone(),
@@ -1339,6 +1335,12 @@ impl MilkRustFrameSetRuntime {
             self.last_error = Some(error.clone());
             return Err(error);
         }
+        if self.source != source || self.preset_documents.is_empty() {
+            let parsed = parse_milkrust_preset_set(source, false);
+            let error = parsed.presets.iter().flat_map(|p| p.parse_errors.iter()).next().cloned()
+                .or_else(|| parsed.saved_blend.as_ref().and_then(milk2::SavedBlend::render_requirement));
+            if let Some(error) = error { self.last_error = Some(error.clone()); return Err(error); }
+        }
         let budget = milkrust_expr::limits::FrameEvaluation::begin();
         let frame = self.render_source_inner(source, time_seconds, bass, mid, treble, waveform, spectrum, input);
         if let Some(error) = budget.error() {
@@ -1422,7 +1424,10 @@ if self.source != source || self.preset_documents.is_empty() {
                      *scope = next_scope;
                  }
              }
-             let blend_alpha = milkrust_composite_alpha(preset_document, index);
+             let blend_alpha = match &preset_set.saved_blend {
+                 Some(blend) => if index == 0 { 1.0 } else { blend.progress },
+                 None => milkrust_composite_alpha(preset_document, index),
+             };
              let composite_mode = milkrust_composite_mode(preset_document, index);
              let title = if preset_document.title.trim().is_empty() {
                  format!("Preset {}", index + 1)
@@ -1501,7 +1506,12 @@ fn validate_milkrust_import_for_renderer(source: &str, webgl_stages: bool) -> Re
     if parsed.presets.is_empty() {
         return Err("MilkRust preset is empty".to_string());
     };
-    let requires_milk2_saved_blend_state = parsed.format == "milk2";
+    let saved_blend_requirement = if parsed.format == "milk2" {
+        match &parsed.saved_blend {
+            Some(blend) if webgl_stages => blend.render_requirement(),
+            _ => Some("milk2-saved-blend-pattern-and-transition-state".to_string()),
+        }
+    } else { None };
     let errors = parsed
         .presets
         .iter()
@@ -1517,10 +1527,8 @@ fn validate_milkrust_import_for_renderer(source: &str, webgl_stages: bool) -> Re
                 report.renderer_features.retain(|feature| !matches!(feature.as_str(),
                     "separate-warp-and-composite-stage-rendering" | "shader-aware-per-pixel-mesh"));
             }
-            if requires_milk2_saved_blend_state {
-                report
-                    .renderer_features
-                    .push("milk2-saved-blend-pattern-and-transition-state".to_string());
+            if let Some(requirement) = &saved_blend_requirement {
+                report.renderer_features.push(requirement.clone());
             }
             let compatibility_error = milkrust_compatibility_error(&report);
             let error = [content_error, compatibility_error]
@@ -1649,6 +1657,7 @@ impl MilkRustPresetDocument {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct MilkRustPresetSet {
+    pub saved_blend: Option<milk2::SavedBlend>,
     pub format: String,
     pub presets: Vec<MilkRustPresetDocument>,
 }
@@ -1865,10 +1874,20 @@ pub fn parse_milkrust_preset_set(source: &str, force_milk2: bool) -> MilkRustPre
         let mut preset = MilkRustPresetDocument::new("", 0);
         preset.format = format.clone();
         preset.parse_errors.push(error);
-        return MilkRustPresetSet { format, presets: vec![preset] };
+        return MilkRustPresetSet { format, presets: vec![preset], saved_blend: None };
     }
-    let chunks = split_milkrust_preset_pair(source);
-    let format = if force_milk2 || chunks.len() > 1 {
+    let (chunks, saved_blend) = if milk2::has_wrapper(source) {
+        match milk2::parse(source) {
+            Ok((blend, chunks)) => (chunks.to_vec(), Some(blend)),
+            Err(error) => {
+                let mut preset = MilkRustPresetDocument::new("", 0);
+                preset.format = "milk2".into();
+                preset.parse_errors.push(error);
+                return MilkRustPresetSet { format: "milk2".into(), presets: vec![preset], saved_blend: None };
+            }
+        }
+    } else { (split_milkrust_preset_pair(source), None) };
+    let format = if force_milk2 || chunks.len() > 1 || saved_blend.is_some() {
         "milk2"
     } else {
         "milk"
@@ -1883,7 +1902,7 @@ pub fn parse_milkrust_preset_set(source: &str, force_milk2: bool) -> MilkRustPre
             preset
         })
         .collect::<Vec<_>>();
-    MilkRustPresetSet { format, presets }
+    MilkRustPresetSet { format, presets, saved_blend }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -2018,7 +2037,7 @@ pub fn serialize_milkrust_fragment(entry: &MilkRustIndexedEntry, requested_type:
 }
 
 pub fn serialize_milkrust_preset_set(parsed: &MilkRustPresetSet) -> String {
-    let include_sections = parsed.format == "milk2" || parsed.presets.len() > 1;
+    let include_sections = parsed.saved_blend.is_none() && (parsed.format == "milk2" || parsed.presets.len() > 1);
     let mut rendered_presets = Vec::new();
     for (index, preset) in parsed.presets.iter().enumerate() {
         let mut lines = Vec::new();
@@ -2057,6 +2076,7 @@ pub fn serialize_milkrust_preset_set(parsed: &MilkRustPresetSet) -> String {
         }
         rendered_presets.push(lines.join("\n"));
     }
+    if let Some(blend) = &parsed.saved_blend { return blend.serialize(&rendered_presets); }
     format!("{}\n", rendered_presets.join("\n"))
 }
 
@@ -2078,7 +2098,7 @@ fn persist_milkrust_scoped_values(
     scope: &BTreeMap<String, MilkRustValue>,
     allowed_keys: &[&str],
 ) -> BTreeMap<String, MilkRustValue> {
-    let mut next = base_values.clone();
+    let mut next = classic_keys::scope(base_values);
     for (key, value) in scope {
         if allowed_keys.contains(&key.as_str())
             || is_milkrust_q_variable(key)
@@ -2179,7 +2199,7 @@ fn evaluate_milkrust_entry_state(
     allowed_keys: &[&str],
 ) -> MilkRustIndexedEntry {
     let mut scope = frame_scope.clone();
-    scope.extend(entry.base_values.clone());
+    scope.extend(classic_keys::scope(&entry.base_values));
     if !entry.equations.init.trim().is_empty() {
         if let Ok(next_scope) = evaluate_milkrust_equations(&entry.equations.init, &scope) {
             scope = next_scope;
@@ -2215,7 +2235,7 @@ fn evaluate_milkrust_entry_stateful(
     allowed_keys: &[&str],
 ) -> MilkRustIndexedEntry {
     let mut scope = frame_scope.clone();
-    scope.extend(entry.base_values.clone());
+    scope.extend(classic_keys::scope(&entry.base_values));
     if !entry.initialized && !entry.equations.init.trim().is_empty() {
         if let Ok(next_scope) = evaluate_milkrust_equations(&entry.equations.init, &scope) {
             scope = next_scope;
@@ -2298,7 +2318,7 @@ pub fn create_milkrust_custom_wave_vertices(
             index as f64 / (sample_count - 1) as f64
         };
         let mut point_scope = frame_scope.clone();
-        point_scope.extend(wave.base_values.clone());
+        point_scope.extend(classic_keys::scope(&wave.base_values));
         point_scope.insert("i".to_string(), MilkRustValue::Number(i));
         point_scope.insert("sample".to_string(), MilkRustValue::Number(sample));
         if !wave.equations.point.trim().is_empty() {
@@ -4332,16 +4352,19 @@ pub fn build_milkrust_compatibility_entry(
     force_milk2: bool,
 ) -> MilkRustCompatibilityEntry {
     let parsed = parse_milkrust_preset_set(source, force_milk2);
-    let requires_milk2_saved_blend_state = parsed.format == "milk2";
+    let saved_blend_requirement = if parsed.format == "milk2" {
+        match &parsed.saved_blend {
+            Some(blend) if webgl_stages => blend.render_requirement(),
+            _ => Some("milk2-saved-blend-pattern-and-transition-state".to_string()),
+        }
+    } else { None };
     let preset_reports = parsed
         .presets
         .iter()
         .map(|preset| {
             let mut report = analyze_milkrust_preset_compatibility(preset);
-            if requires_milk2_saved_blend_state {
-                report
-                    .renderer_features
-                    .push("milk2-saved-blend-pattern-and-transition-state".to_string());
+            if let Some(requirement) = &saved_blend_requirement {
+                report.renderer_features.push(requirement.clone());
             }
             let webgpu_shader_sections = webgpu_shader_sections(preset);
             let content_error = if milkrust_preset_has_content(preset) {

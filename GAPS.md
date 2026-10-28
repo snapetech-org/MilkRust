@@ -19,7 +19,7 @@ This audit replaces the older roadmap snapshot, which no longer matched the crat
 - The compatibility CLI now retains every discovered file in the file denominator and emits per-file read, parse and current-subset status plus per-preset diagnostics. I/O failures appear in `fileReadErrors`; non-UTF-8 files appear in `encodingWarnings` and are forced unsupported after a lossy diagnostic parse. Render and visual-fidelity stages are explicitly `not-run` / `not-assessed`; no file disappears from the denominator.
 - Blank and comments-only preset files now fail the import and compatibility gates instead of being counted as supported merely because no unsupported syntax was encountered.
 - Static compatibility results now enumerate known renderer-feature blockers separately from parser/function/shader-subset findings. In particular, presets with composite shader bodies or warp shaders combined with per-pixel equations remain blocked in the cross-renderer ledger. The experimental WebGL load gate now opts into its separate-stage source implementation explicitly; it does not change unrun qualification or other renderer targets.
-- All `.milk2` files are marked unsupported by the current subset until saved blend patterns and transition state are implemented; the generic two-frame crossfade remains an intermediate representation.
+- The generic cross-renderer ledger still marks `.milk2` unsupported. A bounded parser now understands real `[PRESET1_BEGIN]`/`[PRESET2_BEGIN]` wrappers, preserves progress/direction/random fields and unknown extensions, and the experimental WebGL gate permits only a saved uniform Fade without extensions. Other spatial patterns and embedded sprites remain explicit blockers.
 - Compatibility JSON now reports per-file read/parse/subset status, per-preset diagnostics, and explicit `renderStatus: not-run` / `fidelityStatus: not-assessed`; geometry statistics are labeled as non-render output. The community-report generator labels static-subset results and records a deterministic SHA-256 fingerprint for each source pack. The checked-in May 2026 report remains a historical snapshot until regenerated on the current branch.
 - npm scripts now call the filenames that actually exist under `tools/`.
 - Both Rust expression evaluators now preserve MilkDrop `&&` / `||` short-circuiting and lazy `if()` / ternary branches, use the reference evaluator's 1e-5 boolean threshold, treat `band` / `bor` / `bnot` as boolean helpers, and reserve `&` / `|` for integer bitwise operations. The `^` operator is left-associative exponentiation above multiplication, `invsqrt` follows projectM's double-precision fast inverse-square-root routine, `%` / `mod` use integer remainder, and the standard `^=` / `%=` / `&=` / `|=` assignments are parsed. `if()` lvalue passthrough covers simple variable and megabuf targets. `memset` and projectM's no-op `freembuf` are implemented with bounded memory ranges, and `bxor` is no longer advertised as a MilkDrop built-in. Regression cases are committed but unrun.
@@ -118,3 +118,24 @@ should use the checked stateful API. Aggregate memory limits, remaining legacy
 caller migration, allocation containment and compiler/driver hang isolation
 remain release gates. No arbitrary-input safety or complete expression-conformance
 claim follows from these changes.
+
+## Catalog and cleared conversion increment — source only
+
+The paired PlezyNG follow-up implements Ed25519 catalog verification, expiry,
+quorum, persistent sequence checkpoints, revocations, explicit refresh and
+offline receipts. `tools/signed_catalog.py` prepares verified immutable archive
+metadata, signs, self-verifies and publishes with a non-force Git update. The
+manual workflow is restricted to protected main and private ephemeral JIT.
+No production keys or signed endpoint are provisioned. See SIGNED_CATALOG.md.
+
+`tools/convert_butterchurn.py` and its regression source prepare the MIT-vendored
+shaderless numeric-expression subset as multiple attributed packs without JS
+execution. All discovered inputs receive accounting rows, including rejects;
+rendered/qualified counts remain zero until actual evidence exists. No converter
+or pack builder was executed here, so no broader downloadable count is claimed.
+
+Classic serialized fields now seed runtime variables (`fDecay` → `decay`,
+`nWaveMode` → `wave_mode`, wave flags, and related fields) while preserving raw
+source keys. Unrequested synthetic treble-driven rotation was removed from
+source-driven frame construction. These targeted changes and saved-envelope
+regressions are unrun; full native, shader and platform qualification remain open.
