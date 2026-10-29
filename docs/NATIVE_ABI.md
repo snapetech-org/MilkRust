@@ -38,9 +38,12 @@ additional GPU memory, not part of the named-image budget. PlezyNG's 720p tier
 is substantially below this maximum.
 
 The native stage gate currently matches the implemented experimental WebGL
-subset, including saved uniform Fade only. Full HLSL, blur/noise resources,
-reference fixed-function details, spatial `.milk2` masks, embedded extensions,
-complete audio equivalence, compiler containment and fidelity remain open.
+subset. Both renderers consume saved `.milk2` pattern, progress, direction and
+random fields and apply deterministic MilkRust procedural masks for documented
+pattern names. These are not reference MilkDrop3 transitions; exact pattern
+and progress behavior, embedded executable extensions, full HLSL, blur/noise
+resources, reference fixed-function details, complete audio equivalence,
+compiler containment and fidelity remain open.
 See GAPS.md. This is a native renderer source implementation, not a qualified
 native MilkDrop-equivalent release.
 

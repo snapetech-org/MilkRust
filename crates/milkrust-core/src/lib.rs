@@ -4668,11 +4668,11 @@ fn unwrap_milkrust_shader_body(source: &str) -> String {
     unwrap_milkrust_hlsl_main(trimmed).unwrap_or_else(|| trimmed.to_string())
 }
 
-/// Extract a self-contained HLSL `main` function. MilkDrop shader snippets
+/// Extract a parameterless HLSL `main` function. MilkDrop shader snippets
 /// usually omit the entry-point wrapper, but community-authored shaders also
-/// commonly save a single standard pixel-shader function with semantics.
-/// Preambles/helper functions remain unsupported and fail through the normal
-/// restricted-grammar diagnostic instead of being silently discarded.
+/// sometimes save a self-contained pixel-shader function. Input parameters,
+/// preambles and helper functions remain unsupported and fail through the
+/// normal restricted-grammar diagnostic instead of being silently discarded.
 fn unwrap_milkrust_hlsl_main(source: &str) -> Option<String> {
     let source = source.trim();
     let return_type = ["float4", "float3", "float2", "float", "half4", "half3", "half2", "half"]
@@ -4698,7 +4698,10 @@ fn unwrap_milkrust_hlsl_main(source: &str) -> Option<String> {
             _ => {}
         }
     }
-    cursor = close? + 1;
+    let parameter_close = close?;
+    let parameters = source[cursor + 1..parameter_close].trim();
+    if !parameters.is_empty() && !parameters.eq_ignore_ascii_case("void") { return None; }
+    cursor = parameter_close + 1;
     while source[cursor..].starts_with(char::is_whitespace) { cursor += 1; }
     if source.as_bytes().get(cursor) == Some(&b':') {
         cursor += 1;

@@ -15,6 +15,10 @@ sampling forms when the sampler maps to a known MilkDrop texture binding:
 `tex2D`/`tex`, `tex2Dlod`, `tex2Dbias`, `tex2Dproj`, and `tex2Dgrad`. The code
 preserves HLSL `fmod` truncation for native/WebGL. WebGPU rejects sampling
 forms whose sampling semantics are not represented by its current bindings.
+It also unwraps one parameterless scalar/vector HLSL `main` entry point with
+an optional output semantic, and accepts a simple `return expression;` body.
+Entry-point parameters, preambles, helper functions, general control flow and
+multiple functions remain unsupported.
 
 Common `float1`, `half`/`halfN`, `min16floatN`/`min10floatN`, `intN`, `uintN`
 and `boolN` declarations and constructors now lower to explicit GLSL
@@ -36,8 +40,11 @@ The translator is not a general HLSL front end. Macros, arbitrary functions and
 scope, arrays, structs, typed matrices and `mul`, loops and general branching,
 resource reflection, shader-model semantics, blur/noise/mipmap resources,
 exact MilkDrop uniforms and stage behavior remain unsupported. Compiler and
-driver hangs also need resource/time containment. Non-Fade `.milk2` spatial
-patterns remain rejected rather than approximated.
+driver hangs also need resource/time containment. Native and WebGL renderers
+approximate documented non-Fade `.milk2` pattern names with independent
+procedural masks. Exact reference behavior, per-pattern progress tuning,
+unknown names and embedded executable extensions remain unsupported or
+unqualified.
 
 ## Integration preparation and acceptance criteria
 
