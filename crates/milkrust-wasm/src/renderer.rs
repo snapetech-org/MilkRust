@@ -1376,6 +1376,12 @@ fn create_milkrust_texture_from_data_url(
     let image_for_load = image.clone();
     let state_for_load = asset.state.clone();
     let onload = Closure::<dyn FnMut(web_sys::Event)>::wrap(Box::new(move |_event| {
+        // An image decode can finish between context restoration and the next
+        // frame's rebuild. Never bind an object from the retired GPU generation.
+        if gl_for_load.is_context_lost() || !gl_for_load.is_texture(Some(&texture_for_load)) {
+            *state_for_load.borrow_mut() = Some(Err("Texture upload belongs to a lost or retired graphics context".into()));
+            return;
+        }
         // EXIF orientation can swap dimensions without changing the pixel budget.
         let actual = (image_for_load.natural_width(), image_for_load.natural_height());
         if actual != (width, height) && actual != (height, width) {
