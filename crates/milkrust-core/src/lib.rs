@@ -994,7 +994,7 @@ pub fn milkrust_frame_set_from_source_with_audio_and_input(
                     .map_or(1, |blend| blend.direction),
                 blend_random: parsed.saved_blend.as_ref()
                     .filter(|_| index == 1)
-                    .map_or([0.0; 5], |blend| blend.random.map(|value| value.unwrap_or(0.0))),
+                    .map_or([0.0; 5], milk2::SavedBlend::random_values),
                 composite_mode: milkrust_composite_mode(preset_document, index).to_string(),
                 frame: build_milkrust_frame_from_scope(
                     preset_document,
@@ -1238,6 +1238,7 @@ pub struct MilkRustFrameSetRuntime {
      scopes: Vec<BTreeMap<String, MilkRustValue>>,
      source: String,
      cached_preset_set: Option<MilkRustPresetSet>,
+     saved_blend_state: milk2::BlendHeaderState,
      shader_stages: Vec<MilkRustShaderStages>,
  }
 
@@ -1337,7 +1338,7 @@ impl MilkRustFrameSetRuntime {
             return Err(error);
         }
         if self.source != source || self.preset_documents.is_empty() {
-            let parsed = parse_milkrust_preset_set(source, false);
+            let parsed = parse_milkrust_preset_set_with_blend_state(source, false, &self.saved_blend_state);
             let error = parsed.presets.iter().flat_map(|p| p.parse_errors.iter()).next().cloned()
                 .or_else(|| parsed.saved_blend.as_ref().and_then(milk2::SavedBlend::render_requirement));
             if let Some(error) = error { self.last_error = Some(error.clone()); return Err(error); }
@@ -1374,10 +1375,13 @@ impl MilkRustFrameSetRuntime {
         input: MilkRustInputState,
     ) -> MilkRustFrameSet {
 if self.source != source || self.preset_documents.is_empty() {
-             let parsed = parse_milkrust_preset_set(
+             let parsed = parse_milkrust_preset_set_with_blend_state(
                  source,
                  source.to_ascii_lowercase().contains("[preset01]"),
+                 &self.saved_blend_state,
              );
+             self.saved_blend_state = parsed.saved_blend.as_ref()
+                 .map_or_else(milk2::BlendHeaderState::default, milk2::SavedBlend::header_state);
              self.previous_time = None;
              self.sprite_runtime = sprites::Runtime::default();
              self.cached_preset_set = Some(parsed.clone());
@@ -1481,7 +1485,7 @@ if self.source != source || self.preset_documents.is_empty() {
                     .map_or(1, |blend| blend.direction),
                 blend_random: preset_set.saved_blend.as_ref()
                     .filter(|_| index == 1)
-                    .map_or([0.0; 5], |blend| blend.random.map(|value| value.unwrap_or(0.0))),
+                    .map_or([0.0; 5], milk2::SavedBlend::random_values),
                 composite_mode: composite_mode.to_string(),
                 frame,
                 index,
@@ -1918,6 +1922,18 @@ fn parse_milkrust_preset_text(text: &str, index: usize) -> MilkRustPresetDocumen
 }
 
 pub fn parse_milkrust_preset_set(source: &str, force_milk2: bool) -> MilkRustPresetSet {
+    parse_milkrust_preset_set_with_blend_state(
+        source,
+        force_milk2,
+        &milk2::BlendHeaderState::default(),
+    )
+}
+
+fn parse_milkrust_preset_set_with_blend_state(
+    source: &str,
+    force_milk2: bool,
+    previous_blend_state: &milk2::BlendHeaderState,
+) -> MilkRustPresetSet {
     if let Err(error) = validate_preset_source(source) {
         let format = if force_milk2 { "milk2" } else { "milk" }.to_string();
         let mut preset = MilkRustPresetDocument::new("", 0);
@@ -1936,7 +1952,7 @@ pub fn parse_milkrust_preset_set(source: &str, force_milk2: bool) -> MilkRustPre
     };
     let source = blocks.body.as_str();
     let (chunks, saved_blend) = if milk2::has_wrapper(source) {
-        match milk2::parse(source) {
+        match milk2::parse_with_previous(source, previous_blend_state) {
             Ok((blend, chunks)) => (chunks.to_vec(), Some(blend)),
             Err(error) => {
                 let mut preset = MilkRustPresetDocument::new("", 0);

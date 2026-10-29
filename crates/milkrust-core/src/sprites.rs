@@ -326,11 +326,24 @@ impl Runtime {
     }
 
     pub fn render_with_parents(&mut self, definitions: &[Definition], parents: &[BTreeMap<String, MilkRustValue>], time: f64, progress: f64) -> Result<Vec<Frame>, String> {
+        let checkpoint = self.clone();
+        match self.render_with_parents_inner(definitions, parents, time, progress) {
+            Ok(frames) => Ok(frames),
+            Err(error) => {
+                *self = checkpoint;
+                Err(error)
+            }
+        }
+    }
+
+    fn render_with_parents_inner(&mut self, definitions: &[Definition], parents: &[BTreeMap<String, MilkRustValue>], time: f64, progress: f64) -> Result<Vec<Frame>, String> {
         if !time.is_finite() { return Err("Non-finite sprite time".into()); }
+        if !progress.is_finite() { return Err("Non-finite sprite progress".into()); }
         if definitions.len() > MAX_SPRITES { return Err("Sprite instance limit exceeded".into()); }
         self.instances.resize_with(definitions.len(), Instance::default);
         let start = *self.start.get_or_insert(time);
         let elapsed = (time - start).max(0.0);
+        if !elapsed.is_finite() { return Err("Sprite elapsed time overflow".into()); }
         let delta = self.previous.map_or(0.0, |last| (time - last).clamp(0.0, 1.0));
         self.previous = Some(time);
         let fps = if delta > 0.0 { 1.0 / delta } else { 60.0 };
@@ -362,6 +375,7 @@ impl Runtime {
             let spin = elapsed * definition.rotation_speed;
             let rotation = value("rot") + if definition.rotation_mode == 1.0 { spin }
                 else if definition.rotation_mode == 2.0 { -spin } else { 0.0 };
+            if !rotation.is_finite() { return Err("Non-finite sprite rotation".into()); }
             let done = value("done") != 0.0;
             let burn = match definition.burn_mode {
                 0 => false,

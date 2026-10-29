@@ -3,12 +3,30 @@
 //! docs/MILK2_FORMAT.md.
 use std::collections::BTreeMap;
 
+/// Saved header registers carried between MilkDrop 3 double-preset loads.
+/// The initial process state is intentionally distinct from a normal Fade.
+#[derive(Clone, Debug, PartialEq)]
+pub struct BlendHeaderState {
+    pub pattern: String,
+    pub progress: f64,
+    pub direction: i32,
+    pub random: [f64; 5],
+}
+
+impl Default for BlendHeaderState {
+    fn default() -> Self {
+        Self { pattern: String::new(), progress: 1.0, direction: 0, random: [0.0; 5] }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct SavedBlend {
     pub pattern: String,
     pub progress: f64,
     pub direction: i32,
     pub random: [Option<f64>; 5],
+    /// Resolved values after applying the preceding MilkDrop 3 header state.
+    pub resolved_random: [f64; 5],
     /// Retain all header records for lossless export of unknown extensions.
     pub header: BTreeMap<String, String>,
     /// Trailing sprite blocks and metadata are retained for lossless export.
@@ -21,6 +39,17 @@ impl SavedBlend {
     /// pixel-identical parity with MilkDrop3's proprietary transition code.
     pub fn pattern_code(&self) -> Option<i32> {
         blend_pattern_code(&self.pattern)
+    }
+
+    /// Return the resolved random registers, including values inherited from
+    /// a preceding double-preset header.
+    pub fn random_values(&self) -> [f64; 5] {
+        self.resolved_random
+    }
+
+    pub fn header_state(&self) -> BlendHeaderState {
+        BlendHeaderState { pattern: self.pattern.clone(), progress: self.progress,
+            direction: self.direction, random: self.resolved_random }
     }
 
     /// MilkDrop 3.2 adds a display-name record after the two preset blocks.
@@ -80,13 +109,15 @@ impl SavedBlend {
 
     pub fn serialize(&self, presets: &[String]) -> String {
         let mut header = self.header.clone();
-        header.insert("blending_pattern".into(), self.pattern.clone());
-        header.insert("blending_progress".into(), self.progress.to_string());
-        header.insert("blending_direction".into(), self.direction.to_string());
+        if header.contains_key("blending_pattern") { header.insert("blending_pattern".into(), self.pattern.clone()); }
+        if header.contains_key("blending_progress") { header.insert("blending_progress".into(), self.progress.to_string()); }
+        if header.contains_key("blending_direction") { header.insert("blending_direction".into(), self.direction.to_string()); }
         for (index, value) in self.random.iter().enumerate() {
             let key = format!("random_{}", index + 1);
-            if let Some(value) = value { header.insert(key, value.to_string()); }
-            else { header.remove(&key); }
+            if header.contains_key(&key) {
+                if let Some(value) = value { header.insert(key, value.to_string()); }
+                else { header.remove(&key); }
+            }
         }
         let mut result = header.into_iter().map(|(k, v)| format!("{k}={v}\n")).collect::<String>();
         for (index, preset) in presets.iter().enumerate() {
@@ -203,7 +234,22 @@ pub fn has_wrapper(source: &str) -> bool {
 /// Parse ordered, complete blocks without confusing the [preset00] section
 /// inside each block with the envelope itself. No filesystem or code execution.
 pub fn parse(source: &str) -> Result<(SavedBlend, [String; 2]), String> {
+    parse_with_previous(source, &BlendHeaderState::default())
+}
+
+/// Parse a double-preset file while preserving MilkDrop 3's process-wide
+/// saved header registers when a file omits one or more records.
+pub fn parse_with_previous(
+    source: &str,
+    previous: &BlendHeaderState,
+) -> Result<(SavedBlend, [String; 2]), String> {
     if source.len()>crate::input_limits::MAX_PRESET_BYTES { return Err("milk2 source exceeds 2 MiB".into()); }
+    if previous.pattern.len() > 80
+        || !previous.progress.is_finite()
+        || !(0.0..=1.0).contains(&previous.progress)
+        || previous.random.iter().any(|value| !value.is_finite() || !(0.0..=1.0).contains(value)) {
+        return Err("invalid preceding milk2 header state".into());
+    }
     let normalized = source.trim_start_matches('\u{feff}').replace("\r\n", "\n").replace('\r', "\n");
     let mut state = 0usize;
     let mut header = BTreeMap::new();
@@ -242,8 +288,12 @@ pub fn parse(source: &str) -> Result<(SavedBlend, [String; 2]), String> {
     if state != 4 || presets.iter().any(|s| s.trim().is_empty()) {
         return Err("milk2 requires two nonempty, complete preset blocks".into());
     }
-    let pattern = header.get("blending_pattern").cloned().unwrap_or_else(|| "Fade".into());
-    if pattern.is_empty() || pattern.len() > 80 { return Err("invalid milk2 blending pattern".into()); }
+    let pattern = match header.get("blending_pattern") {
+        Some(value) if value.is_empty() => return Err("invalid milk2 blending pattern".into()),
+        Some(value) => value.clone(),
+        None => previous.pattern.clone(),
+    };
+    if pattern.len() > 80 { return Err("invalid milk2 blending pattern".into()); }
     let number = |key: &str, default: f64| -> Result<f64, String> {
         let value = match header.get(key) {
             Some(value) => value.parse::<f64>().map_err(|_| format!("invalid milk2 {key}"))?,
@@ -252,22 +302,24 @@ pub fn parse(source: &str) -> Result<(SavedBlend, [String; 2]), String> {
         if !value.is_finite() { return Err(format!("non-finite milk2 {key}")); }
         Ok(value)
     };
-    let progress = number("blending_progress", 0.5)?;
+    let progress = number("blending_progress", previous.progress)?;
     if !(0.0..=1.0).contains(&progress) { return Err("milk2 progress is outside 0..1".into()); }
     let direction = match header.get("blending_direction") {
         Some(value) => value.parse::<i32>().map_err(|_| "invalid milk2 blending_direction")?,
-        None => 1,
+        None => previous.direction,
     };
     let mut random = [None; 5];
+    let mut resolved_random = previous.random;
     for (index, value) in random.iter_mut().enumerate() {
         let key = format!("random_{}", index + 1);
         if header.contains_key(&key) {
             let parsed = number(&key, 0.0)?;
             if !(0.0..=1.0).contains(&parsed) { return Err("milk2 saved random value is outside 0..1".into()); }
             *value = Some(parsed);
+            resolved_random[index] = parsed;
         }
     }
-    Ok((SavedBlend { pattern, progress, direction, random, header, trailer }, presets))
+    Ok((SavedBlend { pattern, progress, direction, random, resolved_random, header, trailer }, presets))
 }
 
 #[cfg(test)]

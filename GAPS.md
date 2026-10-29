@@ -66,8 +66,11 @@ GPU capture or device run was performed for this source-only continuation.
 - A bounded `.milk2` wrapper parser, round-trip metadata preservation, two
   independent states, all 30 saved-pattern formulas with per-fragment 64x48
   triangle interpolation from a packed 32-bit vertex field, and the documented sprite
-  field/runtime paths for native and WebGL. Formula provenance and the remaining
-  pixel-qualification boundary are in [the format notes](docs/MILK2_FORMAT.md).
+  field/runtime paths for native and WebGL. Saved blend header registers carry
+  across double-preset loads; first-load defaults are an unset pattern, progress
+  1, direction 0 and zero random values. Missing first-load patterns fail closed.
+  Formula provenance and the remaining pixel-qualification boundary are in
+  [the format notes](docs/MILK2_FORMAT.md).
 - Deterministic archives with integrity indexes and per-file provenance/notices;
   a signed catalog publisher, quorum/sequence/expiry/revocation handling,
   qualification gates, protected-environment signing configuration and public

@@ -213,7 +213,8 @@ fn fill_vertices(pattern: Pattern, direction: i32, random: [f32; 5], aspect: (f3
             (5.0 * theta + 90.0).sin()
         }),
         Pattern::Wave => banded(out, band, 3.0, &|x, y| {
-            let (dx, dy) = ((x - 1.0) * ax, (y - 0.0) * ay);
+            // Wave shares the upper-right origin with cisor/checkerboard.
+            let (dx, dy) = ((x - 1.0) * ax, y * ay);
             (10.0 * radius(dx, dy) + 90.0).sin()
         }),
         Pattern::Curtain => {

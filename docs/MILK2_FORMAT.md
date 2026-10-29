@@ -53,7 +53,10 @@ direction-aware patterns and the non-square `horizontal` mesh behavior. Saved
 sprite handling includes per-owner scopes, flip UVs, saved offsets/repeats,
 rotation modes, byte-wrapped alpha, layer and burn ordering, and all eleven
 saved blend modes with the MD3 default of 4 and invalid dynamic values mapped to
-mode 0. These are source-level implementations. GPU triangle interpolation,
+mode 0. Saved blend header values carry across double-preset loads; a new
+runtime starts with no pattern, progress 1, direction 0 and zero random values.
+A missing first-load pattern fails closed instead of being treated as Fade.
+These are source-level implementations. GPU triangle interpolation,
 compositing, sprite filtering and draw order still need reference captures to
 qualify pixel behavior on each renderer. The Canvas and WGSL paths explicitly
 reject unsupported spatial masks or saved sprites. Unknown trailing extensions
