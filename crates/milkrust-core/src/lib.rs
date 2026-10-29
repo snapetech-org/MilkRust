@@ -104,6 +104,10 @@ pub struct MilkRustShaderStages {
 #[derive(Clone, Debug, PartialEq)]
 pub struct MilkRustCompositeFrame {
     pub blend_alpha: f64,
+    /// Saved `.milk2` blend name; GPU renderers map it through `milk2::blend_pattern_code`.
+    pub blend_pattern: String,
+    pub blend_direction: i32,
+    pub blend_random: [f64; 5],
     pub composite_mode: String,
     pub frame: MilkRustFrame,
     pub index: usize,
@@ -1024,6 +1028,15 @@ pub fn milkrust_frame_set_from_source_with_audio_and_input(
                     Some(blend) => if index == 0 { 1.0 } else { blend.progress },
                     None => milkrust_composite_alpha(preset_document, index),
                 },
+                blend_pattern: parsed.saved_blend.as_ref()
+                    .filter(|_| index == 1)
+                    .map_or_else(|| "Fade".to_string(), |blend| blend.pattern.clone()),
+                blend_direction: parsed.saved_blend.as_ref()
+                    .filter(|_| index == 1)
+                    .map_or(1, |blend| blend.direction),
+                blend_random: parsed.saved_blend.as_ref()
+                    .filter(|_| index == 1)
+                    .map_or([0.0; 5], |blend| blend.random.map(|value| value.unwrap_or(0.0))),
                 composite_mode: milkrust_composite_mode(preset_document, index).to_string(),
                 frame: build_milkrust_frame_from_scope(
                     preset_document,
@@ -1449,7 +1462,16 @@ if self.source != source || self.preset_documents.is_empty() {
              );
             entries.push(MilkRustCompositeFrame {
                 blend_alpha,
-composite_mode: composite_mode.to_string(),
+                blend_pattern: preset_set.saved_blend.as_ref()
+                    .filter(|_| index == 1)
+                    .map_or_else(|| "Fade".to_string(), |blend| blend.pattern.clone()),
+                blend_direction: preset_set.saved_blend.as_ref()
+                    .filter(|_| index == 1)
+                    .map_or(1, |blend| blend.direction),
+                blend_random: preset_set.saved_blend.as_ref()
+                    .filter(|_| index == 1)
+                    .map_or([0.0; 5], |blend| blend.random.map(|value| value.unwrap_or(0.0))),
+                composite_mode: composite_mode.to_string(),
                 frame,
                 index,
                 title,
@@ -2879,6 +2901,9 @@ pub struct MilkRustWebGpuFrameBatches {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct MilkRustWebGpuCompositeBatch {
     pub blend_alpha: f64,
+    pub blend_pattern: String,
+    pub blend_direction: i32,
+    pub blend_random: [f64; 5],
     pub composite_mode: String,
     pub filled_first_vertex: usize,
     pub filled_vertex_count: usize,
@@ -3045,6 +3070,9 @@ pub fn create_milkrust_webgpu_frame_set_batches(
             .composite_batches
             .push(MilkRustWebGpuCompositeBatch {
                 blend_alpha: entry.blend_alpha,
+                blend_pattern: entry.blend_pattern.clone(),
+                blend_direction: entry.blend_direction,
+                blend_random: entry.blend_random,
                 composite_mode: entry.composite_mode.clone(),
                 filled_first_vertex,
                 filled_vertex_count,
@@ -3117,6 +3145,9 @@ pub fn milkrust_webgpu_batch_summary_json(
         .map(|batch| {
             serde_json::json!({
                 "blendAlpha": batch.blend_alpha,
+                "blendPattern": batch.blend_pattern,
+                "blendDirection": batch.blend_direction,
+                "blendRandom": batch.blend_random,
                 "compositeMode": batch.composite_mode,
                 "filledFirstVertex": batch.filled_first_vertex,
                 "filledVertexCount": batch.filled_vertex_count,
@@ -3139,6 +3170,9 @@ pub fn milkrust_webgpu_batch_summary_json(
         .map(|entry| {
             serde_json::json!({
                 "blendAlpha": entry.blend_alpha,
+                "blendPattern": entry.blend_pattern,
+                "blendDirection": entry.blend_direction,
+                "blendRandom": entry.blend_random,
                 "compositeMode": entry.composite_mode,
                 "index": entry.index,
                 "linePrimitives": entry.frame.primitives.iter().filter(|primitive| matches!(primitive.mode, MilkRustPrimitiveMode::LineStrip | MilkRustPrimitiveMode::Lines)).count(),
@@ -4631,7 +4665,63 @@ fn unwrap_milkrust_shader_body(source: &str) -> String {
     };
     let trimmed = trimmed.strip_prefix('{').and_then(|body| body.strip_suffix('}'))
         .unwrap_or(trimmed).trim();
-    trimmed.to_string()
+    unwrap_milkrust_hlsl_main(trimmed).unwrap_or_else(|| trimmed.to_string())
+}
+
+/// Extract a self-contained HLSL `main` function. MilkDrop shader snippets
+/// usually omit the entry-point wrapper, but community-authored shaders also
+/// commonly save a single standard pixel-shader function with semantics.
+/// Preambles/helper functions remain unsupported and fail through the normal
+/// restricted-grammar diagnostic instead of being silently discarded.
+fn unwrap_milkrust_hlsl_main(source: &str) -> Option<String> {
+    let source = source.trim();
+    let return_type = ["float4", "float3", "float2", "float", "half4", "half3", "half2", "half"]
+        .iter()
+        .find(|value| source.starts_with(**value))?;
+    let mut cursor = return_type.len();
+    if !source[cursor..].starts_with(char::is_whitespace) { return None; }
+    cursor += source[cursor..].len() - source[cursor..].trim_start().len();
+    if !source[cursor..].starts_with("main") { return None; }
+    cursor += 4;
+    if source[cursor..].starts_with(|ch: char| ch.is_ascii_alphanumeric() || ch == '_') { return None; }
+    while source[cursor..].starts_with(char::is_whitespace) { cursor += 1; }
+    if source.as_bytes().get(cursor) != Some(&b'(') { return None; }
+    let mut parens = 0usize;
+    let mut close = None;
+    for (offset, byte) in source.as_bytes().iter().enumerate().skip(cursor) {
+        match byte {
+            b'(' => { parens += 1; if parens > 64 { return None; } }
+            b')' => {
+                parens = parens.checked_sub(1)?;
+                if parens == 0 { close = Some(offset); break; }
+            }
+            _ => {}
+        }
+    }
+    cursor = close? + 1;
+    while source[cursor..].starts_with(char::is_whitespace) { cursor += 1; }
+    if source.as_bytes().get(cursor) == Some(&b':') {
+        cursor += 1;
+        while cursor < source.len() && source.as_bytes()[cursor] != b'{' { cursor += 1; }
+    }
+    while source[cursor..].starts_with(char::is_whitespace) { cursor += 1; }
+    if source.as_bytes().get(cursor) != Some(&b'{') { return None; }
+    let open = cursor;
+    let mut braces = 0usize;
+    let mut end = None;
+    for (offset, byte) in source.as_bytes().iter().enumerate().skip(open) {
+        match byte {
+            b'{' => { braces += 1; if braces > 64 { return None; } }
+            b'}' => {
+                braces = braces.checked_sub(1)?;
+                if braces == 0 { end = Some(offset); break; }
+            }
+            _ => {}
+        }
+    }
+    let end = end?;
+    if !source[end + 1..].trim().is_empty() { return None; }
+    Some(source[open + 1..end].trim().to_string())
 }
 
 fn normalize_simple_milkrust_conditional_return(source: &str) -> String {
@@ -5002,6 +5092,14 @@ fn parse_milkrust_shader_program(source: &str) -> Option<MilkRustShaderProgram> 
             expression = normalize_milkrust_shader_expression(ret_expression.trim());
             continue;
         }
+        if let Some(return_expression) = statement.strip_prefix("return")
+            .filter(|rest| rest.is_empty() || rest.starts_with(char::is_whitespace) || rest.starts_with('(')) {
+            if !expression.is_empty() || return_expression.trim().is_empty() {
+                return None;
+            }
+            expression = normalize_milkrust_shader_expression(return_expression.trim());
+            continue;
+        }
         if !expression.is_empty() {
             return None;
         }
@@ -5101,6 +5199,7 @@ uniform vec2 pixelSize;
 uniform float aspect;
 uniform vec4 texsize;
 {uniforms}
+{}
 in vec2 uv;
 out vec4 outColor;
 float clamp01(float value) {{ return clamp(value, 0.0, 1.0); }}
@@ -5132,7 +5231,9 @@ void main() {{
   {}
   vec3 ret = vec3({});
   {output}
+  outColor.a *= milkrust_transition_mask(uv);
 }}"#,
+        milk2::GLSL_TRANSITION_MASK,
         program.declarations.join("\n  "),
         program.expression
     )

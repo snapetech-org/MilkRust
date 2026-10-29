@@ -1,17 +1,32 @@
 //! Native GL/GLES execution of MilkRust's frame graph. Feedback and final
 //! composite are distinct passes; each double-preset layer owns two targets.
 use std::{collections::BTreeMap, ffi::{c_void, CString}, ptr};
-use milkrust_core::{get_milkrust_texture_name_aliases, MilkRustFrame, MilkRustFrameSet,
+use milkrust_core::{milk2, get_milkrust_texture_name_aliases, MilkRustCompositeFrame, MilkRustFrame, MilkRustFrameSet,
     MilkRustPrimitiveMode, MilkRustShaderStage, MilkRustTexturedPrimitiveMode};
 use crate::gl::*;
 
 const VERTEX: &str = "#version 300 es\nin vec2 position; in vec2 sourceUv; in vec4 vertexColor; out vec2 uv; out vec4 tint; void main(){ uv=sourceUv; tint=vertexColor; gl_Position=vec4(position,0,1); gl_PointSize=1.0; }";
-const COPY: &str = "#version 300 es\nprecision highp float; uniform sampler2D previousFrame; uniform float feedback; uniform float outputAlpha; in vec2 uv; out vec4 outColor; void main(){outColor=vec4(texture(previousFrame,uv).rgb*feedback,outputAlpha);}";
+const COPY_BODY: &str = "uniform sampler2D previousFrame; uniform float feedback; uniform float outputAlpha; in vec2 uv; out vec4 outColor; void main(){outColor=vec4(texture(previousFrame,uv).rgb*feedback,outputAlpha*milkrust_transition_mask(uv));}";
 const COLOR: &str = "#version 300 es\nprecision highp float; in vec4 tint; out vec4 outColor; void main(){outColor=tint;}";
 const TEXTURED: &str = "#version 300 es\nprecision highp float; uniform sampler2D previousFrame; in vec2 uv; in vec4 tint; out vec4 outColor; void main(){outColor=texture(previousFrame,uv)*tint;}";
 const MAX_PIXELS: u64 = 8 * 1024 * 1024;
 const MAX_TEXTURE_PIXELS: u64 = 32 * 1024 * 1024;
 const MAX_VERTICES: usize = 262_144;
+
+#[derive(Clone, Copy)]
+struct TransitionUniforms { pattern: i32, progress: f32, direction: f32, random: [f32; 5] }
+impl TransitionUniforms {
+    fn from_entry(entry: &MilkRustCompositeFrame) -> Self {
+        Self { pattern: milk2::blend_pattern_code(&entry.blend_pattern).unwrap_or(0),
+            progress: entry.blend_alpha.clamp(0.0, 1.0) as f32,
+            direction: entry.blend_direction as f32,
+            random: entry.blend_random.map(|value| value as f32) }
+    }
+    fn fade() -> Self { Self { pattern: 0, progress: 1.0, direction: 1.0, random: [0.0; 5] } }
+    fn output_alpha(self, first: bool) -> f32 {
+        if first || self.pattern != 0 { 1.0 } else { self.progress }
+    }
+}
 
 struct Program { gl: Gl, id: u32 }
 impl Drop for Program { fn drop(&mut self) { unsafe { (self.gl.delete_program)(self.id); } } }
@@ -142,7 +157,9 @@ impl Renderer {
     /// # Safety
     /// gl must refer to the current dedicated context for this entire lifetime.
     pub unsafe fn new(gl: Gl, gles: bool) -> Result<Self, String> {
-        let copy = Program::new(gl, gles, COPY)?;
+        let copy_source = format!("#version 300 es\nprecision highp float;\n{}\n{}",
+            milk2::GLSL_TRANSITION_MASK, COPY_BODY);
+        let copy = Program::new(gl, gles, &copy_source)?;
         let color = Program::new(gl, gles, COLOR)?;
         let textured = Program::new(gl, gles, TEXTURED)?;
         let (mut buffer, mut vao, mut max_texture, mut units) = (0, 0, 0, 0);
@@ -258,9 +275,16 @@ impl Renderer {
     }
 
     fn uniforms(&self, program: &Program, frame: &MilkRustFrame, stage: &MilkRustShaderStage,
-        time: f64, alpha: f32, feedback: f32) -> Result<(), String> {
+        time: f64, alpha: f32, feedback: f32, transition: TransitionUniforms) -> Result<(), String> {
         program.bind(); program.integer("previousFrame", 0);
         program.float("feedback", feedback); program.float("outputAlpha", alpha);
+        program.integer("u_transitionPattern", transition.pattern);
+        program.float("u_transitionProgress", transition.progress);
+        program.float("u_transitionDirection", transition.direction);
+        for (index, value) in transition.random.iter().enumerate() {
+            program.float(&format!("u_transitionRandom{}", index + 1), *value);
+        }
+        program.vector2("u_transitionResolution", self.width as f32, self.height as f32);
         program.float("time", time as f32); program.float("sampleRate", 44_100.0);
         program.vector2("resolution", self.width as f32, self.height as f32);
         program.vector2("pixelSize", 1.0/self.width as f32, 1.0/self.height as f32);
@@ -310,7 +334,8 @@ impl Renderer {
             unsafe { (self.gl.bind_framebuffer)(FRAMEBUFFER, layer.targets[write].id); (self.gl.disable)(BLEND); }
             self.bind_texture(0, layer.targets[layer.read].texture.id);
             let warp = layer.warp.as_ref().map_or(&self.copy, |(_, program)| program);
-            self.uniforms(warp, frame, &frame.shader_stages.warp, time, 1.0, (1.0-frame.background_alpha).clamp(0.0, 1.0) as f32)?;
+            self.uniforms(warp, frame, &frame.shader_stages.warp, time, 1.0,
+                (1.0-frame.background_alpha).clamp(0.0, 1.0) as f32, TransitionUniforms::fade())?;
             self.draw(0x0004, &feedback_vertices(frame)?)?;
             unsafe { (self.gl.enable)(BLEND); (self.gl.blend_func_separate)(SRC_ALPHA, ONE_MINUS_SRC_ALPHA, 1, ONE_MINUS_SRC_ALPHA); }
             for primitive in &frame.textured_primitives {
@@ -339,7 +364,9 @@ impl Renderer {
             }
             self.bind_texture(0, layer.targets[write].texture.id);
             let composite = layer.composite.as_ref().map_or(&self.copy, |(_, program)| program);
-            self.uniforms(composite, frame, &frame.shader_stages.composite, time, if index == 0 { 1.0 } else { entry.blend_alpha.clamp(0.0, 1.0) as f32 }, 1.0)?;
+            let transition = TransitionUniforms::from_entry(entry);
+            self.uniforms(composite, frame, &frame.shader_stages.composite, time,
+                transition.output_alpha(index == 0), 1.0, transition)?;
             self.draw(0x0004, &quad())?;
             self.layers[index].read = write;
         }

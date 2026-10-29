@@ -1,1702 +1,1 @@
-use std::{cell::{Cell, RefCell}, collections::BTreeMap, rc::Rc};
-
-use milkrust_core::{
-    clamp_unit, create_repeated_milkrust_colors, get_milkrust_texture_name_aliases,
-    MilkRustFrame, MilkRustFrameSet, MilkRustPrimitiveMode, MilkRustTexturedPrimitiveMode,
-    MilkRustShaderStage,
-};
-use wasm_bindgen::{prelude::*, JsCast};
-
-pub enum MilkRustRenderer {
-    WebGl(MilkRustWebGlRendererSet),
-    Canvas {
-        canvas: web_sys::HtmlCanvasElement,
-        context: web_sys::CanvasRenderingContext2d,
-    },
-}
-
-impl MilkRustRenderer {
-    pub fn label(&self) -> &'static str {
-        match self {
-            Self::WebGl(_) => "Rust WebGL2 renderer active",
-            Self::Canvas { .. } => "Canvas renderer fallback active",
-        }
-    }
-
-    pub fn reset(&self) {
-        if let Self::WebGl(renderer_set) = self { renderer_set.renderers.borrow_mut().clear(); }
-    }
-
-    pub fn render_frame_set(&self, frame_set: &MilkRustFrameSet, time: f64) -> Result<bool, JsValue> {
-        if frame_set.entries.is_empty() {
-            return Err(JsValue::from_str("No preset frames to render"));
-        }
-        match self {
-            Self::WebGl(renderer_set) => renderer_set.render_frame_set(frame_set, time),
-            Self::Canvas { canvas, context } => {
-                if frame_set.entries.iter().any(|entry| entry.frame.shader_stages.warp.required ||
-                    entry.frame.shader_stages.composite.required || entry.frame.warp_mesh.is_some() || !entry.frame.textured_primitives.is_empty()) {
-                    return Err(JsValue::from_str("Canvas preview cannot execute preset shaders, a warp mesh or textured primitives"));
-                }
-                for (index, entry) in frame_set.entries.iter().enumerate() {
-                    context.save();
-                    context.set_global_alpha(clamp_unit(entry.blend_alpha));
-                    if index == 0 {
-                        render_milkrust_canvas_frame(context, canvas, &entry.frame, time);
-                    } else {
-                        render_milkrust_canvas_overlay_frame(context, canvas, &entry.frame, time);
-                    }
-                    context.restore();
-                }
-                Ok(true)
-            }
-        }
-    }
-}
-
-pub struct MilkRustWebGlRendererSet {
-    gl: web_sys::WebGl2RenderingContext,
-    renderers: RefCell<Vec<MilkRustWebGlRenderer>>,
-    texture_assets: Rc<RefCell<BTreeMap<String, String>>>,
-}
-
-struct MilkRustWebGlRenderer {
-    buffer: web_sys::WebGlBuffer,
-    feedback_targets: RefCell<MilkRustFeedbackTargets>,
-    gl: web_sys::WebGl2RenderingContext,
-    primitive_buffer: web_sys::WebGlBuffer,
-    primitive_color_buffer: web_sys::WebGlBuffer,
-    primitive_program: web_sys::WebGlProgram,
-    placeholder_texture: web_sys::WebGlTexture,
-    named_textures: RefCell<BTreeMap<String, MilkRustTextureAsset>>,
-    texture_pixels: Rc<Cell<u64>>,
-    max_texture_units: usize,
-    program: web_sys::WebGlProgram,
-    textured_position_buffer: web_sys::WebGlBuffer,
-    textured_program: web_sys::WebGlProgram,
-    textured_uv_buffer: web_sys::WebGlBuffer,
-    translated_warp_program: RefCell<Option<MilkRustTranslatedProgram>>,
-    translated_composite_program: RefCell<Option<MilkRustTranslatedProgram>>,
-    texture_assets: Rc<RefCell<BTreeMap<String, String>>>,
-    u_color: Option<web_sys::WebGlUniformLocation>,
-    u_counts: Option<web_sys::WebGlUniformLocation>,
-    u_display_only: Option<web_sys::WebGlUniformLocation>,
-    u_feedback: Option<web_sys::WebGlUniformLocation>,
-    u_motion: Option<web_sys::WebGlUniformLocation>,
-    u_output_alpha: Option<web_sys::WebGlUniformLocation>,
-    u_previous_frame: Option<web_sys::WebGlUniformLocation>,
-    u_primitive_point_size: Option<web_sys::WebGlUniformLocation>,
-    u_resolution: Option<web_sys::WebGlUniformLocation>,
-    u_textured_alpha: Option<web_sys::WebGlUniformLocation>,
-    u_textured_sampler: Option<web_sys::WebGlUniformLocation>,
-    u_textured_tint: Option<web_sys::WebGlUniformLocation>,
-    u_time: Option<web_sys::WebGlUniformLocation>,
-    u_warp_color: Option<web_sys::WebGlUniformLocation>,
-    u_warp_feedback: Option<web_sys::WebGlUniformLocation>,
-    u_warp_output_alpha: Option<web_sys::WebGlUniformLocation>,
-    u_warp_previous_frame: Option<web_sys::WebGlUniformLocation>,
-    warp_position_buffer: web_sys::WebGlBuffer,
-    warp_program: web_sys::WebGlProgram,
-    warp_uv_buffer: web_sys::WebGlBuffer,
-}
-
-struct MilkRustTranslatedProgram {
-    program: web_sys::WebGlProgram,
-    source: String,
-    mesh: bool,
-}
-
-struct MilkRustTextureAsset {
-    texture: web_sys::WebGlTexture,
-    image: web_sys::HtmlImageElement,
-    // None while loading, Some(Ok) after upload, Some(Err) after decode/upload failure.
-    state: Rc<RefCell<Option<Result<(), String>>>>,
-    total_pixels: Rc<Cell<u64>>,
-    allocated_pixels: Rc<Cell<u64>>,
-    _onload: Closure<dyn FnMut(web_sys::Event)>,
-    _onerror: Closure<dyn FnMut(web_sys::Event)>,
-}
-
-impl Drop for MilkRustTextureAsset {
-    fn drop(&mut self) {
-        self.image.set_onload(None);
-        self.image.set_onerror(None);
-        self.image.set_src("");
-        self.total_pixels.set(self.total_pixels.get().saturating_sub(self.allocated_pixels.get()));
-    }
-}
-
-struct MilkRustFeedbackTargets {
-    height: i32,
-    read_index: usize,
-    targets: [MilkRustFeedbackTarget; 2],
-    width: i32,
-}
-
-struct MilkRustFeedbackTarget {
-    framebuffer: web_sys::WebGlFramebuffer,
-    texture: web_sys::WebGlTexture,
-}
-
-pub fn milkrust_renderer(
-    canvas: &web_sys::HtmlCanvasElement,
-    texture_assets: Rc<RefCell<BTreeMap<String, String>>>,
-) -> Result<MilkRustRenderer, JsValue> {
-    if let Some(context) = canvas.get_context("webgl2")? {
-        if let Ok(gl) = context.dyn_into::<web_sys::WebGl2RenderingContext>() {
-            if let Ok(renderer) = MilkRustWebGlRendererSet::new(gl, texture_assets) {
-                return Ok(MilkRustRenderer::WebGl(renderer));
-            }
-        }
-    }
-    let context: web_sys::CanvasRenderingContext2d = canvas
-        .get_context("2d")?
-        .ok_or_else(|| JsValue::from_str("2D canvas is unavailable"))?
-        .dyn_into()?;
-    Ok(MilkRustRenderer::Canvas {
-        canvas: canvas.clone(),
-        context,
-    })
-}
-
-impl MilkRustWebGlRendererSet {
-    fn new(
-        gl: web_sys::WebGl2RenderingContext,
-        texture_assets: Rc<RefCell<BTreeMap<String, String>>>,
-    ) -> Result<Self, JsValue> {
-        Ok(Self {
-            gl,
-            renderers: RefCell::new(Vec::new()),
-            texture_assets,
-        })
-    }
-
-    fn render_frame_set(&self, frame_set: &MilkRustFrameSet, time: f64) -> Result<bool, JsValue> {
-        if self.gl.is_context_lost() { return Err(JsValue::from_str("WebGL context lost; reload the preset after recovery")); }
-        self.ensure_renderer_count(frame_set.entries.len())?;
-        let renderers = self.renderers.borrow();
-        // Compile every required stage before changing feedback or the canvas.
-        // A failed shader never silently selects a built-in visual instead.
-        for (renderer, entry) in renderers.iter().zip(&frame_set.entries) {
-            renderer.prepare_stages(&entry.frame)?;
-            if !renderer.prepare_textures(&entry.frame)? { return Ok(false); }
-        }
-        for (index, entry) in frame_set.entries.iter().enumerate() {
-            if let Some(renderer) = renderers.get(index) {
-                renderer.render_with_options(
-                    &entry.frame,
-                    time,
-                    index == 0,
-                    &entry.composite_mode,
-                    entry.blend_alpha,
-                )?;
-            }
-        }
-        Ok(true)
-    }
-
-    fn ensure_renderer_count(&self, count: usize) -> Result<(), JsValue> {
-        if count == 0 || count > 2 { return Err(JsValue::from_str("Expected one or two independent preset render targets")); }
-        let mut renderers = self.renderers.borrow_mut();
-        renderers.truncate(count);
-        while renderers.len() < count {
-            let renderer = MilkRustWebGlRenderer::new(self.gl.clone(), self.texture_assets.clone())?;
-            renderers.push(renderer);
-        }
-        Ok(())
-    }
-}
-
-impl MilkRustWebGlRenderer {
-    fn new(
-        gl: web_sys::WebGl2RenderingContext,
-        texture_assets: Rc<RefCell<BTreeMap<String, String>>>,
-    ) -> Result<Self, JsValue> {
-        let max_texture_units = gl.get_parameter(web_sys::WebGl2RenderingContext::MAX_TEXTURE_IMAGE_UNITS)?
-            .as_f64().unwrap_or(0.0) as usize;
-        let vertex_shader = compile_milkrust_shader(
-            &gl,
-            web_sys::WebGl2RenderingContext::VERTEX_SHADER,
-            MILKRUST_WEBGL_VERTEX_SHADER,
-        )?;
-        let fragment_shader = compile_milkrust_shader(
-            &gl,
-            web_sys::WebGl2RenderingContext::FRAGMENT_SHADER,
-            MILKRUST_WEBGL_FRAGMENT_SHADER,
-        )?;
-        let program = link_milkrust_program(&gl, &vertex_shader, &fragment_shader)?;
-        gl.use_program(Some(&program));
-        let primitive_vertex_shader = compile_milkrust_shader(
-            &gl,
-            web_sys::WebGl2RenderingContext::VERTEX_SHADER,
-            MILKRUST_PRIMITIVE_VERTEX_SHADER,
-        )?;
-        let primitive_fragment_shader = compile_milkrust_shader(
-            &gl,
-            web_sys::WebGl2RenderingContext::FRAGMENT_SHADER,
-            MILKRUST_PRIMITIVE_FRAGMENT_SHADER,
-        )?;
-        let primitive_program =
-            link_milkrust_program(&gl, &primitive_vertex_shader, &primitive_fragment_shader)?;
-        let textured_vertex_shader = compile_milkrust_shader(
-            &gl,
-            web_sys::WebGl2RenderingContext::VERTEX_SHADER,
-            MILKRUST_TEXTURED_VERTEX_SHADER,
-        )?;
-        let textured_fragment_shader = compile_milkrust_shader(
-            &gl,
-            web_sys::WebGl2RenderingContext::FRAGMENT_SHADER,
-            MILKRUST_TEXTURED_FRAGMENT_SHADER,
-        )?;
-        let textured_program =
-            link_milkrust_program(&gl, &textured_vertex_shader, &textured_fragment_shader)?;
-        let warp_vertex_shader = compile_milkrust_shader(
-            &gl,
-            web_sys::WebGl2RenderingContext::VERTEX_SHADER,
-            MILKRUST_WARP_GRID_VERTEX_SHADER,
-        )?;
-        let warp_fragment_shader = compile_milkrust_shader(
-            &gl,
-            web_sys::WebGl2RenderingContext::FRAGMENT_SHADER,
-            MILKRUST_WARP_GRID_FRAGMENT_SHADER,
-        )?;
-        let warp_program = link_milkrust_program(&gl, &warp_vertex_shader, &warp_fragment_shader)?;
-
-        let buffer = gl
-            .create_buffer()
-            .ok_or_else(|| JsValue::from_str("WebGL buffer allocation failed"))?;
-        gl.bind_buffer(web_sys::WebGl2RenderingContext::ARRAY_BUFFER, Some(&buffer));
-        let vertices =
-            js_sys::Float32Array::from(&[-1.0_f32, -1.0, 1.0, -1.0, -1.0, 1.0, 1.0, 1.0][..]);
-        gl.buffer_data_with_array_buffer_view(
-            web_sys::WebGl2RenderingContext::ARRAY_BUFFER,
-            &vertices,
-            web_sys::WebGl2RenderingContext::STATIC_DRAW,
-        );
-        let position = gl.get_attrib_location(&program, "position");
-        if position >= 0 {
-            gl.enable_vertex_attrib_array(position as u32);
-            gl.vertex_attrib_pointer_with_i32(
-                position as u32,
-                2,
-                web_sys::WebGl2RenderingContext::FLOAT,
-                false,
-                0,
-                0,
-            );
-        }
-        let primitive_buffer = gl
-            .create_buffer()
-            .ok_or_else(|| JsValue::from_str("WebGL primitive buffer allocation failed"))?;
-        let primitive_color_buffer = gl
-            .create_buffer()
-            .ok_or_else(|| JsValue::from_str("WebGL primitive color buffer allocation failed"))?;
-        let textured_position_buffer = gl
-            .create_buffer()
-            .ok_or_else(|| JsValue::from_str("WebGL textured position buffer allocation failed"))?;
-        let textured_uv_buffer = gl
-            .create_buffer()
-            .ok_or_else(|| JsValue::from_str("WebGL textured UV buffer allocation failed"))?;
-        let placeholder_texture = create_milkrust_placeholder_texture(&gl)?;
-        let warp_position_buffer = gl
-            .create_buffer()
-            .ok_or_else(|| JsValue::from_str("WebGL warp position buffer allocation failed"))?;
-        let warp_uv_buffer = gl
-            .create_buffer()
-            .ok_or_else(|| JsValue::from_str("WebGL warp UV buffer allocation failed"))?;
-        let feedback_targets = RefCell::new(create_milkrust_feedback_targets(
-            &gl,
-            gl.drawing_buffer_width().max(1),
-            gl.drawing_buffer_height().max(1),
-        )?);
-
-        Ok(Self {
-            u_color: gl.get_uniform_location(&program, "u_color"),
-            u_counts: gl.get_uniform_location(&program, "u_counts"),
-            u_display_only: gl.get_uniform_location(&program, "u_displayOnly"),
-            u_feedback: gl.get_uniform_location(&program, "u_feedback"),
-            u_motion: gl.get_uniform_location(&program, "u_motion"),
-            u_output_alpha: gl.get_uniform_location(&program, "u_outputAlpha"),
-            u_previous_frame: gl.get_uniform_location(&program, "u_previousFrame"),
-            u_primitive_point_size: gl
-                .get_uniform_location(&primitive_program, "u_primitivePointSize"),
-            u_resolution: gl.get_uniform_location(&program, "u_resolution"),
-            u_textured_alpha: gl.get_uniform_location(&textured_program, "u_alpha"),
-            u_textured_sampler: gl.get_uniform_location(&textured_program, "u_texture"),
-            u_textured_tint: gl.get_uniform_location(&textured_program, "u_tint"),
-            u_time: gl.get_uniform_location(&program, "u_time"),
-            u_warp_color: gl.get_uniform_location(&warp_program, "u_color"),
-            u_warp_feedback: gl.get_uniform_location(&warp_program, "u_feedback"),
-            u_warp_output_alpha: gl.get_uniform_location(&warp_program, "u_outputAlpha"),
-            u_warp_previous_frame: gl.get_uniform_location(&warp_program, "u_previousFrame"),
-            warp_position_buffer,
-            warp_program,
-            warp_uv_buffer,
-            buffer,
-            feedback_targets,
-            gl,
-            named_textures: RefCell::new(BTreeMap::new()),
-            texture_pixels: Rc::new(Cell::new(0)),
-            max_texture_units,
-            primitive_buffer,
-            primitive_color_buffer,
-            primitive_program,
-            placeholder_texture,
-            program,
-            textured_position_buffer,
-            textured_program,
-            textured_uv_buffer,
-            texture_assets,
-            translated_warp_program: RefCell::new(None),
-            translated_composite_program: RefCell::new(None),
-        })
-    }
-
-    fn render_with_options(
-        &self,
-        frame: &MilkRustFrame,
-        time: f64,
-        clear_screen: bool,
-        composite_mode: &str,
-        output_alpha: f64,
-    ) -> Result<(), JsValue> {
-        let (warp_program, composite_program) = self.prepare_stages(frame)?;
-        self.gl.use_program(Some(&self.program));
-        self.gl.bind_buffer(
-            web_sys::WebGl2RenderingContext::ARRAY_BUFFER,
-            Some(&self.buffer),
-        );
-        let drawing_width = self.gl.drawing_buffer_width().max(1);
-        let drawing_height = self.gl.drawing_buffer_height().max(1);
-        let mut targets = self.feedback_targets.borrow_mut();
-        if targets.width != drawing_width || targets.height != drawing_height {
-            let next_targets = create_milkrust_feedback_targets(&self.gl, drawing_width, drawing_height)?;
-            delete_milkrust_feedback_targets(&self.gl, &targets);
-            *targets = next_targets;
-        }
-        let read_index = targets.read_index;
-        let write_index = 1 - read_index;
-
-        self.gl
-            .active_texture(web_sys::WebGl2RenderingContext::TEXTURE0);
-        self.gl.bind_texture(
-            web_sys::WebGl2RenderingContext::TEXTURE_2D,
-            Some(&targets.targets[read_index].texture),
-        );
-        self.gl.bind_framebuffer(
-            web_sys::WebGl2RenderingContext::FRAMEBUFFER,
-            Some(&targets.targets[write_index].framebuffer),
-        );
-        self.gl.disable(web_sys::WebGl2RenderingContext::BLEND);
-        if frame.warp_mesh.is_some() {
-            self.draw_warp_mesh(frame, drawing_width, drawing_height, warp_program.as_ref(), time);
-        } else if let Some(program) = warp_program {
-            self.draw_translated_quad(&program, frame, &frame.shader_stages.warp,
-                time, drawing_width, drawing_height, true, 1.0);
-        } else {
-            self.draw_feedback_quad(frame, time, drawing_width, drawing_height, false, 1.0);
-        }
-        self.draw_textured_primitives(frame, &targets.targets[read_index].texture)?;
-        self.draw_primitives(frame);
-
-        self.gl
-            .bind_framebuffer(web_sys::WebGl2RenderingContext::FRAMEBUFFER, None);
-        self.gl.active_texture(web_sys::WebGl2RenderingContext::TEXTURE0);
-        self.gl.bind_texture(
-            web_sys::WebGl2RenderingContext::TEXTURE_2D,
-            Some(&targets.targets[write_index].texture),
-        );
-        if clear_screen {
-            self.gl.clear_color(0.0, 0.0, 0.0, 1.0);
-            self.gl
-                .clear(web_sys::WebGl2RenderingContext::COLOR_BUFFER_BIT);
-        }
-        let output_alpha = if clear_screen { 1.0 } else { clamp_unit(output_alpha) as f32 };
-        let should_blend = !clear_screen;
-        if should_blend {
-            self.gl.enable(web_sys::WebGl2RenderingContext::BLEND);
-            let (source_factor, destination_factor) =
-                milkrust_webgl_composite_blend_factors(composite_mode);
-            self.gl.blend_func_separate(source_factor, destination_factor, web_sys::WebGl2RenderingContext::ONE, destination_factor);
-        }
-        if let Some(program) = composite_program {
-            self.draw_translated_quad(&program, frame, &frame.shader_stages.composite,
-                time, drawing_width, drawing_height, false, output_alpha);
-        } else { self.draw_feedback_quad(
-            frame,
-            time,
-            drawing_width,
-            drawing_height,
-            true,
-            output_alpha,
-        ); }
-        if should_blend {
-            self.gl.disable(web_sys::WebGl2RenderingContext::BLEND);
-        }
-        targets.read_index = write_index;
-        if self.gl.get_error() != web_sys::WebGl2RenderingContext::NO_ERROR {
-            return Err(JsValue::from_str("WebGL failed while drawing a preset stage"));
-        }
-        Ok(())
-    }
-
-    fn draw_warp_mesh(&self, frame: &MilkRustFrame, drawing_width: i32, drawing_height: i32,
-        translated: Option<&web_sys::WebGlProgram>, time: f64) {
-        let Some(mesh) = frame.warp_mesh.as_ref() else {
-            return;
-        };
-        if mesh.positions.len() < 6 || mesh.positions.len() != mesh.source_uvs.len() {
-            return;
-        }
-        let program = translated.unwrap_or(&self.warp_program);
-        self.gl.use_program(Some(program));
-        self.gl.viewport(0, 0, drawing_width, drawing_height);
-        self.gl.clear_color(0.0, 0.0, 0.0, 1.0);
-        self.gl
-            .clear(web_sys::WebGl2RenderingContext::COLOR_BUFFER_BIT);
-        let positions = mesh
-            .positions
-            .iter()
-            .map(|value| *value as f32)
-            .collect::<Vec<_>>();
-        let source_uvs = mesh
-            .source_uvs
-            .iter()
-            .map(|value| *value as f32)
-            .collect::<Vec<_>>();
-        let positions_array = js_sys::Float32Array::from(positions.as_slice());
-        let source_uvs_array = js_sys::Float32Array::from(source_uvs.as_slice());
-        let position = self.gl.get_attrib_location(program, "position");
-        let source_uv = self.gl.get_attrib_location(program, "sourceUv");
-        self.gl.bind_buffer(
-            web_sys::WebGl2RenderingContext::ARRAY_BUFFER,
-            Some(&self.warp_position_buffer),
-        );
-        self.gl.buffer_data_with_array_buffer_view(
-            web_sys::WebGl2RenderingContext::ARRAY_BUFFER,
-            &positions_array,
-            web_sys::WebGl2RenderingContext::DYNAMIC_DRAW,
-        );
-        if position >= 0 {
-            self.gl.enable_vertex_attrib_array(position as u32);
-            self.gl.vertex_attrib_pointer_with_i32(
-                position as u32,
-                2,
-                web_sys::WebGl2RenderingContext::FLOAT,
-                false,
-                0,
-                0,
-            );
-        }
-        self.gl.bind_buffer(
-            web_sys::WebGl2RenderingContext::ARRAY_BUFFER,
-            Some(&self.warp_uv_buffer),
-        );
-        self.gl.buffer_data_with_array_buffer_view(
-            web_sys::WebGl2RenderingContext::ARRAY_BUFFER,
-            &source_uvs_array,
-            web_sys::WebGl2RenderingContext::DYNAMIC_DRAW,
-        );
-        if source_uv >= 0 {
-            self.gl.enable_vertex_attrib_array(source_uv as u32);
-            self.gl.vertex_attrib_pointer_with_i32(
-                source_uv as u32,
-                2,
-                web_sys::WebGl2RenderingContext::FLOAT,
-                false,
-                0,
-                0,
-            );
-        }
-        if translated.is_some() {
-            self.set_translated_uniforms(program, frame, &frame.shader_stages.warp,
-                time, drawing_width, drawing_height, true, 1.0);
-        } else {
-        let (r, g, b) = frame.wave_color;
-        self.gl.uniform3f(
-            self.u_warp_color.as_ref(),
-            r as f32 / 255.0,
-            g as f32 / 255.0,
-            b as f32 / 255.0,
-        );
-        self.gl.uniform1f(
-            self.u_warp_feedback.as_ref(),
-            (1.0 - frame.background_alpha).clamp(0.0, 1.0) as f32,
-        );
-        self.gl.uniform1f(self.u_warp_output_alpha.as_ref(), 1.0);
-        self.gl.uniform1i(self.u_warp_previous_frame.as_ref(), 0);
-        }
-        self.gl.draw_arrays(
-            web_sys::WebGl2RenderingContext::TRIANGLES,
-            0,
-            (positions.len() / 2) as i32,
-        );
-    }
-
-    fn prepare_stages(&self, frame: &MilkRustFrame) -> Result<(Option<web_sys::WebGlProgram>, Option<web_sys::WebGlProgram>), JsValue> {
-        let units = self.max_texture_units;
-        if frame.shader_stages.warp.texture_samplers.len() + 2 > units ||
-            frame.shader_stages.composite.texture_samplers.len() + 2 > units {
-            return Err(JsValue::from_str("Preset exceeds the GPU texture-unit limit"));
-        }
-        let warp = self.translated_program_for(&frame.shader_stages.warp, &self.translated_warp_program,
-            frame.warp_mesh.is_some()).map_err(|e| JsValue::from_str(&format!("Warp shader: {}", e.as_string().unwrap_or_default())))?;
-        let composite = self.translated_program_for(&frame.shader_stages.composite, &self.translated_composite_program,
-            false).map_err(|e| JsValue::from_str(&format!("Composite shader: {}", e.as_string().unwrap_or_default())))?;
-        Ok((warp, composite))
-    }
-
-    fn translated_program_for(&self, stage: &MilkRustShaderStage,
-        cache: &RefCell<Option<MilkRustTranslatedProgram>>, mesh: bool) -> Result<Option<web_sys::WebGlProgram>, JsValue> {
-        if !stage.required { return Ok(None); }
-        let source = &stage.source;
-        if source.trim().is_empty() {
-            return Err(JsValue::from_str("the required shader could not be translated"));
-        }
-        if let Some(cached) = cache.borrow().as_ref() {
-            if cached.source == *source && cached.mesh == mesh {
-                return Ok(Some(cached.program.clone()));
-            }
-        }
-        let vertex_shader = compile_milkrust_shader(
-            &self.gl,
-            web_sys::WebGl2RenderingContext::VERTEX_SHADER,
-            if mesh { MILKRUST_TRANSLATED_MESH_VERTEX_SHADER } else { MILKRUST_TRANSLATED_VERTEX_SHADER },
-        )?;
-        let fragment_shader = compile_milkrust_shader(
-            &self.gl,
-            web_sys::WebGl2RenderingContext::FRAGMENT_SHADER,
-            source,
-        ).map_err(|error| { self.gl.delete_shader(Some(&vertex_shader)); error })?;
-        let program = link_milkrust_program(&self.gl, &vertex_shader, &fragment_shader)?;
-        if let Some(previous) = cache.borrow_mut().take() { self.gl.delete_program(Some(&previous.program)); }
-        *cache.borrow_mut() = Some(MilkRustTranslatedProgram {
-            program: program.clone(),
-            source: source.to_string(),
-            mesh,
-        });
-        Ok(Some(program))
-    }
-
-    fn set_translated_uniforms(
-        &self,
-        program: &web_sys::WebGlProgram,
-        frame: &MilkRustFrame,
-        stage: &MilkRustShaderStage,
-        time: f64,
-        drawing_width: i32,
-        drawing_height: i32,
-        warp: bool,
-        output_alpha: f32,
-    ) {
-        let (r, g, b) = frame.wave_color;
-        let feedback = (1.0 - frame.background_alpha).clamp(0.0, 1.0) as f32;
-        let uniform = |name: &str| self.gl.get_uniform_location(program, name);
-        self.gl.uniform3f(
-            uniform("color").as_ref(),
-            r as f32 / 255.0,
-            g as f32 / 255.0,
-            b as f32 / 255.0,
-        );
-        self.gl.uniform1i(uniform("previousFrame").as_ref(), 0);
-        for index in 0..stage.texture_samplers.len() {
-            let texture_unit = index + 2;
-            self.gl
-                .active_texture(web_sys::WebGl2RenderingContext::TEXTURE0 + texture_unit as u32);
-            let texture = stage
-                .texture_samplers
-                .get(index)
-                .and_then(|name| self.named_texture_for(name).ok().flatten())
-                .unwrap_or_else(|| self.placeholder_texture.clone());
-            self.gl
-                .bind_texture(web_sys::WebGl2RenderingContext::TEXTURE_2D, Some(&texture));
-            self.gl.uniform1i(
-                uniform(&format!("shaderTexture{index}")).as_ref(),
-                texture_unit as i32,
-            );
-        }
-        self.gl
-            .active_texture(web_sys::WebGl2RenderingContext::TEXTURE0);
-        self.gl.uniform1f(uniform("feedback").as_ref(), feedback);
-        self.gl.uniform1f(uniform("outputAlpha").as_ref(), output_alpha);
-        self.gl.uniform1f(uniform("isWarp").as_ref(), if warp { 1.0 } else { 0.0 });
-        self.gl.uniform4f(uniform("motion").as_ref(), frame.rotation as f32, frame.zoom as f32,
-            frame.dx as f32, frame.dy as f32);
-        self.gl.uniform1f(uniform("time").as_ref(), time as f32);
-        self.gl.uniform1f(uniform("sampleRate").as_ref(), 44_100.0);
-        self.gl.uniform2f(
-            uniform("resolution").as_ref(),
-            drawing_width as f32,
-            drawing_height as f32,
-        );
-        self.gl.uniform2f(
-            uniform("pixelSize").as_ref(),
-            1.0 / drawing_width.max(1) as f32,
-            1.0 / drawing_height.max(1) as f32,
-        );
-        self.gl.uniform1f(
-            uniform("aspect").as_ref(),
-            drawing_width as f32 / drawing_height.max(1) as f32,
-        );
-        self.gl.uniform4f(
-            uniform("texsize").as_ref(),
-            drawing_width as f32,
-            drawing_height as f32,
-            1.0 / drawing_width.max(1) as f32,
-            1.0 / drawing_height.max(1) as f32,
-        );
-        self.gl
-            .uniform1f(uniform("bass").as_ref(), frame.bass as f32);
-        self.gl
-            .uniform1f(uniform("bass_att").as_ref(), frame.bass as f32);
-        self.gl.uniform1f(uniform("mid").as_ref(), frame.mid as f32);
-        self.gl
-            .uniform1f(uniform("mid_att").as_ref(), frame.mid as f32);
-        self.gl
-            .uniform1f(uniform("treb").as_ref(), frame.treble as f32);
-        self.gl
-            .uniform1f(uniform("treb_att").as_ref(), frame.treble as f32);
-        let fft = frame
-            .fft_bins
-            .iter()
-            .map(|value| *value as f32)
-            .collect::<Vec<_>>();
-        let waveform = frame
-            .waveform_bins
-            .iter()
-            .map(|value| *value as f32)
-            .collect::<Vec<_>>();
-        self.gl
-            .uniform1fv_with_f32_array(uniform("fftBins").as_ref(), &fft);
-        self.gl
-            .uniform1fv_with_f32_array(uniform("waveformBins").as_ref(), &waveform);
-        for (index, value) in frame.q_registers.iter().enumerate() {
-            self.gl
-                .uniform1f(uniform(&format!("q{}", index + 1)).as_ref(), *value as f32);
-        }
-    }
-
-    fn draw_translated_quad(
-        &self,
-        program: &web_sys::WebGlProgram,
-        frame: &MilkRustFrame,
-        stage: &MilkRustShaderStage,
-        time: f64,
-        drawing_width: i32,
-        drawing_height: i32,
-        warp: bool,
-        output_alpha: f32,
-    ) {
-        self.gl.use_program(Some(program));
-        self.gl.bind_buffer(
-            web_sys::WebGl2RenderingContext::ARRAY_BUFFER,
-            Some(&self.buffer),
-        );
-        let position = self.gl.get_attrib_location(program, "position");
-        if position >= 0 {
-            self.gl.enable_vertex_attrib_array(position as u32);
-            self.gl.vertex_attrib_pointer_with_i32(
-                position as u32,
-                2,
-                web_sys::WebGl2RenderingContext::FLOAT,
-                false,
-                0,
-                0,
-            );
-        }
-        self.gl.viewport(0, 0, drawing_width, drawing_height);
-        if warp {
-            self.gl.clear_color(0.0, 0.0, 0.0, 1.0);
-            self.gl.clear(web_sys::WebGl2RenderingContext::COLOR_BUFFER_BIT);
-        }
-        self.set_translated_uniforms(program, frame, stage, time, drawing_width, drawing_height, warp, output_alpha);
-        self.gl
-            .draw_arrays(web_sys::WebGl2RenderingContext::TRIANGLE_STRIP, 0, 4);
-    }
-
-    fn draw_feedback_quad(
-        &self,
-        frame: &MilkRustFrame,
-        time: f64,
-        drawing_width: i32,
-        drawing_height: i32,
-        display_only: bool,
-        output_alpha: f32,
-    ) {
-        self.gl.use_program(Some(&self.program));
-        self.gl.bind_buffer(
-            web_sys::WebGl2RenderingContext::ARRAY_BUFFER,
-            Some(&self.buffer),
-        );
-        let position = self.gl.get_attrib_location(&self.program, "position");
-        if position >= 0 {
-            self.gl.enable_vertex_attrib_array(position as u32);
-            self.gl.vertex_attrib_pointer_with_i32(
-                position as u32,
-                2,
-                web_sys::WebGl2RenderingContext::FLOAT,
-                false,
-                0,
-                0,
-            );
-        }
-        self.gl.viewport(0, 0, drawing_width, drawing_height);
-        if !display_only {
-            self.gl.clear_color(0.0, 0.0, 0.0, 1.0);
-            self.gl
-                .clear(web_sys::WebGl2RenderingContext::COLOR_BUFFER_BIT);
-        }
-        let (r, g, b) = frame.wave_color;
-        let feedback = (1.0 - frame.background_alpha).clamp(0.0, 1.0) as f32;
-        self.gl.uniform1i(self.u_previous_frame.as_ref(), 0);
-        self.gl.uniform1f(
-            self.u_display_only.as_ref(),
-            if display_only { 1.0 } else { 0.0 },
-        );
-        self.gl.uniform1f(self.u_feedback.as_ref(), feedback);
-        self.gl
-            .uniform1f(self.u_output_alpha.as_ref(), output_alpha);
-        self.gl.uniform2f(
-            self.u_resolution.as_ref(),
-            drawing_width as f32,
-            drawing_height as f32,
-        );
-        self.gl.uniform1f(self.u_time.as_ref(), time as f32);
-        self.gl.uniform4f(
-            self.u_color.as_ref(),
-            r as f32 / 255.0,
-            g as f32 / 255.0,
-            b as f32 / 255.0,
-            feedback,
-        );
-        self.gl.uniform4f(
-            self.u_motion.as_ref(),
-            frame.rotation as f32,
-            frame.zoom as f32,
-            frame.dx as f32,
-            frame.dy as f32,
-        );
-        self.gl.uniform2f(
-            self.u_counts.as_ref(),
-            frame.shape_count as f32,
-            frame.waveform_count as f32,
-        );
-        self.gl
-            .draw_arrays(web_sys::WebGl2RenderingContext::TRIANGLE_STRIP, 0, 4);
-    }
-
-    fn draw_primitives(&self, frame: &MilkRustFrame) {
-        if frame.primitives.is_empty() {
-            return;
-        }
-        self.gl.enable(web_sys::WebGl2RenderingContext::BLEND);
-        self.gl.blend_func_separate(
-            web_sys::WebGl2RenderingContext::SRC_ALPHA,
-            web_sys::WebGl2RenderingContext::ONE_MINUS_SRC_ALPHA,
-            web_sys::WebGl2RenderingContext::ONE,
-            web_sys::WebGl2RenderingContext::ONE_MINUS_SRC_ALPHA,
-        );
-        self.gl.use_program(Some(&self.primitive_program));
-        self.gl.bind_buffer(
-            web_sys::WebGl2RenderingContext::ARRAY_BUFFER,
-            Some(&self.primitive_buffer),
-        );
-        let position = self
-            .gl
-            .get_attrib_location(&self.primitive_program, "position");
-        let color = self
-            .gl
-            .get_attrib_location(&self.primitive_program, "color");
-        if position >= 0 {
-            self.gl.enable_vertex_attrib_array(position as u32);
-            self.gl.vertex_attrib_pointer_with_i32(
-                position as u32,
-                2,
-                web_sys::WebGl2RenderingContext::FLOAT,
-                false,
-                0,
-                0,
-            );
-        }
-        for primitive in &frame.primitives {
-            if primitive.vertices.len() < 4 {
-                continue;
-            }
-            let vertices = primitive
-                .vertices
-                .iter()
-                .map(|value| *value as f32)
-                .collect::<Vec<_>>();
-            let vertex_array = js_sys::Float32Array::from(vertices.as_slice());
-            self.gl.buffer_data_with_array_buffer_view(
-                web_sys::WebGl2RenderingContext::ARRAY_BUFFER,
-                &vertex_array,
-                web_sys::WebGl2RenderingContext::DYNAMIC_DRAW,
-            );
-            let vertex_count = vertices.len() / 2;
-            let colors = if primitive.vertex_colors.len() == vertex_count * 4 {
-                primitive.vertex_colors.clone()
-            } else {
-                create_repeated_milkrust_colors(vertex_count, primitive.color)
-            };
-            let colors = colors.iter().map(|value| *value as f32).collect::<Vec<_>>();
-            let color_array = js_sys::Float32Array::from(colors.as_slice());
-            self.gl.bind_buffer(
-                web_sys::WebGl2RenderingContext::ARRAY_BUFFER,
-                Some(&self.primitive_color_buffer),
-            );
-            self.gl.buffer_data_with_array_buffer_view(
-                web_sys::WebGl2RenderingContext::ARRAY_BUFFER,
-                &color_array,
-                web_sys::WebGl2RenderingContext::DYNAMIC_DRAW,
-            );
-            if color >= 0 {
-                self.gl.enable_vertex_attrib_array(color as u32);
-                self.gl.vertex_attrib_pointer_with_i32(
-                    color as u32,
-                    4,
-                    web_sys::WebGl2RenderingContext::FLOAT,
-                    false,
-                    0,
-                    0,
-                );
-            }
-            self.gl.uniform1f(
-                self.u_primitive_point_size.as_ref(),
-                if primitive.mode == MilkRustPrimitiveMode::Points {
-                    2.0
-                } else {
-                    1.0
-                },
-            );
-            let mode = match primitive.mode {
-                MilkRustPrimitiveMode::LineStrip => web_sys::WebGl2RenderingContext::LINE_STRIP,
-                MilkRustPrimitiveMode::Lines => web_sys::WebGl2RenderingContext::LINES,
-                MilkRustPrimitiveMode::Points => web_sys::WebGl2RenderingContext::POINTS,
-                MilkRustPrimitiveMode::TriangleFan => {
-                    web_sys::WebGl2RenderingContext::TRIANGLE_FAN
-                }
-                MilkRustPrimitiveMode::Triangles => web_sys::WebGl2RenderingContext::TRIANGLES,
-            };
-            self.gl.draw_arrays(mode, 0, vertex_count as i32);
-        }
-        self.gl.disable(web_sys::WebGl2RenderingContext::BLEND);
-        self.gl.use_program(Some(&self.program));
-    }
-
-    fn prepare_textures(&self, frame: &MilkRustFrame) -> Result<bool, JsValue> {
-        let mut ready = true;
-        for name in frame.shader_stages.warp.texture_samplers.iter()
-            .chain(&frame.shader_stages.composite.texture_samplers)
-            .chain(frame.textured_primitives.iter().map(|primitive| &primitive.texture_name)) {
-            if name.is_empty() { continue; }
-            if self.named_texture_for(name)?.is_none() { ready = false; }
-        }
-        Ok(ready)
-    }
-
-    fn named_texture_for(&self, raw_name: &str) -> Result<Option<web_sys::WebGlTexture>, JsValue> {
-        if raw_name.is_empty() { return Ok(Some(self.placeholder_texture.clone())); }
-        for alias in get_milkrust_texture_name_aliases(raw_name) {
-            if let Some(asset) = self.named_textures.borrow().get(&alias) {
-                return match asset.state.borrow().as_ref() {
-                    None => Ok(None),
-                    Some(Ok(())) => Ok(Some(asset.texture.clone())),
-                    Some(Err(error)) => Err(JsValue::from_str(&format!("Texture {raw_name}: {error}"))),
-                };
-            }
-            let data_url = self.texture_assets.borrow().get(&alias).cloned();
-            let Some(data_url) = data_url else {
-                continue;
-            };
-            if self.named_textures.borrow().len() >= 64 {
-                return Err(JsValue::from_str("Preset exceeds the 64-texture cache limit"));
-            }
-            let asset = create_milkrust_texture_from_data_url(&self.gl, &data_url, self.texture_pixels.clone())?;
-            self.named_textures
-                .borrow_mut()
-                .insert(alias, asset);
-            return Ok(None);
-        }
-        Err(JsValue::from_str(&format!("Missing texture: {raw_name}")))
-    }
-
-    fn draw_textured_primitives(&self, frame: &MilkRustFrame, previous_frame: &web_sys::WebGlTexture) -> Result<(), JsValue> {
-        if frame.textured_primitives.is_empty() {
-            return Ok(());
-        }
-        self.gl.enable(web_sys::WebGl2RenderingContext::BLEND);
-        self.gl.blend_func_separate(
-            web_sys::WebGl2RenderingContext::SRC_ALPHA,
-            web_sys::WebGl2RenderingContext::ONE_MINUS_SRC_ALPHA,
-            web_sys::WebGl2RenderingContext::ONE,
-            web_sys::WebGl2RenderingContext::ONE_MINUS_SRC_ALPHA,
-        );
-        self.gl.use_program(Some(&self.textured_program));
-        self.gl
-            .active_texture(web_sys::WebGl2RenderingContext::TEXTURE1);
-        self.gl.uniform1i(self.u_textured_sampler.as_ref(), 1);
-        let position = self
-            .gl
-            .get_attrib_location(&self.textured_program, "position");
-        let source_uv = self
-            .gl
-            .get_attrib_location(&self.textured_program, "sourceUv");
-        for primitive in &frame.textured_primitives {
-            if primitive.vertices.len() < 6 || primitive.vertices.len() != primitive.uvs.len() {
-                continue;
-            }
-            self.gl
-                .active_texture(web_sys::WebGl2RenderingContext::TEXTURE1);
-            let texture = if primitive.texture_name.is_empty() { previous_frame.clone() } else {
-                self.named_texture_for(&primitive.texture_name)?
-                    .ok_or_else(|| JsValue::from_str("Texture became unavailable before drawing"))?
-            };
-            self.gl
-                .bind_texture(web_sys::WebGl2RenderingContext::TEXTURE_2D, Some(&texture));
-            let vertices = primitive
-                .vertices
-                .iter()
-                .map(|value| *value as f32)
-                .collect::<Vec<_>>();
-            let uvs = primitive
-                .uvs
-                .iter()
-                .map(|value| *value as f32)
-                .collect::<Vec<_>>();
-            let vertex_array = js_sys::Float32Array::from(vertices.as_slice());
-            let uv_array = js_sys::Float32Array::from(uvs.as_slice());
-            self.gl.bind_buffer(
-                web_sys::WebGl2RenderingContext::ARRAY_BUFFER,
-                Some(&self.textured_position_buffer),
-            );
-            self.gl.buffer_data_with_array_buffer_view(
-                web_sys::WebGl2RenderingContext::ARRAY_BUFFER,
-                &vertex_array,
-                web_sys::WebGl2RenderingContext::DYNAMIC_DRAW,
-            );
-            if position >= 0 {
-                self.gl.enable_vertex_attrib_array(position as u32);
-                self.gl.vertex_attrib_pointer_with_i32(
-                    position as u32,
-                    2,
-                    web_sys::WebGl2RenderingContext::FLOAT,
-                    false,
-                    0,
-                    0,
-                );
-            }
-            self.gl.bind_buffer(
-                web_sys::WebGl2RenderingContext::ARRAY_BUFFER,
-                Some(&self.textured_uv_buffer),
-            );
-            self.gl.buffer_data_with_array_buffer_view(
-                web_sys::WebGl2RenderingContext::ARRAY_BUFFER,
-                &uv_array,
-                web_sys::WebGl2RenderingContext::DYNAMIC_DRAW,
-            );
-            if source_uv >= 0 {
-                self.gl.enable_vertex_attrib_array(source_uv as u32);
-                self.gl.vertex_attrib_pointer_with_i32(
-                    source_uv as u32,
-                    2,
-                    web_sys::WebGl2RenderingContext::FLOAT,
-                    false,
-                    0,
-                    0,
-                );
-            }
-            self.gl.uniform3f(
-                self.u_textured_tint.as_ref(),
-                primitive.color[0] as f32,
-                primitive.color[1] as f32,
-                primitive.color[2] as f32,
-            );
-            self.gl
-                .uniform1f(self.u_textured_alpha.as_ref(), primitive.color[3] as f32);
-            let draw_mode = match primitive.mode {
-                MilkRustTexturedPrimitiveMode::Quad
-                | MilkRustTexturedPrimitiveMode::TriangleFan => {
-                    web_sys::WebGl2RenderingContext::TRIANGLE_FAN
-                }
-            };
-            self.gl
-                .draw_arrays(draw_mode, 0, (vertices.len() / 2) as i32);
-        }
-        self.gl
-            .active_texture(web_sys::WebGl2RenderingContext::TEXTURE0);
-        self.gl.disable(web_sys::WebGl2RenderingContext::BLEND);
-        self.gl.use_program(Some(&self.program));
-        Ok(())
-    }
-}
-
-impl Drop for MilkRustWebGlRenderer {
-    fn drop(&mut self) {
-        delete_milkrust_feedback_targets(&self.gl, self.feedback_targets.get_mut());
-        for buffer in [&self.buffer, &self.primitive_buffer, &self.primitive_color_buffer,
-            &self.textured_position_buffer, &self.textured_uv_buffer, &self.warp_position_buffer, &self.warp_uv_buffer] {
-            self.gl.delete_buffer(Some(buffer));
-        }
-        for program in [&self.program, &self.primitive_program, &self.textured_program, &self.warp_program] {
-            self.gl.delete_program(Some(program));
-        }
-        for cache in [&mut self.translated_warp_program, &mut self.translated_composite_program] {
-            if let Some(program) = cache.get_mut().take() { self.gl.delete_program(Some(&program.program)); }
-        }
-        self.gl.delete_texture(Some(&self.placeholder_texture));
-        for asset in self.named_textures.get_mut().values() { self.gl.delete_texture(Some(&asset.texture)); }
-    }
-}
-
-fn delete_milkrust_feedback_targets(gl: &web_sys::WebGl2RenderingContext, targets: &MilkRustFeedbackTargets) {
-    for target in &targets.targets {
-        gl.delete_framebuffer(Some(&target.framebuffer));
-        gl.delete_texture(Some(&target.texture));
-    }
-}
-
-fn milkrust_webgl_composite_blend_factors(mode: &str) -> (u32, u32) {
-    match mode {
-        "additive" => (
-            web_sys::WebGl2RenderingContext::SRC_ALPHA,
-            web_sys::WebGl2RenderingContext::ONE,
-        ),
-        "screen" => (
-            web_sys::WebGl2RenderingContext::ONE,
-            web_sys::WebGl2RenderingContext::ONE_MINUS_SRC_COLOR,
-        ),
-        "multiply" => (
-            web_sys::WebGl2RenderingContext::DST_COLOR,
-            web_sys::WebGl2RenderingContext::ZERO,
-        ),
-        _ => (
-            web_sys::WebGl2RenderingContext::SRC_ALPHA,
-            web_sys::WebGl2RenderingContext::ONE_MINUS_SRC_ALPHA,
-        ),
-    }
-}
-
-fn create_milkrust_feedback_targets(
-    gl: &web_sys::WebGl2RenderingContext,
-    width: i32,
-    height: i32,
-) -> Result<MilkRustFeedbackTargets, JsValue> {
-    let width = width.max(1);
-    let height = height.max(1);
-    if width > 4096 || height > 4096 || i64::from(width) * i64::from(height) > 8 * 1024 * 1024 {
-        return Err(JsValue::from_str("Render targets exceed 4096 pixels per side or 8 megapixels"));
-    }
-    let first = create_milkrust_feedback_target(gl, width, height)?;
-    let second = match create_milkrust_feedback_target(gl, width, height) {
-        Ok(target) => target,
-        Err(error) => {
-            gl.delete_framebuffer(Some(&first.framebuffer));
-            gl.delete_texture(Some(&first.texture));
-            return Err(error);
-        }
-    };
-    Ok(MilkRustFeedbackTargets {
-        height,
-        read_index: 0,
-        targets: [first, second],
-        width,
-    })
-}
-
-fn create_milkrust_feedback_target(
-    gl: &web_sys::WebGl2RenderingContext,
-    width: i32,
-    height: i32,
-) -> Result<MilkRustFeedbackTarget, JsValue> {
-    let texture = gl
-        .create_texture()
-        .ok_or_else(|| JsValue::from_str("WebGL feedback texture allocation failed"))?;
-    gl.bind_texture(web_sys::WebGl2RenderingContext::TEXTURE_2D, Some(&texture));
-    gl.tex_parameteri(
-        web_sys::WebGl2RenderingContext::TEXTURE_2D,
-        web_sys::WebGl2RenderingContext::TEXTURE_MIN_FILTER,
-        web_sys::WebGl2RenderingContext::LINEAR as i32,
-    );
-    gl.tex_parameteri(
-        web_sys::WebGl2RenderingContext::TEXTURE_2D,
-        web_sys::WebGl2RenderingContext::TEXTURE_MAG_FILTER,
-        web_sys::WebGl2RenderingContext::LINEAR as i32,
-    );
-    gl.tex_parameteri(
-        web_sys::WebGl2RenderingContext::TEXTURE_2D,
-        web_sys::WebGl2RenderingContext::TEXTURE_WRAP_S,
-        web_sys::WebGl2RenderingContext::CLAMP_TO_EDGE as i32,
-    );
-    gl.tex_parameteri(
-        web_sys::WebGl2RenderingContext::TEXTURE_2D,
-        web_sys::WebGl2RenderingContext::TEXTURE_WRAP_T,
-        web_sys::WebGl2RenderingContext::CLAMP_TO_EDGE as i32,
-    );
-    gl.tex_image_2d_with_i32_and_i32_and_i32_and_format_and_type_and_opt_u8_array(
-        web_sys::WebGl2RenderingContext::TEXTURE_2D,
-        0,
-        web_sys::WebGl2RenderingContext::RGBA as i32,
-        width,
-        height,
-        0,
-        web_sys::WebGl2RenderingContext::RGBA,
-        web_sys::WebGl2RenderingContext::UNSIGNED_BYTE,
-        None,
-    )?;
-
-    let framebuffer = gl
-        .create_framebuffer()
-        .ok_or_else(|| JsValue::from_str("WebGL feedback framebuffer allocation failed"))?;
-    gl.bind_framebuffer(
-        web_sys::WebGl2RenderingContext::FRAMEBUFFER,
-        Some(&framebuffer),
-    );
-    gl.framebuffer_texture_2d(
-        web_sys::WebGl2RenderingContext::FRAMEBUFFER,
-        web_sys::WebGl2RenderingContext::COLOR_ATTACHMENT0,
-        web_sys::WebGl2RenderingContext::TEXTURE_2D,
-        Some(&texture),
-        0,
-    );
-    let status = gl.check_framebuffer_status(web_sys::WebGl2RenderingContext::FRAMEBUFFER);
-    if status != web_sys::WebGl2RenderingContext::FRAMEBUFFER_COMPLETE {
-        gl.delete_framebuffer(Some(&framebuffer));
-        gl.delete_texture(Some(&texture));
-        return Err(JsValue::from_str(
-            "WebGL feedback framebuffer is incomplete",
-        ));
-    }
-    gl.viewport(0, 0, width, height);
-    gl.clear_color(0.0, 0.0, 0.0, 1.0);
-    gl.clear(web_sys::WebGl2RenderingContext::COLOR_BUFFER_BIT);
-
-    Ok(MilkRustFeedbackTarget {
-        framebuffer,
-        texture,
-    })
-}
-
-fn create_milkrust_placeholder_texture(
-    gl: &web_sys::WebGl2RenderingContext,
-) -> Result<web_sys::WebGlTexture, JsValue> {
-    let texture = gl
-        .create_texture()
-        .ok_or_else(|| JsValue::from_str("WebGL placeholder texture allocation failed"))?;
-    let pixels = [0u8, 0, 0, 255];
-    gl.bind_texture(web_sys::WebGl2RenderingContext::TEXTURE_2D, Some(&texture));
-    gl.tex_parameteri(
-        web_sys::WebGl2RenderingContext::TEXTURE_2D,
-        web_sys::WebGl2RenderingContext::TEXTURE_MIN_FILTER,
-        web_sys::WebGl2RenderingContext::LINEAR as i32,
-    );
-    gl.tex_parameteri(
-        web_sys::WebGl2RenderingContext::TEXTURE_2D,
-        web_sys::WebGl2RenderingContext::TEXTURE_MAG_FILTER,
-        web_sys::WebGl2RenderingContext::LINEAR as i32,
-    );
-    gl.tex_parameteri(
-        web_sys::WebGl2RenderingContext::TEXTURE_2D,
-        web_sys::WebGl2RenderingContext::TEXTURE_WRAP_S,
-        web_sys::WebGl2RenderingContext::REPEAT as i32,
-    );
-    gl.tex_parameteri(
-        web_sys::WebGl2RenderingContext::TEXTURE_2D,
-        web_sys::WebGl2RenderingContext::TEXTURE_WRAP_T,
-        web_sys::WebGl2RenderingContext::REPEAT as i32,
-    );
-    gl.tex_image_2d_with_i32_and_i32_and_i32_and_format_and_type_and_opt_u8_array(
-        web_sys::WebGl2RenderingContext::TEXTURE_2D,
-        0,
-        web_sys::WebGl2RenderingContext::RGBA as i32,
-        1,
-        1,
-        0,
-        web_sys::WebGl2RenderingContext::RGBA,
-        web_sys::WebGl2RenderingContext::UNSIGNED_BYTE,
-        Some(&pixels),
-    )?;
-    Ok(texture)
-}
-
-fn create_milkrust_texture_from_data_url(
-    gl: &web_sys::WebGl2RenderingContext,
-    data_url: &str,
-    total_pixels: Rc<Cell<u64>>,
-) -> Result<MilkRustTextureAsset, JsValue> {
-    if data_url.len() > 24 * 1024 * 1024 || !["png", "jpeg", "gif", "webp", "bmp"].iter()
-        .any(|kind| data_url.starts_with(&format!("data:image/{kind};base64,"))) {
-        return Err(JsValue::from_str("Texture must be a bounded embedded raster image; URLs and SVG are unavailable"));
-    }
-    let texture = create_milkrust_placeholder_texture(gl)?;
-    let image = web_sys::HtmlImageElement::new()?;
-    let gl_for_load = gl.clone();
-    let texture_for_load = texture.clone();
-    let image_for_load = image.clone();
-    let state = Rc::new(RefCell::new(None));
-    let state_for_load = state.clone();
-    let pixels_for_load = total_pixels.clone();
-    let allocated_pixels = Rc::new(Cell::new(0));
-    let allocated_for_load = allocated_pixels.clone();
-    let onload = Closure::<dyn FnMut(web_sys::Event)>::wrap(Box::new(move |_event| {
-        let width = image_for_load.natural_width();
-        let height = image_for_load.natural_height();
-        let pixels = u64::from(width) * u64::from(height);
-        if width == 0 || height == 0 || width > 4096 || height > 4096 ||
-            pixels > 8 * 1024 * 1024 ||
-            pixels_for_load.get().saturating_sub(allocated_for_load.get()) + pixels > 32 * 1024 * 1024 {
-            *state_for_load.borrow_mut() = Some(Err("Decoded image exceeds 4096 pixels per side or 8 megapixels".to_string()));
-            return;
-        }
-        gl_for_load.active_texture(web_sys::WebGl2RenderingContext::TEXTURE0);
-        gl_for_load.bind_texture(
-            web_sys::WebGl2RenderingContext::TEXTURE_2D,
-            Some(&texture_for_load),
-        );
-        let result = gl_for_load.tex_image_2d_with_u32_and_u32_and_html_image_element(
-            web_sys::WebGl2RenderingContext::TEXTURE_2D,
-            0,
-            web_sys::WebGl2RenderingContext::RGBA as i32,
-            web_sys::WebGl2RenderingContext::RGBA,
-            web_sys::WebGl2RenderingContext::UNSIGNED_BYTE,
-            &image_for_load,
-        );
-        let result = result.map_err(|error| error.as_string().unwrap_or_else(|| "GPU upload failed".to_string()))
-            .and_then(|()| if gl_for_load.get_error() == web_sys::WebGl2RenderingContext::NO_ERROR { Ok(()) }
-                else { Err("GPU texture upload failed".to_string()) });
-        if result.is_ok() {
-            pixels_for_load.set(pixels_for_load.get().saturating_sub(allocated_for_load.get()) + pixels);
-            allocated_for_load.set(pixels);
-        }
-        *state_for_load.borrow_mut() = Some(result);
-    }));
-    let state_for_error = state.clone();
-    let onerror = Closure::<dyn FnMut(web_sys::Event)>::wrap(Box::new(move |_event| {
-        *state_for_error.borrow_mut() = Some(Err("Image could not be decoded".to_string()));
-    }));
-    image.set_onload(Some(onload.as_ref().unchecked_ref()));
-    image.set_onerror(Some(onerror.as_ref().unchecked_ref()));
-    image.set_src(data_url);
-    Ok(MilkRustTextureAsset { texture, image, state, total_pixels, allocated_pixels, _onload: onload, _onerror: onerror })
-}
-
-fn compile_milkrust_shader(
-    gl: &web_sys::WebGl2RenderingContext,
-    shader_type: u32,
-    source: &str,
-) -> Result<web_sys::WebGlShader, JsValue> {
-    let shader = gl
-        .create_shader(shader_type)
-        .ok_or_else(|| JsValue::from_str("WebGL shader allocation failed"))?;
-    gl.shader_source(&shader, source);
-    gl.compile_shader(&shader);
-    if gl
-        .get_shader_parameter(&shader, web_sys::WebGl2RenderingContext::COMPILE_STATUS)
-        .as_bool()
-        .unwrap_or(false)
-    {
-        Ok(shader)
-    } else {
-        let error = gl.get_shader_info_log(&shader).unwrap_or_else(|| "MilkRust WebGL shader compile failed".to_string());
-        gl.delete_shader(Some(&shader));
-        Err(JsValue::from_str(&error))
-    }
-}
-
-fn link_milkrust_program(
-    gl: &web_sys::WebGl2RenderingContext,
-    vertex_shader: &web_sys::WebGlShader,
-    fragment_shader: &web_sys::WebGlShader,
-) -> Result<web_sys::WebGlProgram, JsValue> {
-    let program = gl
-        .create_program()
-        .ok_or_else(|| JsValue::from_str("WebGL program allocation failed"))?;
-    gl.attach_shader(&program, vertex_shader);
-    gl.attach_shader(&program, fragment_shader);
-    gl.link_program(&program);
-    gl.detach_shader(&program, vertex_shader);
-    gl.detach_shader(&program, fragment_shader);
-    gl.delete_shader(Some(vertex_shader));
-    gl.delete_shader(Some(fragment_shader));
-    if gl
-        .get_program_parameter(&program, web_sys::WebGl2RenderingContext::LINK_STATUS)
-        .as_bool()
-        .unwrap_or(false)
-    {
-        Ok(program)
-    } else {
-        let error = gl.get_program_info_log(&program).unwrap_or_else(|| "MilkRust WebGL program link failed".to_string());
-        gl.delete_program(Some(&program));
-        Err(JsValue::from_str(&error))
-    }
-}
-
-const MILKRUST_WEBGL_VERTEX_SHADER: &str = r#"#version 300 es
-in vec2 position;
-out vec2 v_uv;
-void main() {
-  v_uv = position * 0.5 + vec2(0.5);
-  gl_Position = vec4(position, 0.0, 1.0);
-}
-"#;
-
-const MILKRUST_TRANSLATED_VERTEX_SHADER: &str = r#"#version 300 es
-in vec2 position;
-uniform vec4 motion;
-uniform float isWarp;
-out vec2 uv;
-void main() {
-  uv = position * 0.5 + vec2(0.5);
-  if (isWarp > 0.5) {
-    float c = cos(motion.x), s = sin(motion.x);
-    uv = mat2(c, -s, s, c) * (uv - vec2(0.5) - motion.zw) / max(motion.y, 0.001) + vec2(0.5);
-  }
-  gl_Position = vec4(position, 0.0, 1.0);
-}
-"#;
-
-const MILKRUST_TRANSLATED_MESH_VERTEX_SHADER: &str = r#"#version 300 es
-in vec2 position;
-in vec2 sourceUv;
-out vec2 uv;
-void main() {
-  uv = sourceUv;
-  gl_Position = vec4(position, 0.0, 1.0);
-}
-"#;
-
-const MILKRUST_WEBGL_FRAGMENT_SHADER: &str = r#"#version 300 es
-precision highp float;
-uniform vec4 u_motion;
-uniform sampler2D u_previousFrame;
-uniform float u_feedback;
-uniform float u_displayOnly;
-uniform float u_outputAlpha;
-in vec2 v_uv;
-out vec4 outColor;
-void main() {
-  vec2 centered = (v_uv - vec2(0.5)) / max(u_motion.y, 0.001);
-  float s = sin(u_motion.x), c = cos(u_motion.x);
-  vec2 feedbackUv = vec2(c*centered.x-s*centered.y, s*centered.x+c*centered.y) + vec2(0.5) + u_motion.zw;
-  vec2 sampleUv = u_displayOnly > 0.5 ? v_uv : feedbackUv;
-  float retention = u_displayOnly > 0.5 ? 1.0 : clamp(u_feedback, 0.0, 1.0);
-  outColor = vec4(texture(u_previousFrame, clamp(sampleUv, vec2(0.0), vec2(1.0))).rgb * retention, u_outputAlpha);
-}
-"#;
-
-const MILKRUST_PRIMITIVE_VERTEX_SHADER: &str = r#"#version 300 es
-in vec2 position;
-in vec4 color;
-uniform float u_primitivePointSize;
-out vec4 v_color;
-void main() {
-  v_color = color;
-  gl_PointSize = u_primitivePointSize;
-  gl_Position = vec4(position, 0.0, 1.0);
-}
-"#;
-
-const MILKRUST_PRIMITIVE_FRAGMENT_SHADER: &str = r#"#version 300 es
-precision highp float;
-in vec4 v_color;
-out vec4 outColor;
-void main() {
-  outColor = v_color;
-}
-"#;
-
-const MILKRUST_TEXTURED_VERTEX_SHADER: &str = r#"#version 300 es
-in vec2 position;
-in vec2 sourceUv;
-out vec2 v_uv;
-void main() {
-  v_uv = sourceUv;
-  gl_Position = vec4(position, 0.0, 1.0);
-}
-"#;
-
-const MILKRUST_TEXTURED_FRAGMENT_SHADER: &str = r#"#version 300 es
-precision highp float;
-uniform sampler2D u_texture;
-uniform vec3 u_tint;
-uniform float u_alpha;
-in vec2 v_uv;
-out vec4 outColor;
-void main() {
-  vec4 texel = texture(u_texture, v_uv);
-  outColor = vec4(texel.rgb * u_tint, texel.a * u_alpha);
-}
-"#;
-
-const MILKRUST_WARP_GRID_VERTEX_SHADER: &str = r#"#version 300 es
-in vec2 position;
-in vec2 sourceUv;
-out vec2 v_sourceUv;
-void main() {
-  v_sourceUv = sourceUv;
-  gl_Position = vec4(position, 0.0, 1.0);
-}
-"#;
-
-const MILKRUST_WARP_GRID_FRAGMENT_SHADER: &str = r#"#version 300 es
-precision highp float;
-uniform vec3 u_color;
-uniform float u_feedback;
-uniform float u_outputAlpha;
-uniform sampler2D u_previousFrame;
-in vec2 v_sourceUv;
-out vec4 outColor;
-void main() {
-  vec3 previous = texture(u_previousFrame, clamp(v_sourceUv, vec2(0.0), vec2(1.0))).rgb;
-  vec3 base = previous * clamp(u_feedback, 0.0, 1.0);
-  outColor = vec4(base, u_outputAlpha);
-}
-"#;
-
-fn render_milkrust_canvas_frame(
-    context: &web_sys::CanvasRenderingContext2d,
-    canvas: &web_sys::HtmlCanvasElement,
-    frame: &MilkRustFrame,
-    time: f64,
-) {
-    let width = canvas.width() as f64;
-    let height = canvas.height() as f64;
-    context.set_fill_style_str(&format!("rgba(9, 13, 18, {:.3})", frame.background_alpha));
-    context.fill_rect(0.0, 0.0, width, height);
-
-    let (r, g, b) = frame.wave_color;
-    let center_x = width * (0.5 + frame.dx);
-    let center_y = height * (0.5 + frame.dy);
-    let base = width.min(height) * frame.wave_radius * frame.zoom;
-    context.save();
-    let _ = context.translate(center_x, center_y);
-    let _ = context.rotate(frame.rotation + time * 0.08);
-    context.set_stroke_style_str(&format!("rgba({r}, {g}, {b}, 0.92)"));
-    context.set_line_width(2.0);
-    context.begin_path();
-    for index in 0..192 {
-        let unit = index as f64 / 192.0;
-        let angle = unit * std::f64::consts::TAU;
-        let radius = base
-            * (0.72
-                + 0.12 * (time * 1.9 + angle * 3.0).sin()
-                + 0.08 * (time * 2.7 + angle * 7.0).cos());
-        let x = radius * angle.cos();
-        let y = radius * angle.sin();
-        if index == 0 {
-            context.move_to(x, y);
-        } else {
-            context.line_to(x, y);
-        }
-    }
-    context.close_path();
-    context.stroke();
-
-    context.set_fill_style_str(&format!("rgba({r}, {g}, {b}, 0.14)"));
-    context.fill();
-
-    context.set_stroke_style_str("rgba(255, 209, 102, 0.34)");
-    context.set_line_width(1.0);
-    for ring in 1..=4 {
-        context.begin_path();
-        let ring_radius = base * ring as f64 * 0.18 * (1.0 + 0.03 * (time + ring as f64).sin());
-        let _ = context.arc(0.0, 0.0, ring_radius, 0.0, std::f64::consts::TAU);
-        context.stroke();
-    }
-    for shape in 0..frame.shape_count.min(6) {
-        let sides = 3 + (shape % 5);
-        let radius = base * (0.16 + shape as f64 * 0.035);
-        let spin = time * (0.4 + shape as f64 * 0.09);
-        context.begin_path();
-        for side in 0..=sides {
-            let angle = spin + side as f64 / sides as f64 * std::f64::consts::TAU;
-            let x = radius * angle.cos();
-            let y = radius * angle.sin();
-            if side == 0 {
-                context.move_to(x, y);
-            } else {
-                context.line_to(x, y);
-            }
-        }
-        context.set_stroke_style_str(&format!("rgba({r}, {g}, {b}, 0.42)"));
-        context.stroke();
-    }
-    context.restore();
-
-    context.set_stroke_style_str("rgba(216, 232, 225, 0.36)");
-    context.set_line_width(1.5);
-    for wave in 0..frame.waveform_count.clamp(1, 3) {
-        context.begin_path();
-        for index in 0..128 {
-            let x = width * index as f64 / 127.0;
-            let amp = (time * (5.0 + wave as f64) + index as f64 * 0.19).sin()
-                * (0.18 + 0.08 * wave as f64 + 0.18 * (time * 2.0).sin().abs());
-            let baseline = 0.78 - wave as f64 * 0.16;
-            let y = height * (baseline + amp * 0.28);
-            if index == 0 {
-                context.move_to(x, y);
-            } else {
-                context.line_to(x, y);
-            }
-        }
-        context.stroke();
-    }
-    render_milkrust_canvas_primitives(context, width, height, frame);
-    render_milkrust_canvas_textured_primitives(context, width, height, frame);
-}
-
-fn render_milkrust_canvas_overlay_frame(
-    context: &web_sys::CanvasRenderingContext2d,
-    canvas: &web_sys::HtmlCanvasElement,
-    frame: &MilkRustFrame,
-    time: f64,
-) {
-    let width = canvas.width() as f64;
-    let height = canvas.height() as f64;
-    let (r, g, b) = frame.wave_color;
-    context.save();
-    let _ = context.translate(width * (0.5 + frame.dx), height * (0.5 + frame.dy));
-    let _ = context.rotate(frame.rotation + time * 0.05);
-    context.set_stroke_style_str(&format!("rgba({r}, {g}, {b}, 0.68)"));
-    context.set_line_width(1.5);
-    let base = width.min(height) * frame.wave_radius * frame.zoom;
-    for ring in 0..frame.shape_count.clamp(1, 5) {
-        context.begin_path();
-        let radius = base * (0.22 + ring as f64 * 0.11);
-        let _ = context.arc(0.0, 0.0, radius, 0.0, std::f64::consts::TAU);
-        context.stroke();
-    }
-    context.restore();
-    render_milkrust_canvas_primitives(context, width, height, frame);
-    render_milkrust_canvas_textured_primitives(context, width, height, frame);
-}
-
-fn milkrust_canvas_color(color: [f64; 4]) -> String {
-    format!(
-        "rgba({:.0}, {:.0}, {:.0}, {:.3})",
-        clamp_unit(color[0]) * 255.0,
-        clamp_unit(color[1]) * 255.0,
-        clamp_unit(color[2]) * 255.0,
-        clamp_unit(color[3])
-    )
-}
-
-fn milkrust_clip_to_canvas(vertex: &[f64], width: f64, height: f64) -> (f64, f64) {
-    (
-        (vertex.first().copied().unwrap_or_default() * 0.5 + 0.5) * width,
-        (1.0 - (vertex.get(1).copied().unwrap_or_default() * 0.5 + 0.5)) * height,
-    )
-}
-
-fn render_milkrust_canvas_primitives(
-    context: &web_sys::CanvasRenderingContext2d,
-    width: f64,
-    height: f64,
-    frame: &MilkRustFrame,
-) {
-    for primitive in &frame.primitives {
-        if primitive.vertices.len() < 4 {
-            continue;
-        }
-        let color = milkrust_canvas_color(primitive.color);
-        match primitive.mode {
-            MilkRustPrimitiveMode::LineStrip => {
-                context.begin_path();
-                for (index, vertex) in primitive.vertices.chunks(2).enumerate() {
-                    let (x, y) = milkrust_clip_to_canvas(vertex, width, height);
-                    if index == 0 {
-                        context.move_to(x, y);
-                    } else {
-                        context.line_to(x, y);
-                    }
-                }
-                context.set_stroke_style_str(&color);
-                context.set_line_width(1.5);
-                context.stroke();
-            }
-            MilkRustPrimitiveMode::Lines => {
-                context.set_stroke_style_str(&color);
-                context.set_line_width(1.0);
-                for line in primitive.vertices.chunks(4) {
-                    if line.len() < 4 {
-                        continue;
-                    }
-                    let (x1, y1) = milkrust_clip_to_canvas(&line[0..2], width, height);
-                    let (x2, y2) = milkrust_clip_to_canvas(&line[2..4], width, height);
-                    context.begin_path();
-                    context.move_to(x1, y1);
-                    context.line_to(x2, y2);
-                    context.stroke();
-                }
-            }
-            MilkRustPrimitiveMode::Points => {
-                context.set_fill_style_str(&color);
-                for vertex in primitive.vertices.chunks(2) {
-                    let (x, y) = milkrust_clip_to_canvas(vertex, width, height);
-                    context.begin_path();
-                    let _ = context.arc(x, y, 2.0, 0.0, std::f64::consts::TAU);
-                    context.fill();
-                }
-            }
-            MilkRustPrimitiveMode::TriangleFan => {
-                context.begin_path();
-                for (index, vertex) in primitive.vertices.chunks(2).enumerate() {
-                    let (x, y) = milkrust_clip_to_canvas(vertex, width, height);
-                    if index == 0 {
-                        context.move_to(x, y);
-                    } else {
-                        context.line_to(x, y);
-                    }
-                }
-                context.close_path();
-                context.set_fill_style_str(&color);
-                context.fill();
-            }
-            MilkRustPrimitiveMode::Triangles => {
-                context.set_fill_style_str(&color);
-                for triangle in primitive.vertices.chunks(6) {
-                    if triangle.len() < 6 {
-                        continue;
-                    }
-                    context.begin_path();
-                    let (x1, y1) = milkrust_clip_to_canvas(&triangle[0..2], width, height);
-                    let (x2, y2) = milkrust_clip_to_canvas(&triangle[2..4], width, height);
-                    let (x3, y3) = milkrust_clip_to_canvas(&triangle[4..6], width, height);
-                    context.move_to(x1, y1);
-                    context.line_to(x2, y2);
-                    context.line_to(x3, y3);
-                    context.close_path();
-                    context.fill();
-                }
-            }
-        }
-    }
-}
-
-fn render_milkrust_canvas_textured_primitives(
-    context: &web_sys::CanvasRenderingContext2d,
-    width: f64,
-    height: f64,
-    frame: &MilkRustFrame,
-) {
-    for primitive in &frame.textured_primitives {
-        if primitive.vertices.len() < 6 {
-            continue;
-        }
-        context.begin_path();
-        for (index, vertex) in primitive.vertices.chunks(2).enumerate() {
-            let (x, y) = milkrust_clip_to_canvas(vertex, width, height);
-            if index == 0 {
-                context.move_to(x, y);
-            } else {
-                context.line_to(x, y);
-            }
-        }
-        context.close_path();
-        context.set_fill_style_str(&milkrust_canvas_color(primitive.color));
-        context.fill();
-        context.set_stroke_style_str("rgba(255, 255, 255, 0.22)");
-        context.set_line_width(1.0);
-        context.stroke();
-    }
-}
+YªçŠx-®éÜj×¢ëiºÚ+Š§j[h‘éÜ¢éíÛ}¹Ù:-jZ.¶›­–)Þ³WW6R7FC£§¶6VÆÃ£§´6VÆÂÂ&Vd6VÆÇÒÂ6öÆÆV7F–öç3£¤%G&VTÖÂ&3£¥&7Ó° §W6RÖ–Æ·'W7Eö6÷&S£§°¢6Æ×÷Væ—BÂ7&VFU÷&WVFVEöÖ–Æ·'W7Eö6öÆ÷'2ÂvWEöÖ–Æ·'W7E÷FW‡GW&UöæÖUöÆ–6W2À¢Ö–Æ³"ÂÖ–Æµ'W7D6ö×÷6—FTg&ÖRÂÖ–Æµ'W7Dg&ÖRÂÖ–Æµ'W7Dg&ÖU6WBÂÖ–Æµ'W7E&–Ö—F—fTÖöFRÂÖ–Æµ'W7EFW‡GW&VE&–Ö—F—fTÖöFRÀ¢Ö–Æµ'W7E6†FW%7FvRÀ§Ó°§W6Rv6Õö&–æFvVã£§·&VÇVFS£¢¢Â§467GÓ° ¢5¶FW&—fR„6ÆöæRÂ6÷’•Ð§7G'V7BG&ç6—F–öåVæ–f÷&×2°¢GFW&ã¢“3"À¢&öw&W73¢c3"À¢F—&V7F–öã¢c3"À¢&æFöÓ¢¶c3#²UÒÀ§Ð ¦–×ÂG&ç6—F–öåVæ–f÷&×2°¢fâg&öÕöVçG'’†VçG'“¢dÖ–Æµ'W7D6ö×÷6—FTg&ÖR’Óâ6VÆb°¢6VÆb°¢GFW&ã¢Ö–Æ³#£¦&ÆVæE÷GFW&åö6öFR‚fVçG'’æ&ÆVæE÷GFW&â’çVçw&ö÷"ƒ’À¢&öw&W73¢6Æ×÷Væ—B†VçG'’æ&ÆVæEöÇ†’2c3"À¢F—&V7F–öã¢VçG'’æ&ÆVæEöF—&V7F–öâ2c3"À¢&æFöÓ¢VçG'’æ&ÆVæE÷&æFöÒæÖ‡ÇfÇVWÂfÇVR2c3"’À¢Ð¢Ð ¢fâfFR‚’Óâ6VÆb°¢6VÆb²GFW&ã¢Â&öw&W73¢ãÂF—&V7F–öã¢ãÂ&æFöÓ¢³ã²UÒÐ¢Ð ¢fâ÷WGWEöÇ†‡6VÆbÂ6ÆV%÷67&VVã¢&ööÂ’Óâc3"°¢–b6ÆV%÷67&VVâÇÂ6VÆbçGFW&âÒ²ãÐ¢VÇ6R²6VÆbç&öw&W72Ð¢Ð§Ð ¦fâ6WE÷G&ç6—F–öå÷Væ–f÷&×2€¢vÃ¢gvV%÷7—3£¥vV$vÃ%&VæFW&–æt6öçFW‡BÀ¢&öw&Ó¢gvV%÷7—3£¥vV$vÅ&öw&ÒÀ¢G&ç6—F–öã¢G&ç6—F–öåVæ–f÷&×2À¢v–GFƒ¢“3"À¢†V–v‡C¢“3"À¢’°¢ÆWBVæ–f÷&ÒÒÆæÖS¢g7G'ÂvÂævWE÷Væ–f÷&ÕöÆö6F–öâ‡&öw&ÒÂæÖR“°¢vÂçVæ–f÷&Ó’‡Væ–f÷&Ò‚'U÷G&ç6—F–öåGFW&â"’æ5÷&Vb‚’ÂG&ç6—F–öâçGFW&â“°¢vÂçVæ–f÷&Ób‡Væ–f÷&Ò‚'U÷G&ç6—F–öå&öw&W72"’æ5÷&Vb‚’ÂG&ç6—F–öâç&öw&W72“°¢vÂçVæ–f÷&Ób‡Væ–f÷&Ò‚'U÷G&ç6—F–öäF—&V7F–öâ"’æ5÷&Vb‚’ÂG&ç6—F–öâæF—&V7F–öâ“°¢f÷"†–æFW‚ÂfÇVR’–âG&ç6—F–öâç&æFöÒæ—FW"‚’æVçVÖW&FR‚’°¢vÂçVæ–f÷&Ób‡Væ–f÷&Ò‚ff÷&ÖB‚'U÷G&ç6—F–öå&æFö×·Ò"Â–æFW‚²’’æ5÷&Vb‚’Â§fÇVR“°¢Ð¢vÂçVæ–f÷&Ó&b‡Væ–f÷&Ò‚'U÷G&ç6—F–öå&W6öÇWF–öâ"’æ5÷&Vb‚’Âv–GF‚2c3"Â†V–v‡B2c3"“°§Ð §V"VçVÒÖ–Æµ'W7E&VæFW&W"°¢vV$vÂ„Ö–Æµ'W7EvV$vÅ&VæFW&W%6WB’À¢6çf2°¢6çf3¢vV%÷7—3£¤‡FÖÄ6çf4VÆVÖVçBÀ¢6öçFW‡C¢vV%÷7—3£¤6çf5&VæFW&–æt6öçFW‡C&BÀ¢ÒÀ§Ð ¦–×ÂÖ–Æµ'W7E&VæFW&W"°¢V"fâÆ&VÂ‚g6VÆb’Óâbw7FF–27G"°¢ÖF6‚6VÆb°¢6VÆc£¥vV$vÂ…ò’Óâ%'W7BvV$tÃ"&VæFW&W"7F—fR"À¢6VÆc£¤6çf2²ââÒÓâ$6çf2&VæFW&W"fÆÆ&6²7F—fR"À¢Ð¢Ð ¢V"fâ&W6WB‚g6VÆb’°¢–bÆWB6VÆc£¥vV$vÂ‡&VæFW&W%÷6WB’Ò6VÆb²&VæFW&W%÷6WBç&VæFW&W'2æ&÷'&÷uö×WB‚’æ6ÆV"‚“²Ð¢Ð ¢V"fâ&VæFW%ög&ÖU÷6WB‚g6VÆbÂg&ÖU÷6WC¢dÖ–Æµ'W7Dg&ÖU6WBÂF–ÖS¢ccB’Óâ&W7VÇCÆ&ööÂÂ§5fÇVSâ°¢–bg&ÖU÷6WBæVçG&–W2æ—5öV×G’‚’°¢&WGW&âW'"„§5fÇVS£¦g&öÕ÷7G"‚$æò&W6WBg&ÖW2Fò&VæFW""’“°¢Ð¢ÖF6‚6VÆb°¢6VÆc£¥vV$vÂ‡&VæFW&W%÷6WB’Óâ&VæFW&W%÷6WBç&VæFW%ög&ÖU÷6WB†g&ÖU÷6WBÂF–ÖR’À¢6VÆc£¤6çf2²6çf2Â6öçFW‡BÒÓâ°¢–bg&ÖU÷6WBæVçG&–W2æ—FW"‚’æç’‡ÆVçG'—ÂVçG'’æg&ÖRç6†FW%÷7FvW2çv'ç&WV—&VBÇÀ¢VçG'’æg&ÖRç6†FW%÷7FvW2æ6ö×÷6—FRç&WV—&VBÇÂVçG'’æg&ÖRçv'öÖW6‚æ—5÷6öÖR‚’ÇÀ¢VçG'’æg&ÖRçFW‡GW&VE÷&–Ö—F—fW2æ—5öV×G’‚’ÇÀ¢Ö–Æ³#£¦&ÆVæE÷GFW&åö6öFR‚fVçG'’æ&ÆVæE÷GFW&â’æ—5÷6öÖUöæB‡ÇGFW&çÂGFW&âÒ’’°¢&WGW&âW'"„§5fÇVS£¦g&öÕ÷7G"‚$6çf2&Wf–Wr6ææ÷BW†V7WFR&W6WB6†FW'2Âv'ÖW6†W2ÂFW‡GW&VB&–Ö—F—fW2÷"7F–ÂæÖ–Æ³"G&ç6—F–öç2"’“°¢Ð¢f÷"†–æFW‚ÂVçG'’’–âg&ÖU÷6WBæVçG&–W2æ—FW"‚’æVçVÖW&FR‚’°¢6öçFW‡Bç6fR‚“°¢6öçFW‡Bç6WEövÆö&ÅöÇ††6Æ×÷Væ—B†VçG'’æ&ÆVæEöÇ†’“°¢–b–æFW‚ÓÒ°¢&VæFW%öÖ–Æ·'W7Eö6çf5ög&ÖR†6öçFW‡BÂ6çf2ÂfVçG'’æg&ÖRÂF–ÖR“°¢ÒVÇ6R°¢&VæFW%öÖ–Æ·'W7Eö6çf5ö÷fW&Æ•ög&ÖR†6öçFW‡BÂ6çf2ÂfVçG'’æg&ÖRÂF–ÖR“°¢Ð¢6öçFW‡Bç&W7F÷&R‚“°¢Ð¢ö²‡G'VR¢Ð¢Ð¢Ð§Ð §V"7G'V7BÖ–Æµ'W7EvV$vÅ&VæFW&W%6WB°¢vÃ¢vV%÷7—3£¥vV$vÃ%&VæFW&–æt6öçFW‡BÀ¢&VæFW&W'3¢&Vd6VÆÃÅfV3ÄÖ–Æµ'W7EvV$vÅ&VæFW&W#ãâÀ¢FW‡GW&Uö76WG3¢&3Å&Vd6VÆÃÄ%G&VTÖÅ7G&–ærÂ7G&–æsããâÀ§Ð §7G'V7BÖ–Æµ'W7EvV$vÅ&VæFW&W"°¢'VffW#¢vV%÷7—3£¥vV$vÄ'VffW"À¢fVVF&6µ÷F&vWG3¢&Vd6VÆÃÄÖ–Æµ'W7DfVVF&6µF&vWG3âÀ¢vÃ¢vV%÷7—3£¥vV$vÃ%&VæFW&–æt6öçFW‡BÀ¢&–Ö—F—fUö'VffW#¢vV%÷7—3£¥vV$vÄ'VffW"À¢&–Ö—F—fUö6öÆ÷%ö'VffW#¢vV%÷7—3£¥vV$vÄ'VffW"À¢&–Ö—F—fU÷&öw&Ó¢vV%÷7—3£¥vV$vÅ&öw&ÒÀ¢Æ6V†öÆFW%÷FW‡GW&S¢vV%÷7—3£¥vV$vÅFW‡GW&RÀ¢æÖVE÷FW‡GW&W3¢&Vd6VÆÃÄ%G&VTÖÅ7G&–ærÂÖ–Æµ'W7EFW‡GW&T76WCãâÀ¢FW‡GW&U÷—†VÇ3¢&3Ä6VÆÃÇScCãâÀ¢Ö…÷FW‡GW&U÷Væ—G3¢W6—¦RÀ¢&öw&Ó¢vV%÷7—3£¥vV$vÅ&öw&ÒÀ¢FW‡GW&VE÷÷6—F–öåö'VffW#¢vV%÷7—3£¥vV$vÄ'VffW"À¢FW‡GW&VE÷&öw&Ó¢vV%÷7—3£¥vV$vÅ&öw&ÒÀ¢FW‡GW&VE÷Weö'VffW#¢vV%÷7—3£¥vV$vÄ'VffW"À¢G&ç6ÆFVE÷v'÷&öw&Ó¢&Vd6VÆÃÄ÷F–öãÄÖ–Æµ'W7EG&ç6ÆFVE&öw&ÓãâÀ¢G&ç6ÆFVEö6ö×÷6—FU÷&öw&Ó¢&Vd6VÆÃÄ÷F–öãÄÖ–Æµ'W7EG&ç6ÆFVE&öw&ÓãâÀ¢FW‡GW&Uö76WG3¢&3Å&Vd6VÆÃÄ%G&VTÖÅ7G&–ærÂ7G&–æsããâÀ¢Uö6öÆ÷#¢÷F–öãÇvV%÷7—3£¥vV$vÅVæ–f÷&ÔÆö6F–öãâÀ¢Uö6÷VçG3¢÷F–öãÇvV%÷7—3£¥vV$vÅVæ–f÷&ÔÆö6F–öãâÀ¢UöF—7Æ•ööæÇ“¢÷F–öãÇvV%÷7—3£¥vV$vÅVæ–f÷&ÔÆö6F–öãâÀ¢UöfVVF&6³¢÷F–öãÇvV%÷7—3£¥vV$vÅVæ–f÷&ÔÆö6F–öãâÀ¢UöÖ÷F–öã¢÷F–öãÇvV%÷7—3£¥vV$vÅVæ–f÷&ÔÆö6F–öãâÀ¢Uö÷WGWEöÇ†¢÷F–öãÇvV%÷7—3£¥vV$vÅVæ–f÷&ÔÆö6F–öãâÀ¢U÷&Wf–÷W5ög&ÖS¢÷F–öãÇvV%÷7—3£¥vV$vÅVæ–f÷&ÔÆö6F–öãâÀ¢U÷&–Ö—F—fU÷ö–çE÷6—¦S¢÷F–öãÇvV%÷7—3£¥vV$vÅVæ–f÷&ÔÆö6F–öãâÀ¢U÷&W6öÇWF–öã¢÷F–öãÇvV%÷7—3£¥vV$vÅVæ–f÷&ÔÆö6F–öãâÀ¢U÷FW‡GW&VEöÇ†¢÷F–öãÇvV%÷7—3£¥vV$vÅVæ–f÷&ÔÆö6F–öãâÀ¢U÷FW‡GW&VE÷6×ÆW#¢÷F–öãÇvV%÷7—3£¥vV$vÅVæ–f÷&ÔÆö6F–öãâÀ¢U÷FW‡GW&VE÷F–çC¢÷F–öãÇvV%÷7—3£¥vV$vÅVæ–f÷&ÔÆö6F–öãâÀ¢U÷F–ÖS¢÷F–öãÇvV%÷7—3£¥vV$vÅVæ–f÷&ÔÆö6F–öãâÀ¢U÷v'ö6öÆ÷#¢÷F–öãÇvV%÷7—3£¥vV$vÅVæ–f÷&ÔÆö6F–öãâÀ¢U÷v'öfVVF&6³¢÷F–öãÇvV%÷7—3£¥vV$vÅVæ–f÷&ÔÆö6F–öãâÀ¢U÷v'ö÷WGWEöÇ†¢÷F–öãÇvV%÷7—3£¥vV$vÅVæ–f÷&ÔÆö6F–öãâÀ¢U÷v'÷&Wf–÷W5ög&ÖS¢÷F–öãÇvV%÷7—3£¥vV$vÅVæ–f÷&ÔÆö6F–öãâÀ¢v'÷÷6—F–öåö'VffW#¢vV%÷7—3£¥vV$vÄ'VffW"À¢v'÷&öw&Ó¢vV%÷7—3£¥vV$vÅ&öw&ÒÀ¢v'÷Weö'VffW#¢vV%÷7—3£¥vV$vÄ'VffW"À§Ð §7G'V7BÖ–Æµ'W7EG&ç6ÆFVE&öw&Ò°¢&öw&Ó¢vV%÷7—3£¥vV$vÅ&öw&ÒÀ¢6÷W&6S¢7G&–ærÀ¢ÖW6ƒ¢&ööÂÀ§Ð §7G'V7BÖ–Æµ'W7EFW‡GW&T76WB°¢FW‡GW&S¢vV%÷7—3£¥vV$vÅFW‡GW&RÀ¢–ÖvS¢vV%÷7—3£¤‡FÖÄ–ÖvTVÆVÖVçBÀ¢òòæöæRv†–ÆRÆöF–ærÂ6öÖR„ö²’gFW"WÆöBÂ6öÖR„W'"’gFW"FV6öFR÷WÆöBf–ÇW&Rà¢7FFS¢&3Å&Vd6VÆÃÄ÷F–öãÅ&W7VÇCÂ‚’Â7G&–æsãããâÀ¢F÷FÅ÷—†VÇ3¢&3Ä6VÆÃÇScCãâÀ¢ÆÆö6FVE÷—†VÇ3¢&3Ä6VÆÃÇScCãâÀ¢ööæÆöC¢6Æ÷7W&SÆG–âfä×WB‡vV%÷7—3£¤WfVçB“âÀ¢ööæW'&÷#¢6Æ÷7W&SÆG–âfä×WB‡vV%÷7—3£¤WfVçB“âÀ§Ð ¦–×ÂG&÷f÷"Ö–Æµ'W7EFW‡GW&T76WB°¢fâG&÷‚f×WB6VÆb’°¢6VÆbæ–ÖvRç6WEööæÆöB„æöæR“°¢6VÆbæ–ÖvRç6WEööæW'&÷"„æöæR“°¢6VÆbæ–ÖvRç6WE÷7&2‚""“°¢6VÆbçF÷FÅ÷—†VÇ2ç6WB‡6VÆbçF÷FÅ÷—†VÇ2ævWB‚’ç6GW&F–æu÷7V"‡6VÆbæÆÆö6FVE÷—†VÇ2ævWB‚’’“°¢Ð§Ð §7G'V7BÖ–Æµ'W7DfVVF&6µF&vWG2°¢†V–v‡C¢“3"À¢&VEö–æFWƒ¢W6—¦RÀ¢F&vWG3¢´Ö–Æµ'W7DfVVF&6µF&vWC²%ÒÀ¢v–GFƒ¢“3"À§Ð §7G'V7BÖ–Æµ'W7DfVVF&6µF&vWB°¢g&ÖV'VffW#¢vV%÷7—3£¥vV$vÄg&ÖV'VffW"À¢FW‡GW&S¢vV%÷7—3£¥vV$vÅFW‡GW&RÀ§Ð §V"fâÖ–Æ·'W7E÷&VæFW&W"€¢6çf3¢gvV%÷7—3£¤‡FÖÄ6çf4VÆVÖVçBÀ¢FW‡GW&Uö76WG3¢&3Å&Vd6VÆÃÄ%G&VTÖÅ7G&–ærÂ7G&–æsããâÀ¢’Óâ&W7VÇCÄÖ–Æµ'W7E&VæFW&W"Â§5fÇVSâ°¢–bÆWB6öÖR†6öçFW‡B’Ò6çf2ævWEö6öçFW‡B‚'vV&vÃ""“ò°¢–bÆWBö²†vÂ’Ò6öçFW‡BæG–åö–çFó££ÇvV%÷7—3£¥vV$vÃ%&VæFW&–æt6öçFW‡Câ‚’°¢–bÆWBö²‡&VæFW&W"’ÒÖ–Æµ'W7EvV$vÅ&VæFW&W%6WC£¦æWr†vÂÂFW‡GW&Uö76WG2’°¢&WGW&âö²„Ö–Æµ'W7E&VæFW&W#£¥vV$vÂ‡&VæFW&W"’“°¢Ð¢Ð¢Ð¢ÆWB6öçFW‡C¢vV%÷7—3£¤6çf5&VæFW&–æt6öçFW‡C&BÒ6çf0¢ævWEö6öçFW‡B‚#&B"“ð¢æöµö÷%öVÇ6R‡ÇÂ§5fÇVS£¦g&öÕ÷7G"‚#$B6çf2—2Væf–Æ&ÆR"’“ð¢æG–åö–çFò‚“ó°¢ö²„Ö–Æµ'W7E&VæFW&W#£¤6çf2°¢6çf3¢6çf2æ6ÆöæR‚’À¢6öçFW‡BÀ¢Ò§Ð ¦–×ÂÖ–Æµ'W7EvV$vÅ&VæFW&W%6WB°¢fâæWr€¢vÃ¢vV%÷7—3£¥vV$vÃ%&VæFW&–æt6öçFW‡BÀ¢FW‡GW&Uö76WG3¢&3Å&Vd6VÆÃÄ%G&VTÖÅ7G&–ærÂ7G&–æsããâÀ¢’Óâ&W7VÇCÅ6VÆbÂ§5fÇVSâ°¢ö²…6VÆb°¢vÂÀ¢&VæFW&W'3¢&Vd6VÆÃ£¦æWr…fV3£¦æWr‚’’À¢FW‡GW&Uö76WG2À¢Ò¢Ð ¢fâ&VæFW%ög&ÖU÷6WB‚g6VÆbÂg&ÖU÷6WC¢dÖ–Æµ'W7Dg&ÖU6WBÂF–ÖS¢ccB’Óâ&W7VÇCÆ&ööÂÂ§5fÇVSâ°¢–b6VÆbævÂæ—5ö6öçFW‡EöÆ÷7B‚’²&WGW&âW'"„§5fÇVS£¦g&öÕ÷7G"‚%vV$tÂ6öçFW‡BÆ÷7C²&VÆöBF†R&W6WBgFW"&V6÷fW'’"’“²Ð¢6VÆbæVç7W&U÷&VæFW&W%ö6÷VçB†g&ÖU÷6WBæVçG&–W2æÆVâ‚’“ó°¢ÆWB&VæFW&W'2Ò6VÆbç&VæFW&W'2æ&÷'&÷r‚“°¢òò6ö×–ÆRWfW'’&WV—&VB7FvR&Vf÷&R6†æv–ærfVVF&6²÷"F†R6çf2à¢òòf–ÆVB6†FW"æWfW"6–ÆVçFÇ’6VÆV7G2'V–ÇBÖ–âf—7VÂ–ç7FVBà¢f÷"‡&VæFW&W"ÂVçG'’’–â&VæFW&W'2æ—FW"‚’ç¦—‚fg&ÖU÷6WBæVçG&–W2’°¢&VæFW&W"ç&W&U÷7FvW2‚fVçG'’æg&ÖR“ó°¢–b&VæFW&W"ç&W&U÷FW‡GW&W2‚fVçG'’æg&ÖR“ò²&WGW&âö²†fÇ6R“²Ð¢Ð¢f÷"†–æFW‚ÂVçG'’’–âg&ÖU÷6WBæVçG&–W2æ—FW"‚’æVçVÖW&FR‚’°¢–bÆWB6öÖR‡&VæFW&W"’Ò&VæFW&W'2ævWB†–æFW‚’°¢&VæFW&W"ç&VæFW%÷v—F…ö÷F–öç2€¢VçG'’À¢F–ÖRÀ¢–æFW‚ÓÒÀ¢“ó°¢Ð¢Ð¢ö²‡G'VR¢Ð ¢fâVç7W&U÷&VæFW&W%ö6÷VçB‚g6VÆbÂ6÷VçC¢W6—¦R’Óâ&W7VÇCÂ‚’Â§5fÇVSâ°¢–b6÷VçBÓÒÇÂ6÷VçBâ"²&WGW&âW'"„§5fÇVS£¦g&öÕ÷7G"‚$W‡V7FVBöæR÷"Gvò–æFWVæFVçB&W6WB&VæFW"F&vWG2"’“²Ð¢ÆWB×WB&VæFW&W'2Ò6VÆbç&VæFW&W'2æ&÷'&÷uö×WB‚“°¢&VæFW&W'2çG'Væ6FR†6÷VçB“°¢v†–ÆR&VæFW&W'2æÆVâ‚’Â6÷VçB°¢ÆWB&VæFW&W"ÒÖ–Æµ'W7EvV$vÅ&VæFW&W#£¦æWr‡6VÆbævÂæ6ÆöæR‚’Â6VÆbçFW‡GW&Uö76WG2æ6ÆöæR‚’“ó°¢&VæFW&W'2çW6‚‡&VæFW&W"“°¢Ð¢ö²‚‚’¢Ð§Ð ¦–×ÂÖ–Æµ'W7EvV$vÅ&VæFW&W"°¢fâæWr€¢vÃ¢vV%÷7—3£¥vV$vÃ%&VæFW&–æt6öçFW‡BÀ¢FW‡GW&Uö76WG3¢&3Å&Vd6VÆÃÄ%G&VTÖÅ7G&–ærÂ7G&–æsããâÀ¢’Óâ&W7VÇCÅ6VÆbÂ§5fÇVSâ°¢ÆWBÖ…÷FW‡GW&U÷Væ—G2ÒvÂævWE÷&ÖWFW"‡vV%÷7—3£¥vV$vÃ%&VæFW&–æt6öçFW‡C£¤Ô…õDU…EU$Uô”ÔtUõTä•E2“ð¢æ5öccB‚’çVçw&ö÷"ƒã’2W6—¦S°¢ÆWBfW'FW…÷6†FW"Ò6ö×–ÆUöÖ–Æ·'W7E÷6†FW"€¢fvÂÀ¢vV%÷7—3£¥vV$vÃ%&VæFW&–æt6öçFW‡C£¥dU%DU…õ4„DU"À¢Ô”Äµ%U5EõtT$tÅõdU%DU…õ4„DU"À¢“ó°¢ÆWBg&vÖVçE÷6÷W&6RÒf÷&ÖB€¢"7fW'6–öâ3W5Æç&V6—6–öâ†–v‡fÆöCµÆç·ÕÆç·Ò"À¢Ö–Æ³#£¤tÅ4ÅõE$å4•D”ôåôÔ4²À¢Ô”Äµ%U5EõtT$tÅôe$tÔTåEô$ôE’À¢“°¢ÆWBg&vÖVçE÷6†FW"Ò6ö×–ÆUöÖ–Æ·'W7E÷6†FW"€¢fvÂÀ¢vV%÷7—3£¥vV$vÃ%&VæFW&–æt6öçFW‡C£¤e$tÔTåEõ4„DU"À¢fg&vÖVçE÷6÷W&6RÀ¢“ó°¢ÆWB&öw&ÒÒÆ–æµöÖ–Æ·'W7E÷&öw&Ò‚fvÂÂgfW'FW…÷6†FW"Âfg&vÖVçE÷6†FW"“ó°¢vÂçW6U÷&öw&Ò…6öÖR‚g&öw&Ò’“°¢ÆWB&–Ö—F—fU÷fW'FW…÷6†FW"Ò6ö×–ÆUöÖ–Æ·'W7E÷6†FW"€¢fvÂÀ¢vV%÷7—3£¥vV$vÃ%&VæFW&–æt6öçFW‡C£¥dU%DU…õ4„DU"À¢Ô”Äµ%U5Eõ$”Ô•D•dUõdU%DU…õ4„DU"À¢“ó°¢ÆWB&–Ö—F—fUög&vÖVçE÷6†FW"Ò6ö×–ÆUöÖ–Æ·'W7E÷6†FW"€¢fvÂÀ¢vV%÷7—3£¥vV$vÃ%&VæFW&–æt6öçFW‡C£¤e$tÔTåEõ4„DU"À¢Ô”Äµ%U5Eõ$”Ô•D•dUôe$tÔTåEõ4„DU"À¢“ó°¢ÆWB&–Ö—F—fU÷&öw&ÒÐ¢Æ–æµöÖ–Æ·'W7E÷&öw&Ò‚fvÂÂg&–Ö—F—fU÷fW'FW…÷6†FW"Âg&–Ö—F—fUög&vÖVçE÷6†FW"“ó°¢ÆWBFW‡GW&VE÷fW'FW…÷6†FW"Ò6ö×–ÆUöÖ–Æ·'W7E÷6†FW"€¢fvÂÀ¢vV%÷7—3£¥vV$vÃ%&VæFW&–æt6öçFW‡C£¥dU%DU…õ4„DU"À¢Ô”Äµ%U5EõDU…EU$TEõdU%DU…õ4„DU"À¢“ó°¢ÆWBFW‡GW&VEög&vÖVçE÷6†FW"Ò6ö×–ÆUöÖ–Æ·'W7E÷6†FW"€¢fvÂÀ¢vV%÷7—3£¥vV$vÃ%&VæFW&–æt6öçFW‡C£¤e$tÔTåEõ4„DU"À¢Ô”Äµ%U5EõDU…EU$TEôe$tÔTåEõ4„DU"À¢“ó°¢ÆWBFW‡GW&VE÷&öw&ÒÐ¢Æ–æµöÖ–Æ·'W7E÷&öw&Ò‚fvÂÂgFW‡GW&VE÷fW'FW…÷6†FW"ÂgFW‡GW&VEög&vÖVçE÷6†FW"“ó°¢ÆWBv'÷fW'FW…÷6†FW"Ò6ö×–ÆUöÖ–Æ·'W7E÷6†FW"€¢fvÂÀ¢vV%÷7—3£¥vV$vÃ%&VæFW&–æt6öçFW‡C£¥dU%DU…õ4„DU"À¢Ô”Äµ%U5Eõt%ôu$”EõdU%DU…õ4„DU"À¢“ó°¢ÆWBv'ög&vÖVçE÷6†FW"Ò6ö×–ÆUöÖ–Æ·'W7E÷6†FW"€¢fvÂÀ¢vV%÷7—3£¥vV$vÃ%&VæFW&–æt6öçFW‡C£¤e$tÔTåEõ4„DU"À¢Ô”Äµ%U5Eõt%ôu$”Eôe$tÔTåEõ4„DU"À¢“ó°¢ÆWBv'÷&öw&ÒÒÆ–æµöÖ–Æ·'W7E÷&öw&Ò‚fvÂÂgv'÷fW'FW…÷6†FW"Âgv'ög&vÖVçE÷6†FW"“ó° ¢ÆWB'VffW"ÒvÀ¢æ7&VFUö'VffW"‚¢æöµö÷%öVÇ6R‡ÇÂ§5fÇVS£¦g&öÕ÷7G"‚%vV$tÂ'VffW"ÆÆö6F–öâf–ÆVB"’“ó°¢vÂæ&–æEö'VffW"‡vV%÷7—3£¥vV$vÃ%&VæFW&–æt6öçFW‡C£¤%$•ô%TddU"Â6öÖR‚f'VffW"’“°¢ÆWBfW'F–6W2Ð¢§5÷7—3£¤fÆöC3$'&“£¦g&öÒ‚e²Óãöc3"ÂÓãÂãÂÓãÂÓãÂãÂãÂãÕ²âåÒ“°¢vÂæ'VffW%öFF÷v—F…ö'&•ö'VffW%÷f–Wr€¢vV%÷7—3£¥vV$vÃ%&VæFW&–æt6öçFW‡C£¤%$•ô%TddU"À¢gfW'F–6W2À¢vV%÷7—3£¥vV$vÃ%&VæFW&–æt6öçFW‡C£¥5DD”5ôE$rÀ¢“°¢ÆWB÷6—F–öâÒvÂævWEöGG&–%öÆö6F–öâ‚g&öw&ÒÂ'÷6—F–öâ"“°¢–b÷6—F–öâãÒ°¢vÂæVæ&ÆU÷fW'FW…öGG&–%ö'&’‡÷6—F–öâ2S3"“°¢vÂçfW'FW…öGG&–%÷ö–çFW%÷v—F…ö“3"€¢÷6—F–öâ2S3"À¢"À¢vV%÷7—3£¥vV$vÃ%&VæFW&–æt6öçFW‡C£¤dÄôBÀ¢fÇ6RÀ¢À¢À¢“°¢Ð¢ÆWB&–Ö—F—fUö'VffW"ÒvÀ¢æ7&VFUö'VffW"‚¢æöµö÷%öVÇ6R‡ÇÂ§5fÇVS£¦g&öÕ÷7G"‚%vV$tÂ&–Ö—F—fR'VffW"ÆÆö6F–öâf–ÆVB"’“ó°¢ÆWB&–Ö—F—fUö6öÆ÷%ö'VffW"ÒvÀ¢æ7&VFUö'VffW"‚¢æöµö÷%öVÇ6R‡ÇÂ§5fÇVS£¦g&öÕ÷7G"‚%vV$tÂ&–Ö—F—fR6öÆ÷"'VffW"ÆÆö6F–öâf–ÆVB"’“ó°¢ÆWBFW‡GW&VE÷÷6—F–öåö'VffW"ÒvÀ¢æ7&VFUö'VffW"‚¢æöµö÷%öVÇ6R‡ÇÂ§5fÇVS£¦g&öÕ÷7G"‚%vV$tÂFW‡GW&VB÷6—F–öâ'VffW"ÆÆö6F–öâf–ÆVB"’“ó°¢ÆWBFW‡GW&VE÷Weö'VffW"ÒvÀ¢æ7&VFUö'VffW"‚¢æöµö÷%öVÇ6R‡ÇÂ§5fÇVS£¦g&öÕ÷7G"‚%vV$tÂFW‡GW&VBUb'VffW"ÆÆö6F–öâf–ÆVB"’“ó°¢ÆWBÆ6V†öÆFW%÷FW‡GW&RÒ7&VFUöÖ–Æ·'W7E÷Æ6V†öÆFW%÷FW‡GW&R‚fvÂ“ó°¢ÆWBv'÷÷6—F–öåö'VffW"ÒvÀ¢æ7&VFUö'VffW"‚¢æöµö÷%öVÇ6R‡ÇÂ§5fÇVS£¦g&öÕ÷7G"‚%vV$tÂv'÷6—F–öâ'VffW"ÆÆö6F–öâf–ÆVB"’“ó°¢ÆWBv'÷Weö'VffW"ÒvÀ¢æ7&VFUö'VffW"‚¢æöµö÷%öVÇ6R‡ÇÂ§5fÇVS£¦g&öÕ÷7G"‚%vV$tÂv'Ub'VffW"ÆÆö6F–öâf–ÆVB"’“ó°¢ÆWBfVVF&6µ÷F&vWG2Ò&Vd6VÆÃ£¦æWr†7&VFUöÖ–Æ·'W7EöfVVF&6µ÷F&vWG2€¢fvÂÀ¢vÂæG&v–æuö'VffW%÷v–GF‚‚’æÖ‚ƒ’À¢vÂæG&v–æuö'VffW%ö†V–v‡B‚’æÖ‚ƒ’À¢“ò“° ¢ö²…6VÆb°¢Uö6öÆ÷#¢vÂævWE÷Væ–f÷&ÕöÆö6F–öâ‚g&öw&ÒÂ'Uö6öÆ÷""’À¢Uö6÷VçG3¢vÂævWE÷Væ–f÷&ÕöÆö6F–öâ‚g&öw&ÒÂ'Uö6÷VçG2"’À¢UöF—7Æ•ööæÇ“¢vÂævWE÷Væ–f÷&ÕöÆö6F–öâ‚g&öw&ÒÂ'UöF—7Æ”öæÇ’"’À¢UöfVVF&6³¢vÂævWE÷Væ–f÷&ÕöÆö6F–öâ‚g&öw&ÒÂ'UöfVVF&6²"’À¢UöÖ÷F–öã¢vÂævWE÷Væ–f÷&ÕöÆö6F–öâ‚g&öw&ÒÂ'UöÖ÷F–öâ"’À¢Uö÷WGWEöÇ†¢vÂævWE÷Væ–f÷&ÕöÆö6F–öâ‚g&öw&ÒÂ'Uö÷WGWDÇ†"’À¢U÷&Wf–÷W5ög&ÖS¢vÂævWE÷Væ–f÷&ÕöÆö6F–öâ‚g&öw&ÒÂ'U÷&Wf–÷W4g&ÖR"’À¢U÷&–Ö—F—fU÷ö–çE÷6—¦S¢vÀ¢ævWE÷Væ–f÷&ÕöÆö6F–öâ‚g&–Ö—F—fU÷&öw&ÒÂ'U÷&–Ö—F—fUö–çE6—¦R"’À¢U÷&W6öÇWF–öã¢vÂævWE÷Væ–f÷&ÕöÆö6F–öâ‚g&öw&ÒÂ'U÷&W6öÇWF–öâ"’À¢U÷FW‡GW&VEöÇ†¢vÂævWE÷Væ–f÷&ÕöÆö6F–öâ‚gFW‡GW&VE÷&öw&ÒÂ'UöÇ†"’À¢U÷FW‡GW&VE÷6×ÆW#¢vÂævWE÷Væ–f÷&ÕöÆö6F–öâ‚gFW‡GW&VE÷&öw&ÒÂ'U÷FW‡GW&R"’À¢U÷FW‡GW&VE÷F–çC¢vÂævWE÷Væ–f÷&ÕöÆö6F–öâ‚gFW‡GW&VE÷&öw&ÒÂ'U÷F–çB"’À¢U÷F–ÖS¢vÂævWE÷Væ–f÷&ÕöÆö6F–öâ‚g&öw&ÒÂ'U÷F–ÖR"’À¢U÷v'ö6öÆ÷#¢vÂævWE÷Væ–f÷&ÕöÆö6F–öâ‚gv'÷&öw&ÒÂ'Uö6öÆ÷""’À¢U÷v'öfVVF&6³¢vÂævWE÷Væ–f÷&ÕöÆö6F–öâ‚gv'÷&öw&ÒÂ'UöfVVF&6²"’À¢U÷v'ö÷WGWEöÇ†¢vÂævWE÷Væ–f÷&ÕöÆö6F–öâ‚gv'÷&öw&ÒÂ'Uö÷WGWDÇ†"’À¢U÷v'÷&Wf–÷W5ög&ÖS¢vÂævWE÷Væ–f÷&ÕöÆö6F–öâ‚gv'÷&öw&ÒÂ'U÷&Wf–÷W4g&ÖR"’À¢v'÷÷6—F–öåö'VffW"À¢v'÷&öw&ÒÀ¢v'÷Weö'VffW"À¢'VffW"À¢fVVF&6µ÷F&vWG2À¢vÂÀ¢æÖVE÷FW‡GW&W3¢&Vd6VÆÃ£¦æWr„%G&VTÖ£¦æWr‚’’À¢FW‡GW&U÷—†VÇ3¢&3£¦æWr„6VÆÃ£¦æWrƒ’’À¢Ö…÷FW‡GW&U÷Væ—G2À¢&–Ö—F—fUö'VffW"À¢&–Ö—F—fUö6öÆ÷%ö'VffW"À¢&–Ö—F—fU÷&öw&ÒÀ¢Æ6V†öÆFW%÷FW‡GW&RÀ¢&öw&ÒÀ¢FW‡GW&VE÷÷6—F–öåö'VffW"À¢FW‡GW&VE÷&öw&ÒÀ¢FW‡GW&VE÷Weö'VffW"À¢FW‡GW&Uö76WG2À¢G&ç6ÆFVE÷v'÷&öw&Ó¢&Vd6VÆÃ£¦æWr„æöæR’À¢G&ç6ÆFVEö6ö×÷6—FU÷&öw&Ó¢&Vd6VÆÃ£¦æWr„æöæR’À¢Ò¢Ð ¢fâ&VæFW%÷v—F…ö÷F–öç2€¢g6VÆbÀ¢VçG'“¢dÖ–Æµ'W7D6ö×÷6—FTg&ÖRÀ¢F–ÖS¢ccBÀ¢6ÆV%÷67&VVã¢&ööÂÀ¢’Óâ&W7VÇCÂ‚’Â§5fÇVSâ°¢ÆWBg&ÖRÒfVçG'’æg&ÖS°¢ÆWBG&ç6—F–öâÒG&ç6—F–öåVæ–f÷&×3£¦g&öÕöVçG'’†VçG'’“°¢ÆWB‡v'÷&öw&ÒÂ6ö×÷6—FU÷&öw&Ò’Ò6VÆbç&W&U÷7FvW2†g&ÖR“ó°¢6VÆbævÂçW6U÷&öw&Ò…6öÖR‚g6VÆbç&öw&Ò’“°¢6VÆbævÂæ&–æEö'VffW"€¢vV%÷7—3£¥vV$vÃ%&VæFW&–æt6öçFW‡C£¤%$•ô%TddU"À¢6öÖR‚g6VÆbæ'VffW"’À¢“°¢ÆWBG&v–æu÷v–GF‚Ò6VÆbævÂæG&v–æuö'VffW%÷v–GF‚‚’æÖ‚ƒ“°¢ÆWBG&v–æuö†V–v‡BÒ6VÆbævÂæG&v–æuö'VffW%ö†V–v‡B‚’æÖ‚ƒ“°¢ÆWB×WBF&vWG2Ò6VÆbæfVVF&6µ÷F&vWG2æ&÷'&÷uö×WB‚“°¢–bF&vWG2çv–GF‚ÒG&v–æu÷v–GF‚ÇÂF&vWG2æ†V–v‡BÒG&v–æuö†V–v‡B°¢ÆWBæW‡E÷F&vWG2Ò7&VFUöÖ–Æ·'W7EöfVVF&6µ÷F&vWG2‚g6VÆbævÂÂG&v–æu÷v–GF‚ÂG&v–æuö†V–v‡B“ó°¢FVÆWFUöÖ–Æ·'W7EöfVVF&6µ÷F&vWG2‚g6VÆbævÂÂgF&vWG2“°¢§F&vWG2ÒæW‡E÷F&vWG3°¢Ð¢ÆWB&VEö–æFW‚ÒF&vWG2ç&VEö–æFWƒ°¢ÆWBw&—FUö–æFW‚ÒÒ&VEö–æFWƒ° ¢6VÆbævÀ¢æ7F—fU÷FW‡GW&R‡vV%÷7—3£¥vV$vÃ%&VæFW&–æt6öçFW‡C£¥DU…EU$S“°¢6VÆbævÂæ&–æE÷FW‡GW&R€¢vV%÷7—3£¥vV$vÃ%&VæFW&–æt6öçFW‡C£¥DU…EU$Uó$BÀ¢6öÖR‚gF&vWG2çF&vWG5·&VEö–æFW…ÒçFW‡GW&R’À¢“°¢6VÆbævÂæ&–æEög&ÖV'VffW"€¢vV%÷7—3£¥vV$vÃ%&VæFW&–æt6öçFW‡C£¤e$ÔT%TddU"À¢6öÖR‚gF&vWG2çF&vWG5·w&—FUö–æFW…Òæg&ÖV'VffW"’À¢“°¢6VÆbævÂæF—6&ÆR‡vV%÷7—3£¥vV$vÃ%&VæFW&–æt6öçFW‡C£¤$ÄTäB“°¢–bg&ÖRçv'öÖW6‚æ—5÷6öÖR‚’°¢6VÆbæG&u÷v'öÖW6‚†g&ÖRÂG&v–æu÷v–GF‚ÂG&v–æuö†V–v‡BÂv'÷&öw&Òæ5÷&Vb‚’ÂF–ÖR“°¢ÒVÇ6R–bÆWB6öÖR‡&öw&Ò’Òv'÷&öw&Ò°¢6VÆbæG&u÷G&ç6ÆFVE÷VB‚g&öw&ÒÂg&ÖRÂfg&ÖRç6†FW%÷7FvW2çv'À¢F–ÖRÂG&v–æu÷v–GF‚ÂG&v–æuö†V–v‡BÂG'VRÂãÂG&ç6—F–öåVæ–f÷&×3£¦fFR‚’“°¢ÒVÇ6R°¢6VÆbæG&uöfVVF&6µ÷VB†g&ÖRÂF–ÖRÂG&v–æu÷v–GF‚ÂG&v–æuö†V–v‡BÂfÇ6RÂãÂG&ç6—F–öåVæ–f÷&×3£¦fFR‚’“°¢Ð¢6VÆbæG&u÷FW‡GW&VE÷&–Ö—F—fW2†g&ÖRÂgF&vWG2çF&vWG5·&VEö–æFW…ÒçFW‡GW&R“ó°¢6VÆbæG&u÷&–Ö—F—fW2†g&ÖR“° ¢6VÆbævÀ¢æ&–æEög&ÖV'VffW"‡vV%÷7—3£¥vV$vÃ%&VæFW&–æt6öçFW‡C£¤e$ÔT%TddU"ÂæöæR“°¢6VÆbævÂæ7F—fU÷FW‡GW&R‡vV%÷7—3£¥vV$vÃ%&VæFW&–æt6öçFW‡C£¥DU…EU$S“°¢6VÆbævÂæ&–æE÷FW‡GW&R€¢vV%÷7—3£¥vV$vÃ%&VæFW&–æt6öçFW‡C£¥DU…EU$Uó$BÀ¢6öÖR‚gF&vWG2çF&vWG5·w&—FUö–æFW…ÒçFW‡GW&R’À¢“°¢–b6ÆV%÷67&VVâ°¢6VÆbævÂæ6ÆV%ö6öÆ÷"ƒãÂãÂãÂã“°¢6VÆbævÀ¢æ6ÆV"‡vV%÷7—3£¥vV$vÃ%&VæFW&–æt6öçFW‡C£¤4ôÄõ%ô%TddU%ô$•B“°¢Ð¢ÆWB÷WGWEöÇ†ÒG&ç6—F–öâæ÷WGWEöÇ††6ÆV%÷67&VVâ“°¢ÆWB6†÷VÆEö&ÆVæBÒ6ÆV%÷67&VVã°¢–b6†÷VÆEö&ÆVæB°¢6VÆbævÂæVæ&ÆR‡vV%÷7—3£¥vV$vÃ%&VæFW&–æt6öçFW‡C£¤$ÄTäB“°¢ÆWB‡6÷W&6Uöf7F÷"ÂFW7F–æF–öåöf7F÷"’Ð¢Ö–Æ·'W7E÷vV&vÅö6ö×÷6—FUö&ÆVæEöf7F÷'2‚fVçG'’æ6ö×÷6—FUöÖöFR“°¢6VÆbævÂæ&ÆVæEögVæ5÷6W&FR‡6÷W&6Uöf7F÷"ÂFW7F–æF–öåöf7F÷"ÂvV%÷7—3£¥vV$vÃ%&VæFW&–æt6öçFW‡C£¤ôäRÂFW7F–æF–öåöf7F÷"“°¢Ð¢–bÆWB6öÖR‡&öw&Ò’Ò6ö×÷6—FU÷&öw&Ò°¢6VÆbæG&u÷G&ç6ÆFVE÷VB‚g&öw&ÒÂg&ÖRÂfg&ÖRç6†FW%÷7FvW2æ6ö×÷6—FRÀ¢F–ÖRÂG&v–æu÷v–GF‚ÂG&v–æuö†V–v‡BÂfÇ6RÂ÷WGWEöÇ†ÂG&ç6—F–öâ“°¢ÒVÇ6R²6VÆbæG&uöfVVF&6µ÷VB€¢g&ÖRÀ¢F–ÖRÀ¢G&v–æu÷v–GF‚À¢G&v–æuö†V–v‡BÀ¢G'VRÀ¢÷WGWEöÇ†À¢G&ç6—F–öâÀ¢“²Ð¢–b6†÷VÆEö&ÆVæB°¢6VÆbævÂæF—6&ÆR‡vV%÷7—3£¥vV$vÃ%&VæFW&–æt6öçFW‡C£¤$ÄTäB“°¢Ð¢F&vWG2ç&VEö–æFW‚Òw&—FUö–æFWƒ°¢–b6VÆbævÂævWEöW'&÷"‚’ÒvV%÷7—3£¥vV$vÃ%&VæFW&–æt6öçFW‡C£¤äõôU%$õ"°¢&WGW&âW'"„§5fÇVS£¦g&öÕ÷7G"‚%vV$tÂf–ÆVBv†–ÆRG&v–ær&W6WB7FvR"’“°¢Ð¢ö²‚‚’¢Ð ¢fâG&u÷v'öÖW6‚‚g6VÆbÂg&ÖS¢dÖ–Æµ'W7Dg&ÖRÂG&v–æu÷v–GFƒ¢“3"ÂG&v–æuö†V–v‡C¢“3"À¢G&ç6ÆFVC¢÷F–öãÂgvV%÷7—3£¥vV$vÅ&öw&ÓâÂF–ÖS¢ccB’°¢ÆWB6öÖR†ÖW6‚’Òg&ÖRçv'öÖW6‚æ5÷&Vb‚’VÇ6R°¢&WGW&ã°¢Ó°¢–bÖW6‚ç÷6—F–öç2æÆVâ‚’ÂbÇÂÖW6‚ç÷6—F–öç2æÆVâ‚’ÒÖW6‚ç6÷W&6U÷Wg2æÆVâ‚’°¢&WGW&ã°¢Ð¢ÆWB&öw&ÒÒG&ç6ÆFVBçVçw&ö÷"‚g6VÆbçv'÷&öw&Ò“°¢6VÆbævÂçW6U÷&öw&Ò…6öÖR‡&öw&Ò’“°¢6VÆbævÂçf–Ww÷'BƒÂÂG&v–æu÷v–GF‚ÂG&v–æuö†V–v‡B“°¢6VÆbævÂæ6ÆV%ö6öÆ÷"ƒãÂãÂãÂã“°¢6VÆbævÀ¢æ6ÆV"‡vV%÷7—3£¥vV$vÃ%&VæFW&–æt6öçFW‡C£¤4ôÄõ%ô%TddU%ô$•B“°¢ÆWB÷6—F–öç2ÒÖW6€¢ç÷6—F–öç0¢æ—FW"‚¢æÖ‡ÇfÇVWÂ§fÇVR2c3"¢æ6öÆÆV7C££ÅfV3Åóãâ‚“°¢ÆWB6÷W&6U÷Wg2ÒÖW6€¢ç6÷W&6U÷Wg0¢æ—FW"‚¢æÖ‡ÇfÇVWÂ§fÇVR2c3"¢æ6öÆÆV7C££ÅfV3Åóãâ‚“°¢ÆWB÷6—F–öç5ö'&’Ò§5÷7—3£¤fÆöC3$'&“£¦g&öÒ‡÷6—F–öç2æ5÷6Æ–6R‚’“°¢ÆWB6÷W&6U÷Wg5ö'&’Ò§5÷7—3£¤fÆöC3$'&“£¦g&öÒ‡6÷W&6U÷Wg2æ5÷6Æ–6R‚’“°¢ÆWB÷6—F–öâÒ6VÆbævÂævWEöGG&–%öÆö6F–öâ‡&öw&ÒÂ'÷6—F–öâ"“°¢ÆWB6÷W&6U÷WbÒ6VÆbævÂævWEöGG&–%öÆö6F–öâ‡&öw&ÒÂ'6÷W&6UWb"“°¢6VÆbævÂæ&–æEö'VffW"€¢vV%÷7—3£¥vV$vÃ%&VæFW&–æt6öçFW‡C£¤%$•ô%TddU"À¢6öÖR‚g6VÆbçv'÷÷6—F–öåö'VffW"’À¢“°¢6VÆbævÂæ'VffW%öFF÷v—F…ö'&•ö'VffW%÷f–Wr€¢vV%÷7—3£¥vV$vÃ%&VæFW&–æt6öçFW‡C£¤%$•ô%TddU"À¢g÷6—F–öç5ö'&’À¢vV%÷7—3£¥vV$vÃ%&VæFW&–æt6öçFW‡C£¤E”äÔ”5ôE$rÀ¢“°¢–b÷6—F–öâãÒ°¢6VÆbævÂæVæ&ÆU÷fW'FW…öGG&–%ö'&’‡÷6—F–öâ2S3"“°¢6VÆbævÂçfW'FW…öGG&–%÷ö–çFW%÷v—F…ö“3"€¢÷6—F–öâ2S3"À¢"À¢vV%÷7—3£¥vV$vÃ%&VæFW&–æt6öçFW‡C£¤dÄôBÀ¢fÇ6RÀ¢À¢À¢“°¢Ð¢6VÆbævÂæ&–æEö'VffW"€¢vV%÷7—3£¥vV$vÃ%&VæFW&–æt6öçFW‡C£¤%$•ô%TddU"À¢6öÖR‚g6VÆbçv'÷Weö'VffW"’À¢“°¢6VÆbævÂæ'VffW%öFF÷v—F…ö'&•ö'VffW%÷f–Wr€¢vV%÷7—3£¥vV$vÃ%&VæFW&–æt6öçFW‡C£¤%$•ô%TddU"À¢g6÷W&6U÷Wg5ö'&’À¢vV%÷7—3£¥vV$vÃ%&VæFW&–æt6öçFW‡C£¤E”äÔ”5ôE$rÀ¢“°¢–b6÷W&6U÷WbãÒ°¢6VÆbævÂæVæ&ÆU÷fW'FW…öGG&–%ö'&’‡6÷W&6U÷Wb2S3"“°¢6VÆbævÂçfW'FW…öGG&–%÷ö–çFW%÷v—F…ö“3"€¢6÷W&6U÷Wb2S3"À¢"À¢vV%÷7—3£¥vV$vÃ%&VæFW&–æt6öçFW‡C£¤dÄôBÀ¢fÇ6RÀ¢À¢À¢“°¢Ð¢–bG&ç6ÆFVBæ—5÷6öÖR‚’°¢6VÆbç6WE÷G&ç6ÆFVE÷Væ–f÷&×2‡&öw&ÒÂg&ÖRÂfg&ÖRç6†FW%÷7FvW2çv'À¢F–ÖRÂG&v–æu÷v–GF‚ÂG&v–æuö†V–v‡BÂG'VRÂãÂG&ç6—F–öåVæ–f÷&×3£¦fFR‚’“°¢ÒVÇ6R°¢ÆWB‡"ÂrÂ"’Òg&ÖRçvfUö6öÆ÷#°¢6VÆbævÂçVæ–f÷&Ó6b€¢6VÆbçU÷v'ö6öÆ÷"æ5÷&Vb‚’À¢"2c3"ò#SRãÀ¢r2c3"ò#SRãÀ¢"2c3"ò#SRãÀ¢“°¢6VÆbævÂçVæ–f÷&Ób€¢6VÆbçU÷v'öfVVF&6²æ5÷&Vb‚’À¢ƒãÒg&ÖRæ&6¶w&÷VæEöÇ†’æ6Æ×ƒãÂã’2c3"À¢“°¢6VÆbævÂçVæ–f÷&Ób‡6VÆbçU÷v'ö÷WGWEöÇ†æ5÷&Vb‚’Âã“°¢6VÆbævÂçVæ–f÷&Ó’‡6VÆbçU÷v'÷&Wf–÷W5ög&ÖRæ5÷&Vb‚’Â“°¢Ð¢6VÆbævÂæG&uö'&—2€¢vV%÷7—3£¥vV$vÃ%&VæFW&–æt6öçFW‡C£¥E$”ätÄU2À¢À¢‡÷6—F–öç2æÆVâ‚’ò"’2“3"À¢“°¢Ð ¢fâ&W&U÷7FvW2‚g6VÆbÂg&ÖS¢dÖ–Æµ'W7Dg&ÖR’Óâ&W7VÇCÂ„÷F–öãÇvV%÷7—3£¥vV$vÅ&öw&ÓâÂ÷F–öãÇvV%÷7—3£¥vV$vÅ&öw&Óâ’Â§5fÇVSâ°¢ÆWBVæ—G2Ò6VÆbæÖ…÷FW‡GW&U÷Væ—G3°¢–bg&ÖRç6†FW%÷7FvW2çv'çFW‡GW&U÷6×ÆW'2æÆVâ‚’²"âVæ—G2ÇÀ¢g&ÖRç6†FW%÷7FvW2æ6ö×÷6—FRçFW‡GW&U÷6×ÆW'2æÆVâ‚’²"âVæ—G2°¢&WGW&âW'"„§5fÇVS£¦g&öÕ÷7G"‚%&W6WBW†6VVG2F†RuRFW‡GW&R×Væ—BÆ–Ö—B"’“°¢Ð¢ÆWBv'Ò6VÆbçG&ç6ÆFVE÷&öw&Õöf÷"‚fg&ÖRç6†FW%÷7FvW2çv'Âg6VÆbçG&ç6ÆFVE÷v'÷&öw&ÒÀ¢g&ÖRçv'öÖW6‚æ—5÷6öÖR‚’’æÖöW'"‡ÆWÂ§5fÇVS£¦g&öÕ÷7G"‚ff÷&ÖB‚%v'6†FW#¢·Ò"ÂRæ5÷7G&–ær‚’çVçw&ö÷%öFVfVÇB‚’’’“ó°¢ÆWB6ö×÷6—FRÒ6VÆbçG&ç6ÆFVE÷&öw&Õöf÷"‚fg&ÖRç6†FW%÷7FvW2æ6ö×÷6—FRÂg6VÆbçG&ç6ÆFVEö6ö×÷6—FU÷&öw&ÒÀ¢fÇ6R’æÖöW'"‡ÆWÂ§5fÇVS£¦g&öÕ÷7G"‚ff÷&ÖB‚$6ö×÷6—FR6†FW#¢·Ò"ÂRæ5÷7G&–ær‚’çVçw&ö÷%öFVfVÇB‚’’’“ó°¢ö²‚‡v'Â6ö×÷6—FR’¢Ð ¢fâG&ç6ÆFVE÷&öw&Õöf÷"‚g6VÆbÂ7FvS¢dÖ–Æµ'W7E6†FW%7FvRÀ¢66†S¢e&Vd6VÆÃÄ÷F–öãÄÖ–Æµ'W7EG&ç6ÆFVE&öw&ÓãâÂÖW6ƒ¢&ööÂ’Óâ&W7VÇCÄ÷F–öãÇvV%÷7—3£¥vV$vÅ&öw&ÓâÂ§5fÇVSâ°¢–b7FvRç&WV—&VB²&WGW&âö²„æöæR“²Ð¢ÆWB6÷W&6RÒg7FvRç6÷W&6S°¢–b6÷W&6RçG&–Ò‚’æ—5öV×G’‚’°¢&WGW&âW'"„§5fÇVS£¦g&öÕ÷7G"‚'F†R&WV—&VB6†FW"6÷VÆBæ÷B&RG&ç6ÆFVB"’“°¢Ð¢–bÆWB6öÖR†66†VB’Ò66†Ræ&÷'&÷r‚’æ5÷&Vb‚’°¢–b66†VBç6÷W&6RÓÒ§6÷W&6Rbb66†VBæÖW6‚ÓÒÖW6‚°¢&WGW&âö²…6öÖR†66†VBç&öw&Òæ6ÆöæR‚’’“°¢Ð¢Ð¢ÆWBfW'FW…÷6†FW"Ò6ö×–ÆUöÖ–Æ·'W7E÷6†FW"€¢g6VÆbævÂÀ¢vV%÷7—3£¥vV$vÃ%&VæFW&–æt6öçFW‡C£¥dU%DU…õ4„DU"À¢–bÖW6‚²Ô”Äµ%U5EõE$å4ÄDTEôÔU4…õdU%DU…õ4„DU"ÒVÇ6R²Ô”Äµ%U5EõE$å4ÄDTEõdU%DU…õ4„DU"ÒÀ¢“ó°¢ÆWBg&vÖVçE÷6†FW"Ò6ö×–ÆUöÖ–Æ·'W7E÷6†FW"€¢g6VÆbævÂÀ¢vV%÷7—3£¥vV$vÃ%&VæFW&–æt6öçFW‡C£¤e$tÔTåEõ4„DU"À¢6÷W&6RÀ¢’æÖöW'"‡ÆW'&÷'Â²6VÆbævÂæFVÆWFU÷6†FW"…6öÖR‚gfW'FW…÷6†FW"’“²W'&÷"Ò“ó°¢ÆWB&öw&ÒÒÆ–æµöÖ–Æ·'W7E÷&öw&Ò‚g6VÆbævÂÂgfW'FW…÷6†FW"Âfg&vÖVçE÷6†FW"“ó°¢–bÆWB6öÖR‡&Wf–÷W2’Ò66†Ræ&÷'&÷uö×WB‚’çF¶R‚’²6VÆbævÂæFVÆWFU÷&öw&Ò…6öÖR‚g&Wf–÷W2ç&öw&Ò’“²Ð¢¦66†Ræ&÷'&÷uö×WB‚’Ò6öÖR„Ö–Æµ'W7EG&ç6ÆFVE&öw&Ò°¢&öw&Ó¢&öw&Òæ6ÆöæR‚’À¢6÷W&6S¢6÷W&6RçFõ÷7G&–ær‚’À¢ÖW6‚À¢Ò“°¢ö²…6öÖR‡&öw&Ò’¢Ð ¢fâ6WE÷G&ç6ÆFVE÷Væ–f÷&×2€¢g6VÆbÀ¢&öw&Ó¢gvV%÷7—3£¥vV$vÅ&öw&ÒÀ¢g&ÖS¢dÖ–Æµ'W7Dg&ÖRÀ¢7FvS¢dÖ–Æµ'W7E6†FW%7FvRÀ¢F–ÖS¢ccBÀ¢G&v–æu÷v–GFƒ¢“3"À¢G&v–æuö†V–v‡C¢“3"À¢v'¢&ööÂÀ¢÷WGWEöÇ†¢c3"À¢G&ç6—F–öã¢G&ç6—F–öåVæ–f÷&×2À¢’°¢ÆWB‡"ÂrÂ"’Òg&ÖRçvfUö6öÆ÷#°¢ÆWBfVVF&6²ÒƒãÒg&ÖRæ&6¶w&÷VæEöÇ†’æ6Æ×ƒãÂã’2c3#°¢ÆWBVæ–f÷&ÒÒÆæÖS¢g7G'Â6VÆbævÂævWE÷Væ–f÷&ÕöÆö6F–öâ‡&öw&ÒÂæÖR“°¢6VÆbævÂçVæ–f÷&Ó6b€¢Væ–f÷&Ò‚&6öÆ÷""’æ5÷&Vb‚’À¢"2c3"ò#SRãÀ¢r2c3"ò#SRãÀ¢"2c3"ò#SRãÀ¢“°¢6VÆbævÂçVæ–f÷&Ó’‡Væ–f÷&Ò‚'&Wf–÷W4g&ÖR"’æ5÷&Vb‚’Â“°¢f÷"–æFW‚–ââç7FvRçFW‡GW&U÷6×ÆW'2æÆVâ‚’°¢ÆWBFW‡GW&U÷Væ—BÒ–æFW‚²#°¢6VÆbævÀ¢æ7F—fU÷FW‡GW&R‡vV%÷7—3£¥vV$vÃ%&VæFW&–æt6öçFW‡C£¥DU…EU$S²FW‡GW&U÷Væ—B2S3"“°¢ÆWBFW‡GW&RÒ7FvP¢çFW‡GW&U÷6×ÆW'0¢ævWB†–æFW‚¢ææE÷F†Vâ‡ÆæÖWÂ6VÆbææÖVE÷FW‡GW&Uöf÷"†æÖR’æö²‚’æfÆGFVâ‚’¢çVçw&ö÷%öVÇ6R‡ÇÂ6VÆbçÆ6V†öÆFW%÷FW‡GW&Ræ6ÆöæR‚’“°¢6VÆbævÀ¢æ&–æE÷FW‡GW&R‡vV%÷7—3£¥vV$vÃ%&VæFW&–æt6öçFW‡C£¥DU…EU$Uó$BÂ6öÖR‚gFW‡GW&R’“°¢6VÆbævÂçVæ–f÷&Ó’€¢Væ–f÷&Ò‚ff÷&ÖB‚'6†FW%FW‡GW&W¶–æFW‡Ò"’’æ5÷&Vb‚’À¢FW‡GW&U÷Væ—B2“3"À¢“°¢Ð¢6VÆbævÀ¢æ7F—fU÷FW‡GW&R‡vV%÷7—3£¥vV$vÃ%&VæFW&–æt6öçFW‡C£¥DU…EU$S“°¢6VÆbævÂçVæ–f÷&Ób‡Væ–f÷&Ò‚&fVVF&6²"’æ5÷&Vb‚’ÂfVVF&6²“°¢6VÆbævÂçVæ–f÷&Ób‡Væ–f÷&Ò‚&÷WGWDÇ†"’æ5÷&Vb‚’Â÷WGWEöÇ†“°¢6WE÷G&ç6—F–öå÷Væ–f÷&×2‚g6VÆbævÂÂ&öw&ÒÂG&ç6—F–öâÂG&v–æu÷v–GF‚ÂG&v–æuö†V–v‡B“°¢6VÆbævÂçVæ–f÷&Ób‡Væ–f÷&Ò‚&—5v'"’æ5÷&Vb‚’Â–bv'²ãÒVÇ6R²ãÒ“°¢6VÆbævÂçVæ–f÷&ÓFb‡Væ–f÷&Ò‚&Ö÷F–öâ"’æ5÷&Vb‚’Âg&ÖRç&÷FF–öâ2c3"Âg&ÖRç¦ööÒ2c3"À¢g&ÖRæG‚2c3"Âg&ÖRæG’2c3"“°¢6VÆbævÂçVæ–f÷&Ób‡Væ–f÷&Ò‚'F–ÖR"’æ5÷&Vb‚’ÂF–ÖR2c3"“°¢6VÆbævÂçVæ–f÷&Ób‡Væ–f÷&Ò‚'6×ÆU&FR"’æ5÷&Vb‚’ÂCEóã“°¢6VÆbævÂçVæ–f÷&Ó&b€¢Væ–f÷&Ò‚'&W6öÇWF–öâ"’æ5÷&Vb‚’À¢G&v–æu÷v–GF‚2c3"À¢G&v–æuö†V–v‡B2c3"À¢“°¢6VÆbævÂçVæ–f÷&Ó&b€¢Væ–f÷&Ò‚'—†VÅ6—¦R"’æ5÷&Vb‚’À¢ãòG&v–æu÷v–GF‚æÖ‚ƒ’2c3"À¢ãòG&v–æuö†V–v‡BæÖ‚ƒ’2c3"À¢“°¢6VÆbævÂçVæ–f÷&Ób€¢Væ–f÷&Ò‚&7V7B"’æ5÷&Vb‚’À¢G&v–æu÷v–GF‚2c3"òG&v–æuö†V–v‡BæÖ‚ƒ’2c3"À¢“°¢6VÆbævÂçVæ–f÷&ÓFb€¢Væ–f÷&Ò‚'FW‡6—¦R"’æ5÷&Vb‚’À¢G&v–æu÷v–GF‚2c3"À¢G&v–æuö†V–v‡B2c3"À¢ãòG&v–æu÷v–GF‚æÖ‚ƒ’2c3"À¢ãòG&v–æuö†V–v‡BæÖ‚ƒ’2c3"À¢“°¢6VÆbævÀ¢çVæ–f÷&Ób‡Væ–f÷&Ò‚&&72"’æ5÷&Vb‚’Âg&ÖRæ&722c3"“°¢6VÆbævÀ¢çVæ–f÷&Ób‡Væ–f÷&Ò‚&&75öGB"’æ5÷&Vb‚’Âg&ÖRæ&722c3"“°¢6VÆbævÂçVæ–f÷&Ób‡Væ–f÷&Ò‚&Ö–B"’æ5÷&Vb‚’Âg&ÖRæÖ–B2c3"“°¢6VÆbævÀ¢çVæ–f÷&Ób‡Væ–f÷&Ò‚&Ö–EöGB"’æ5÷&Vb‚’Âg&ÖRæÖ–B2c3"“°¢6VÆbævÀ¢çVæ–f÷&Ób‡Væ–f÷&Ò‚'G&V""’æ5÷&Vb‚’Âg&ÖRçG&V&ÆR2c3"“°¢öçkh‘éì¶»§q«^uÉÈ¡•ÉÉ½È¤¤€ôøÉÈ¡)ÍY…±Õ”èé™É½µ}ÍÑÈ ™™½Éµ…Ð„ ‰Q•áÑÕÉ”íÉ…Ý}¹…µ•ôèí•ÉÉ½Éôˆ¤¤¤°(€€€€€€€€€€€€€€€ôì(€€€€€€€€€€€ô(€€€€€€€€€€€±•Ð‘…Ñ…}ÕÉ°€ôÍ•±˜¹Ñ•áÑÕÉ•}…ÍÍ•ÑÌ¹‰½ÉÉ½Ü ¤¹•Ð ™…±¥…Ì¤¹±½¹• ¤ì(€€€€€€€€€€€±•ÐM½µ”¡‘…Ñ…}ÕÉ°¤€ô‘…Ñ…}ÕÉ°•±Í”ì(€€€€€€€€€€€€€€€½¹Ñ¥¹Õ”ì(€€€€€€€€€€€ôì(€€€€€€€€€€€¥˜Í•±˜¹¹…µ•‘}Ñ•áÑÕÉ•Ì¹‰½ÉÉ½Ü ¤¹±•¸ ¤€øô€ØÐì(€€€€€€€€€€€€€€€É•ÑÕÉ¸ÉÈ¡)ÍY…±Õ”èé™É½µ}ÍÑÈ ‰AÉ•Í•Ð•á••‘ÌÑ¡”€ØÐµÑ•áÑÕÉ”…¡”±¥µ¥Ðˆ¤¤ì(€€€€€€€€€€€ô(€€€€€€€€€€€±•Ð…ÍÍ•Ð€ôÉ•…Ñ•}µ¥±­ÉÕÍÑ}Ñ•áÑÕÉ•}™É½µ}‘…Ñ…}ÕÉ° ™Í•±˜¹°°€™‘…Ñ…}ÕÉ°°Í•±˜¹Ñ•áÑÕÉ•}Á¥á•±Ì¹±½¹” ¤¤üì(€€€€€€€€€€€Í•±˜¹¹…µ•‘}Ñ•áÑÕÉ•Ì(€€€€€€€€€€€€€€€€¹‰½ÉÉ½Ý}µÕÐ ¤(€€€€€€€€€€€€€€€€¹¥¹Í•ÉÐ¡…±¥…Ì°…ÍÍ•Ð¤ì(€€€€€€€€€€€É•ÑÕÉ¸=¬¡9½¹”¤ì(€€€€€€€ô(€€€€€€€ÉÈ¡)ÍY…±Õ”èé™É½µ}ÍÑÈ ™™½Éµ…Ð„ ‰5¥ÍÍ¥¹œÑ•áÑÕÉ”èíÉ…Ý}¹…µ•ôˆ¤¤¤(€€€ô((€€€™¸‘É…Ý}Ñ•áÑÕÉ•‘}ÁÉ¥µ¥Ñ¥Ù•Ì ™Í•±˜°™É…µ”è€™5¥±­IÕÍÑÉ…µ”°ÁÉ•Ù¥½ÕÍ}™É…µ”è€™Ý•‰}ÍåÌèé]•‰±Q•áÑÕÉ”¤€´øI•ÍÕ±Ðð ¤°)ÍY…±Õ”øì(€€€€€€€¥˜™É…µ”¹Ñ•áÑÕÉ•‘}ÁÉ¥µ¥Ñ¥Ù•Ì¹¥Í}•µÁÑä ¤ì(€€€€€€€€€€€É•ÑÕÉ¸=¬  ¤¤ì(€€€€€€€ô(€€€€€€€Í•±˜¹°¹•¹…‰±”¡Ý•‰}ÍåÌèé]•‰°ÉI•¹‘•É¥¹½¹Ñ•áÐèé	19¤ì(€€€€€€€Í•±˜¹°¹‰±•¹‘}™Õ¹}Í•Á…É…Ñ” (€€€€€€€€€€€Ý•‰}ÍåÌèé]•‰°ÉI•¹‘•É¥¹½¹Ñ•áÐèéMI}1A!°(€€€€€€€€€€€Ý•‰}ÍåÌèé]•‰°ÉI•¹‘•É¥¹½¹Ñ•áÐèé=9}5%9UM}MI}1A!°(€€€€€€€€€€€Ý•‰}ÍåÌèé]•‰°ÉI•¹‘•É¥¹½¹Ñ•áÐèé=9°(€€€€€€€€€€€Ý•‰}ÍåÌèé]•‰°ÉI•¹‘•É¥¹½¹Ñ•áÐèé=9}5%9UM}MI}1A!°(€€€€€€€€¤ì(€€€€€€€Í•±˜¹°¹ÕÍ•}ÁÉ½É…´¡M½µ” ™Í•±˜¹Ñ•áÑÕÉ•‘}ÁÉ½É…´¤¤ì(€€€€€€€Í•±˜¹°(€€€€€€€€€€€€¹…Ñ¥Ù•}Ñ•áÑÕÉ”¡Ý•‰}ÍåÌèé]•‰°ÉI•¹‘•É¥¹½¹Ñ•áÐèéQaQUIÄ¤ì(€€€€€€€Í•±˜¹°¹Õ¹¥™½É´Å¤¡Í•±˜¹Õ}Ñ•áÑÕÉ•‘}Í…µÁ±•È¹…Í}É•˜ ¤°€Ä¤ì(€€€€€€€±•ÐÁ½Í¥Ñ¥½¸€ôÍ•±˜(€€€€€€€€€€€€¹°(€€€€€€€€€€€€¹•Ñ}…ÑÑÉ¥‰}±½…Ñ¥½¸ ™Í•±˜¹Ñ•áÑÕÉ•‘}ÁÉ½É…´°€‰Á½Í¥Ñ¥½¸ˆ¤ì(€€€€€€€±•ÐÍ½ÕÉ•}ÕØ€ôÍ•±˜(€€€€€€€€€€€€¹°(€€€€€€€€€€€€¹•Ñ}…ÑÑÉ¥‰}±½…Ñ¥½¸ ™Í•±˜¹Ñ•áÑÕÉ•‘}ÁÉ½É…´°€‰Í½ÕÉ•UØˆ¤ì(€€€€€€€™½ÈÁÉ¥µ¥Ñ¥Ù”¥¸€™™É…µ”¹Ñ•áÑÕÉ•‘}ÁÉ¥µ¥Ñ¥Ù•Ìì(€€€€€€€€€€€¥˜ÁÉ¥µ¥Ñ¥Ù”¹Ù•ÉÑ¥•Ì¹±•¸ ¤€ð€ØñðÁÉ¥µ¥Ñ¥Ù”¹Ù•ÉÑ¥•Ì¹±•¸ ¤€„ôÁÉ¥µ¥Ñ¥Ù”¹ÕÙÌ¹±•¸ ¤ì(€€€€€€€€€€€€€€€½¹Ñ¥¹Õ”ì(€€€€€€€€€€€ô(€€€€€€€€€€€Í•±˜¹°(€€€€€€€€€€€€€€€€¹…Ñ¥Ù•}Ñ•áÑÕÉ”¡Ý•‰}ÍåÌèé]•‰°ÉI•¹‘•É¥¹½¹Ñ•áÐèéQaQUIÄ¤ì(€€€€€€€€€€€±•ÐÑ•áÑÕÉ”€ô¥˜ÁÉ¥µ¥Ñ¥Ù”¹Ñ•áÑÕÉ•}¹…µ”¹¥Í}•µÁÑä ¤ìÁÉ•Ù¥½ÕÍ}™É…µ”¹±½¹” ¤ô•±Í”ì(€€€€€€€€€€€€€€€Í•±˜¹¹…µ•‘}Ñ•áÑÕÉ•}™½È ™ÁÉ¥µ¥Ñ¥Ù”¹Ñ•áÑÕÉ•}¹…µ”¤ü(€€€€€€€€€€€€€€€€€€€€¹½­}½É}•±Í”¡ñð)ÍY…±Õ”èé™É½µ}ÍÑÈ ‰Q•áÑÕÉ”‰•…µ”Õ¹…Ù…¥±…‰±”‰•™½É”‘É…Ý¥¹œˆ¤¤ü(€€€€€€€€€€€ôì(€€€€€€€€€€€Í•±˜¹°(€€€€€€€€€€€€€€€€¹‰¥¹‘}Ñ•áÑÕÉ”¡Ý•‰}ÍåÌèé]•‰°ÉI•¹‘•É¥¹½¹Ñ•áÐèéQaQUI|É°M½µ” ™Ñ•áÑÕÉ”¤¤ì(€€€€€€€€€€€±•ÐÙ•ÉÑ¥•Ì€ôÁÉ¥µ¥Ñ¥Ù”(€€€€€€€€€€€€€€€€¹Ù•ÉÑ¥•Ì(€€€€€€€€€€€€€€€€¹¥Ñ•È ¤(€€€€€€€€€€€€€€€€¹µ…À¡ñÙ…±Õ•ð€©Ù…±Õ”…Ì˜ÌÈ¤(€€€€€€€€€€€€€€€€¹½±±•ÐèèñY•Œñ|øø ¤ì(€€€€€€€€€€€±•ÐÕÙÌ€ôÁÉ¥µ¥Ñ¥Ù”(€€€€€€€€€€€€€€€€¹ÕÙÌ(€€€€€€€€€€€€€€€€¹¥Ñ•È ¤(€€€€€€€€€€€€€€€€¹µ…À¡ñÙ…±Õ•ð€©Ù…±Õ”…Ì˜ÌÈ¤(€€€€€€€€€€€€€€€€¹½±±•ÐèèñY•Œñ|øø ¤ì(€€€€€€€€€€€±•ÐÙ•ÉÑ•á}…ÉÉ…ä€ô©Í}ÍåÌèé±½…ÐÌÉÉÉ…äèé™É½´¡Ù•ÉÑ¥•Ì¹…Í}Í±¥” ¤¤ì(€€€€€€€€€€€±•ÐÕÙ}…ÉÉ…ä€ô©Í}ÍåÌèé±½…ÐÌÉÉÉ…äèé™É½´¡ÕÙÌ¹…Í}Í±¥” ¤¤ì(€€€€€€€€€€€Í•±˜¹°¹‰¥¹‘}‰Õ™™•È (€€€€€€€€€€€€€€€Ý•‰}ÍåÌèé]•‰°ÉI•¹‘•É¥¹½¹Ñ•áÐèéIIe}	UH°(€€€€€€€€€€€€€€€M½µ” ™Í•±˜¹Ñ•áÑÕÉ•‘}Á½Í¥Ñ¥½¹}‰Õ™™•È¤°(€€€€€€€€€€€€¤ì(€€€€€€€€€€€Í•±˜¹°¹‰Õ™™•É}‘…Ñ…}Ý¥Ñ¡}…ÉÉ…å}‰Õ™™•É}Ù¥•Ü (€€€€€€€€€€€€€€€Ý•‰}ÍåÌèé]•‰°ÉI•¹‘•É¥¹½¹Ñ•áÐèéIIe}	UH°(€€€€€€€€€€€€€€€€™Ù•ÉÑ•á}…ÉÉ…ä°(€€€€€€€€€€€€€€€Ý•‰}ÍåÌèé]•‰°ÉI•¹‘•É¥¹½¹Ñ•áÐèée95%}I\°(€€€€€€€€€€€€¤ì(€€€€€€€€€€€¥˜Á½Í¥Ñ¥½¸€øô€Àì(€€€€€€€€€€€€€€€Í•±˜¹°¹•¹…‰±•}Ù•ÉÑ•á}…ÑÑÉ¥‰}…ÉÉ…ä¡Á½Í¥Ñ¥½¸…ÌÔÌÈ¤ì(€€€€€€€€€€€€€€€Í•±˜¹°¹Ù•ÉÑ•á}…ÑÑÉ¥‰}Á½¥¹Ñ•É}Ý¥Ñ¡}¤ÌÈ (€€€€€€€€€€€€€€€€€€€Á½Í¥Ñ¥½¸…ÌÔÌÈ°(€€€€€€€€€€€€€€€€€€€€È°(€€€€€€€€€€€€€€€€€€€Ý•‰}ÍåÌèé]•‰°ÉI•¹‘•É¥¹½¹Ñ•áÐèé1=P°(€€€€€€€€€€€€€€€€€€€™…±Í”°(€€€€€€€€€€€€€€€€€€€€À°(€€€€€€€€€€€€€€€€€€€€À°(€€€€€€€€€€€€€€€€¤ì(€€€€€€€€€€€ô(€€€€€€€€€€€Í•±˜¹°¹‰¥¹‘}‰Õ™™•È (€€€€€€€€€€€€€€€Ý•‰}ÍåÌèé]•‰°ÉI•¹‘•É¥¹½¹Ñ•áÐèéIIe}	UH°(€€€€€€€€€€€€€€€M½µ” ™Í•±˜¹Ñ•áÑÕÉ•‘}ÕÙ}‰Õ™™•È¤°(€€€€€€€€€€€€¤ì(€€€€€€€€€€€Í•±˜¹°¹‰Õ™™•É}‘…Ñ…}Ý¥Ñ¡}…ÉÉ…å}‰Õ™™•É}Ù¥•Ü (€€€€€€€€€€€€€€€Ý•‰}ÍåÌèé]•‰°ÉI•¹‘•É¥¹½¹Ñ•áÐèéIIe}	UH°(€€€€€€€€€€€€€€€€™ÕÙ}…ÉÉ…ä°(€€€€€€€€€€€€€€€Ý•‰}ÍåÌèé]•‰°ÉI•¹‘•É¥¹½¹Ñ•áÐèée95%}I\°(€€€€€€€€€€€€¤ì(€€€€€€€€€€€¥˜Í½ÕÉ•}ÕØ€øô€Àì(€€€€€€€€€€€€€€€Í•±˜¹°¹•¹…‰±•}Ù•ÉÑ•á}…ÑÑÉ¥‰}…ÉÉ…ä¡Í½ÕÉ•}ÕØ…ÌÔÌÈ¤ì(€€€€€€€€€€€€€€€Í•±˜¹°¹Ù•ÉÑ•á}…ÑÑÉ¥‰}Á½¥¹Ñ•É}Ý¥Ñ¡}¤ÌÈ (€€€€€€€€€€€€€€€€€€€Í½ÕÉ•}ÕØ…ÌÔÌÈ°(€€€€€€€€€€€€€€€€€€€€È°(€€€€€€€€€€€€€€€€€€€Ý•‰}ÍåÌèé]•‰°ÉI•¹‘•É¥¹½¹Ñ•áÐèé1=P°(€€€€€€€€€€€€€€€€€€€™…±Í”°(€€€€€€€€€€€€€€€€€€€€À°(€€€€€€€€€€€€€€€€€€€€À°(€€€€€€€€€€€€€€€€¤ì(€€€€€€€€€€€ô(€€€€€€€€€€€Í•±˜¹°¹Õ¹¥™½É´Í˜ (€€€€€€€€€€€€€€€Í•±˜¹Õ}Ñ•áÑÕÉ•‘}Ñ¥¹Ð¹…Í}É•˜ ¤°(€€€€€€€€€€€€€€€ÁÉ¥µ¥Ñ¥Ù”¹½±½ÉlÁt…Ì˜ÌÈ°(€€€€€€€€€€€€€€€ÁÉ¥µ¥Ñ¥Ù”¹½±½ÉlÅt…Ì˜ÌÈ°(€€€€€€€€€€€€€€€ÁÉ¥µ¥Ñ¥Ù”¹½±½ÉlÉt…Ì˜ÌÈ°(€€€€€€€€€€€€¤ì(€€€€€€€€€€€Í•±˜¹°(€€€€€€€€€€€€€€€€¹Õ¹¥™½É´Å˜¡Í•±˜¹Õ}Ñ•áÑÕÉ•‘}…±Á¡„¹…Í}É•˜ ¤°ÁÉ¥µ¥Ñ¥Ù”¹½±½ÉlÍt…Ì˜ÌÈ¤ì(€€€€€€€€€€€±•Ð‘É…Ý}µ½‘”€ôµ…Ñ ÁÉ¥µ¥Ñ¥Ù”¹µ½‘”ì(€€€€€€€€€€€€€€€5¥±­IÕÍÑQ•áÑÕÉ•‘AÉ¥µ¥Ñ¥Ù•5½‘”èéEÕ…(€€€€€€€€€€€€€€€ð5¥±­IÕÍÑQ•áÑÕÉ•‘AÉ¥µ¥Ñ¥Ù•5½‘”èéQÉ¥…¹±•…¸€ôøì(€€€€€€€€€€€€€€€€€€€Ý•‰}ÍåÌèé]•‰°ÉI•¹‘•É¥¹½¹Ñ•áÐèéQI%91}8(€€€€€€€€€€€€€€€ô(€€€€€€€€€€€ôì(€€€€€€€€€€€Í•±˜¹°(€€€€€€€€€€€€€€€€¹‘É…Ý}…ÉÉ…åÌ¡‘É…Ý}µ½‘”°€À°€¡Ù•ÉÑ¥•Ì¹±•¸ ¤€¼€È¤…Ì¤ÌÈ¤ì(€€€€€€€ô(€€€€€€€Í•±˜¹°(€€€€€€€€€€€€¹…Ñ¥Ù•}Ñ•áÑÕÉ”¡Ý•‰}ÍåÌèé]•‰°ÉI•¹‘•É¥¹½¹Ñ•áÐèéQaQUIÀ¤ì(€€€€€€€Í•±˜¹°¹‘¥Í…‰±”¡Ý•‰}ÍåÌèé]•‰°ÉI•¹‘•É¥¹½¹Ñ•áÐèé	19¤ì(€€€€€€€Í•±˜¹°¹ÕÍ•}ÁÉ½É…´¡M½µ” ™Í•±˜¹ÁÉ½É…´¤¤ì(€€€€€€€=¬  ¤¤(€€€ô)ô()¥µÁ°É½À™½È5¥±­IÕÍÑ]•‰±I•¹‘•É•Èì(€€€™¸‘É½À ™µÕÐÍ•±˜¤ì(€€€€€€€‘•±•Ñ•}µ¥±­ÉÕÍÑ}™••‘‰…­}Ñ…É•ÑÌ ™Í•±˜¹°°Í•±˜¹™••‘‰…­}Ñ…É•ÑÌ¹•Ñ}µÕÐ ¤¤ì(€€€€€€€™½È‰Õ™™•È¥¸l™Í•±˜¹‰Õ™™•È°€™Í•±˜¹ÁÉ¥µ¥Ñ¥Ù•}‰Õ™™•È°€™Í•±˜¹ÁÉ¥µ¥Ñ¥Ù•}½±½É}‰Õ™™•È°(€€€€€€€€€€€€™Í•±˜¹Ñ•áÑÕÉ•‘}Á½Í¥Ñ¥½¹}‰Õ™™•È°€™Í•±˜¹Ñ•áÑÕÉ•‘}ÕÙ}‰Õ™™•È°€™Í•±˜¹Ý…ÉÁ}Á½Í¥Ñ¥½¹}‰Õ™™•È°€™Í•±˜¹Ý…ÉÁ}ÕÙ}‰Õ™™•Étì(€€€€€€€€€€€Í•±˜¹°¹‘•±•Ñ•}‰Õ™™•È¡M½µ”¡‰Õ™™•È¤¤ì(€€€€€€€ô(€€€€€€€™½ÈÁÉ½É…´¥¸l™Í•±˜¹ÁÉ½É…´°€™Í•±˜¹ÁÉ¥µ¥Ñ¥Ù•}ÁÉ½É…´°€™Í•±˜¹Ñ•áÑÕÉ•‘}ÁÉ½É…´°€™Í•±˜¹Ý…ÉÁ}ÁÉ½É…µtì(€€€€€€€€€€€Í•±˜¹°¹‘•±•Ñ•}ÁÉ½É…´¡M½µ”¡ÁÉ½É…´¤¤ì(€€€€€€€ô(€€€€€€€™½È…¡”¥¸l™µÕÐÍ•±˜¹ÑÉ…¹Í±…Ñ•‘}Ý…ÉÁ}ÁÉ½É…´°€™µÕÐÍ•±˜¹ÑÉ…¹Í±…Ñ•‘}½µÁ½Í¥Ñ•}ÁÉ½É…µtì(€€€€€€€€€€€¥˜±•ÐM½µ”¡ÁÉ½É…´¤€ô…¡”¹•Ñ}µÕÐ ¤¹Ñ…­” ¤ìÍ•±˜¹°¹‘•±•Ñ•}ÁÉ½É…´¡M½µ” ™ÁÉ½É…´¹ÁÉ½É…´¤¤ìô(€€€€€€€ô(€€€€€€€Í•±˜¹°¹‘•±•Ñ•}Ñ•áÑÕÉ”¡M½µ” ™Í•±˜¹Á±…•¡½±‘•É}Ñ•áÑÕÉ”¤¤ì(€€€€€€€™½È…ÍÍ•Ð¥¸Í•±˜¹¹…µ•‘}Ñ•áÑÕÉ•Ì¹•Ñ}µÕÐ ¤¹Ù…±Õ•Ì ¤ìÍ•±˜¹°¹‘•±•Ñ•}Ñ•áÑÕÉ”¡M½µ” ™…ÍÍ•Ð¹Ñ•áÑÕÉ”¤¤ìô(€€€ô)ô()™¸‘•±•Ñ•}µ¥±­ÉÕÍÑ}™••‘‰…­}Ñ…É•ÑÌ¡°è€™Ý•‰}ÍåÌèé]•‰°ÉI•¹‘•É¥¹½¹Ñ•áÐ°Ñ…É•ÑÌè€™5¥±­IÕÍÑ••‘‰…­Q…É•ÑÌ¤ì(€€€™½ÈÑ…É•Ð¥¸€™Ñ…É•ÑÌ¹Ñ…É•ÑÌì(€€€€€€€°¹‘•±•Ñ•}™É…µ•‰Õ™™•È¡M½µ” ™Ñ…É•Ð¹™É…µ•‰Õ™™•È¤¤ì(€€€€€€€°¹‘•±•Ñ•}Ñ•áÑÕÉ”¡M½µ” ™Ñ…É•Ð¹Ñ•áÑÕÉ”¤¤ì(€€€ô)ô()™¸µ¥±­ÉÕÍÑ}Ý•‰±}½µÁ½Í¥Ñ•}‰±•¹‘}™…Ñ½ÉÌ¡µ½‘”è€™ÍÑÈ¤€´ø€¡ÔÌÈ°ÔÌÈ¤ì(€€€µ…Ñ µ½‘”ì(€€€€€€€€‰…‘‘¥Ñ¥Ù”ˆ€ôø€ (€€€€€€€€€€€Ý•‰}ÍåÌèé]•‰°ÉI•¹‘•É¥¹½¹Ñ•áÐèéMI}1A!°(€€€€€€€€€€€Ý•‰}ÍåÌèé]•‰°ÉI•¹‘•É¥¹½¹Ñ•áÐèé=9°(€€€€€€€€¤°(€€€€€€€€‰ÍÉ••¸ˆ€ôø€ (€€€€€€€€€€€Ý•‰}ÍåÌèé]•‰°ÉI•¹‘•É¥¹½¹Ñ•áÐèé=9°(€€€€€€€€€€€Ý•‰}ÍåÌèé]•‰°ÉI•¹‘•É¥¹½¹Ñ•áÐèé=9}5%9UM}MI}=1=H°(€€€€€€€€¤°(€€€€€€€€‰µÕ±Ñ¥Á±äˆ€ôø€ (€€€€€€€€€€€Ý•‰}ÍåÌèé]•‰°ÉI•¹‘•É¥¹½¹Ñ•áÐèéMQ}=1=H°(€€€€€€€€€€€Ý•‰}ÍåÌèé]•‰°ÉI•¹‘•É¥¹½¹Ñ•áÐèéiI<°(€€€€€€€€¤°(€€€€€€€|€ôø€ (€€€€€€€€€€€Ý•‰}ÍåÌèé]•‰°ÉI•¹‘•É¥¹½¹Ñ•áÐèéMI}1A!°(€€€€€€€€€€€Ý•‰}ÍåÌèé]•‰°ÉI•¹‘•É¥¹½¹Ñ•áÐèé=9}5%9UM}MI}1A!°(€€€€€€€€¤°(€€€ô)ô()™¸É•…Ñ•}µ¥±­ÉÕÍÑ}™••‘‰…­}Ñ…É•ÑÌ (€€€°è€™Ý•‰}ÍåÌèé]•‰°ÉI•¹‘•É¥¹½¹Ñ•áÐ°(€€€Ý¥‘Ñ è¤ÌÈ°(€€€¡•¥¡Ðè¤ÌÈ°(¤€´øI•ÍÕ±Ðñ5¥±­IÕÍÑ••‘‰…­Q…É•ÑÌ°)ÍY…±Õ”øì(€€€±•ÐÝ¥‘Ñ €ôÝ¥‘Ñ ¹µ…à Ä¤ì(€€€±•Ð¡•¥¡Ð€ô¡•¥¡Ð¹µ…à Ä¤ì(€€€¥˜Ý¥‘Ñ €ø€ÐÀäØñð¡•¥¡Ð€ø€ÐÀäØñð¤ØÐèé™É½´¡Ý¥‘Ñ ¤€¨¤ØÐèé™É½´¡¡•¥¡Ð¤€ø€à€¨€ÄÀÈÐ€¨€ÄÀÈÐì(€€€€€€€É•ÑÕÉ¸ÉÈ¡)ÍY…±Õ”èé™É½µ}ÍÑÈ ‰I•¹‘•ÈÑ…É•ÑÌ•á••€ÐÀäØÁ¥á•±ÌÁ•ÈÍ¥‘”½È€àµ•…Á¥á•±Ìˆ¤¤ì(€€€ô(€€€±•Ð™¥ÉÍÐ€ôÉ•…Ñ•}µ¥±­ÉÕÍÑ}™••‘‰…­}Ñ…É•Ð¡°°Ý¥‘Ñ °¡•¥¡Ð¤üì(€€€±•ÐÍ•½¹€ôµ…Ñ É•…Ñ•}µ¥±­ÉÕÍÑ}™••‘‰…­}Ñ…É•Ð¡°°Ý¥‘Ñ °¡•¥¡Ð¤ì(€€€€€€€=¬¡Ñ…É•Ð¤€ôøÑ…É•Ð°(€€€€€€€ÉÈ¡•ÉÉ½È¤€ôøì(€€€€€€€€€€€°¹‘•±•Ñ•}™É…µ•‰Õ™™•È¡M½µ” ™™¥ÉÍÐ¹™É…µ•‰Õ™™•È¤¤ì(€€€€€€€€€€€°¹‘•±•Ñ•}Ñ•áÑÕÉ”¡M½µ” ™™¥ÉÍÐ¹Ñ•áÑÕÉ”¤¤ì(€€€€€€€€€€€É•ÑÕÉ¸ÉÈ¡•ÉÉ½È¤ì(€€€€€€€ô(€€€ôì(€€€=¬¡5¥±­IÕÍÑ••‘‰…­Q…É•ÑÌì(€€€€€€€¡•¥¡Ð°(€€€€€€€É•…‘}¥¹‘•àè€À°(€€€€€€€Ñ…É•ÑÌèm™¥ÉÍÐ°Í•½¹‘t°(€€€€€€€Ý¥‘Ñ °(€€€ô¤)ô()™¸É•…Ñ•}µ¥±­ÉÕÍÑ}™••‘‰…­}Ñ…É•Ð (€€€°è€™Ý•‰}ÍåÌèé]•‰°ÉI•¹‘•É¥¹½¹Ñ•áÐ°(€€€Ý¥‘Ñ è¤ÌÈ°(€€€¡•¥¡Ðè¤ÌÈ°(¤€´øI•ÍÕ±Ðñ5¥±­IÕÍÑ••‘‰…­Q…É•Ð°)ÍY…±Õ”øì(€€€±•ÐÑ•áÑÕÉ”€ô°(€€€€€€€€¹É•…Ñ•}Ñ•áÑÕÉ” ¤(€€€€€€€€¹½­}½É}•±Í”¡ñð)ÍY…±Õ”èé™É½µ}ÍÑÈ ‰]•‰0™••‘‰…¬Ñ•áÑÕÉ”…±±½…Ñ¥½¸™…¥±•ˆ¤¤üì(€€€°¹‰¥¹‘}Ñ•áÑÕÉ”¡Ý•‰}ÍåÌèé]•‰°ÉI•¹‘•É¥¹½¹Ñ•áÐèéQaQUI|É°M½µ” ™Ñ•áÑÕÉ”¤¤ì(€€€°¹Ñ•á}Á…É…µ•Ñ•É¤ (€€€€€€€Ý•‰}ÍåÌèé]•‰°ÉI•¹‘•É¥¹½¹Ñ•áÐèéQaQUI|É°(€€€€€€€Ý•‰}ÍåÌèé]•‰°ÉI•¹‘•É¥¹½¹Ñ•áÐèéQaQUI}5%9}%1QH°(€€€€€€€Ý•‰}ÍåÌèé]•‰°ÉI•¹‘•É¥¹½¹Ñ•áÐèé1%9H…Ì¤ÌÈ°(€€€€¤ì(€€€°¹Ñ•á}Á…É…µ•Ñ•É¤ (€€€€€€€Ý•‰}ÍåÌèé]•‰°ÉI•¹‘•É¥¹½¹Ñ•áÐèéQaQUI|É°(€€€€€€€Ý•‰}ÍåÌèé]•‰°ÉI•¹‘•É¥¹½¹Ñ•áÐèéQaQUI}5}%1QH°(€€€€€€€Ý•‰}ÍåÌèé]•‰°ÉI•¹‘•É¥¹½¹Ñ•áÐèé1%9H…Ì¤ÌÈ°(€€€€¤ì(€€€°¹Ñ•á}Á…É…µ•Ñ•É¤ (€€€€€€€Ý•‰}ÍåÌèé]•‰°ÉI•¹‘•É¥¹½¹Ñ•áÐèéQaQUI|É°(€€€€€€€Ý•‰}ÍåÌèé]•‰°ÉI•¹‘•É¥¹½¹Ñ•áÐèéQaQUI}]IA}L°(€€€€€€€Ý•‰}ÍåÌèé]•‰°ÉI•¹‘•É¥¹½¹Ñ•áÐèé15A}Q=}…Ì¤ÌÈ°(€€€€¤ì(€€€°¹Ñ•á}Á…É…µ•Ñ•É¤ (€€€€€€€Ý•‰}ÍåÌèé]•‰°ÉI•¹‘•É¥¹½¹Ñ•áÐèéQaQUI|É°(€€€€€€€Ý•‰}ÍåÌèé]•‰°ÉI•¹‘•É¥¹½¹Ñ•áÐèéQaQUI}]IA}P°(€€€€€€€Ý•‰}ÍåÌèé]•‰°ÉI•¹‘•É¥¹½¹Ñ•áÐèé15A}Q=}…Ì¤ÌÈ°(€€€€¤ì(€€€°¹Ñ•á}¥µ…•|É‘}Ý¥Ñ¡}¤ÌÉ}…¹‘}¤ÌÉ}…¹‘}¤ÌÉ}…¹‘}™½Éµ…Ñ}…¹‘}ÑåÁ•}…¹‘}½ÁÑ}Ôá}…ÉÉ…ä (€€€€€€€Ý•‰}ÍåÌèé]•‰°ÉI•¹‘•É¥¹½¹Ñ•áÐèéQaQUI|É°(€€€€€€€€À°(€€€€€€€Ý•‰}ÍåÌèé]•‰°ÉI•¹‘•É¥¹½¹Ñ•áÐèéI	…Ì¤ÌÈ°(€€€€€€€Ý¥‘Ñ °(€€€€€€€¡•¥¡Ð°(€€€€€€€€À°(€€€€€€€Ý•‰}ÍåÌèé]•‰°ÉI•¹‘•É¥¹½¹Ñ•áÐèéI	°(€€€€€€€Ý•‰}ÍåÌèé]•‰°ÉI•¹‘•É¥¹½¹Ñ•áÐèéU9M%9}	eQ°(€€€€€€€9½¹”°(€€€€¤üì((€€€±•Ð™É…µ•‰Õ™™•È€ô°(€€€€€€€€¹É•…Ñ•}™É…µ•‰Õ™™•È ¤(€€€€€€€€¹½­}½É}•±Í”¡ñð)ÍY…±Õ”èé™É½µ}ÍÑÈ ‰]•‰0™••‘‰…¬™É…µ•‰Õ™™•È…±±½…Ñ¥½¸™…¥±•ˆ¤¤üì(€€€°¹‰¥¹‘}™É…µ•‰Õ™™•È (€€€€€€€Ý•‰}ÍåÌèé]•‰°ÉI•¹‘•É¥¹½¹Ñ•áÐèéI5	UH°(€€€€€€€M½µ” ™™É…µ•‰Õ™™•È¤°(€€€€¤ì(€€€°¹™É…µ•‰Õ™™•É}Ñ•áÑÕÉ•|É (€€€€€€€Ý•‰}ÍåÌèé]•‰°ÉI•¹‘•É¥¹½¹Ñ•áÐèéI5	UH°(€€€€€€€Ý•‰}ÍåÌèé]•‰°ÉI•¹‘•É¥¹½¹Ñ•áÐèé=1=I}QQ!59PÀ°(€€€€€€€Ý•‰}ÍåÌèé]•‰°ÉI•¹‘•É¥¹½¹Ñ•áÐèéQaQUI|É°(€€€€€€€M½µ” ™Ñ•áÑÕÉ”¤°(€€€€€€€€À°(€€€€¤ì(€€€±•ÐÍÑ…ÑÕÌ€ô°¹¡•­}™É…µ•‰Õ™™•É}ÍÑ…ÑÕÌ¡Ý•‰}ÍåÌèé]•‰°ÉI•¹‘•É¥¹½¹Ñ•áÐèéI5	UH¤ì(€€€¥˜ÍÑ…ÑÕÌ€„ôÝ•‰}ÍåÌèé]•‰°ÉI•¹‘•É¥¹½¹Ñ•áÐèéI5	UI}=5A1Qì(€€€€€€€°¹‘•±•Ñ•}™É…µ•‰Õ™™•È¡M½µ” ™™É…µ•‰Õ™™•È¤¤ì(€€€€€€€°¹‘•±•Ñ•}Ñ•áÑÕÉ”¡M½µ” ™Ñ•áÑÕÉ”¤¤ì(€€€€€€€É•ÑÕÉ¸ÉÈ¡)ÍY…±Õ”èé™É½µ}ÍÑÈ (€€€€€€€€€€€€‰]•‰0™••‘‰…¬™É…µ•‰Õ™™•È¥Ì¥¹½µÁ±•Ñ”ˆ°(€€€€€€€€¤¤ì(€€€ô(€€€°¹Ù¥•ÝÁ½ÉÐ À°€À°Ý¥‘Ñ °¡•¥¡Ð¤ì(€€€°¹±•…É}½±½È À¸À°€À¸À°€À¸À°€Ä¸À¤ì(€€€°¹±•…È¡Ý•‰}ÍåÌèé]•‰°ÉI•¹‘•É¥¹½¹Ñ•áÐèé=1=I}	UI}	%P¤ì((€€€=¬¡5¥±­IÕÍÑ••‘‰…­Q…É•Ðì(€€€€€€€™É…µ•‰Õ™™•È°(€€€€€€€Ñ•áÑÕÉ”°(€€€ô¤)ô()™¸É•…Ñ•}µ¥±­ÉÕÍÑ}Á±…•¡½±‘•É}Ñ•áÑÕÉ” (€€€°è€™Ý•‰}ÍåÌèé]•‰°ÉI•¹‘•É¥¹½¹Ñ•áÐ°(¤€´øI•ÍÕ±ÐñÝ•‰}ÍåÌèé]•‰±Q•áÑÕÉ”°)ÍY…±Õ”øì(€€€±•ÐÑ•áÑÕÉ”€ô°(€€€€€€€€¹É•…Ñ•}Ñ•áÑÕÉ” ¤(€€€€€€€€¹½­}½É}•±Í”¡ñð)ÍY…±Õ”èé™É½µ}ÍÑÈ ‰]•‰0Á±…•¡½±‘•ÈÑ•áÑÕÉ”…±±½…Ñ¥½¸™…¥±•ˆ¤¤üì(€€€±•ÐÁ¥á•±Ì€ôlÁÔà°€À°€À°€ÈÔÕtì(€€€°¹‰¥¹‘}Ñ•áÑÕÉ”¡Ý•‰}ÍåÌèé]•‰°ÉI•¹‘•É¥¹½¹Ñ•áÐèéQaQUI|É°M½µ” ™Ñ•áÑÕÉ”¤¤ì(€€€°¹Ñ•á}Á…É…µ•Ñ•É¤ (€€€€€€€Ý•‰}ÍåÌèé]•‰°ÉI•¹‘•É¥¹½¹Ñ•áÐèéQaQUI|É°(€€€€€€€Ý•‰}ÍåÌèé]•‰°ÉI•¹‘•É¥¹½¹Ñ•áÐèéQaQUI}5%9}%1QH°(€€€€€€€Ý•‰}ÍåÌèé]•‰°ÉI•¹‘•É¥¹½¹Ñ•áÐèé1%9H…Ì¤ÌÈ°(€€€€¤ì(€€€°¹Ñ•á}Á…É…µ•Ñ•É¤ (€€€€€€€Ý•‰}ÍåÌèé]•‰°ÉI•¹‘•É¥¹½¹Ñ•áÐèéQaQUI|É°(€€€€€€€Ý•‰}ÍåÌèé]•‰°ÉI•¹‘•É¥¹½¹Ñ•áÐèéQaQUI}5}%1QH°(€€€€€€€Ý•‰}ÍåÌèé]•‰°ÉI•¹‘•É¥¹½¹Ñ•áÐèé1%9H…Ì¤ÌÈ°(€€€€¤ì(€€€°¹Ñ•á}Á…É…µ•Ñ•É¤ (€€€€€€€Ý•‰}ÍåÌèé]•‰°ÉI•¹‘•É¥¹½¹Ñ•áÐèéQaQUI|É°(€€€€€€€Ý•‰}ÍåÌèé]•‰°ÉI•¹‘•É¥¹½¹Ñ•áÐèéQaQUI}]IA}L°(€€€€€€€Ý•‰}ÍåÌèé]•‰°ÉI•¹‘•É¥¹½¹Ñ•áÐèéIAP…Ì¤ÌÈ°(€€€€¤ì(€€€°¹Ñ•á}Á…É…µ•Ñ•É¤ (€€€€€€€Ý•‰}ÍåÌèé]•‰°ÉI•¹‘•É¥¹½¹Ñ•áÐèéQaQUI|É°(€€€€€€€Ý•‰}ÍåÌèé]•‰°ÉI•¹‘•É¥¹½¹Ñ•áÐèéQaQUI}]IA}P°(€€€€€€€Ý•‰}ÍåÌèé]•‰°ÉI•¹‘•É¥¹½¹Ñ•áÐèéIAP…Ì¤ÌÈ°(€€€€¤ì(€€€°¹Ñ•á}¥µ…•|É‘}Ý¥Ñ¡}¤ÌÉ}…¹‘}¤ÌÉ}…¹‘}¤ÌÉ}…¹‘}™½Éµ…Ñ}…¹‘}ÑåÁ•}…¹‘}½ÁÑ}Ôá}…ÉÉ…ä (€€€€€€€Ý•‰}ÍåÌèé]•‰°ÉI•¹‘•É¥¹½¹Ñ•áÐèéQaQUI|É°(€€€€€€€€À°(€€€€€€€Ý•‰}ÍåÌèé]•‰°ÉI•¹‘•É¥¹½¹Ñ•áÐèéI	…Ì¤ÌÈ°(€€€€€€€€Ä°(€€€€€€€€Ä°(€€€€€€€€À°(€€€€€€€Ý•‰}ÍåÌèé]•‰°ÉI•¹‘•É¥¹½¹Ñ•áÐèéI	°(€€€€€€€Ý•‰}ÍåÌèé]•‰°ÉI•¹‘•É¥¹½¹Ñ•áÐèéU9M%9}	eQ°(€€€€€€€M½µ” ™Á¥á•±Ì¤°(€€€€¤üì(€€€=¬¡Ñ•áÑÕÉ”¤)ô()™¸É•…Ñ•}µ¥±­ÉÕÍÑ}Ñ•áÑÕÉ•}™É½µ}‘…Ñ…}ÕÉ° (€€€°è€™Ý•‰}ÍåÌèé]•‰°ÉI•¹‘•É¥¹½¹Ñ•áÐ°(€€€‘…Ñ…}ÕÉ°è€™ÍÑÈ°(€€€Ñ½Ñ…±}Á¥á•±ÌèIŒñ•±°ñÔØÐøø°(¤€´øI•ÍÕ±Ðñ5¥±­IÕÍÑQ•áÑÕÉ•ÍÍ•Ð°)ÍY…±Õ”øì(€€€¥˜‘…Ñ…}ÕÉ°¹±•¸ ¤€ø€ÈÐ€¨€ÄÀÈÐ€¨€ÄÀÈÐñð€…l‰Á¹œˆ°€‰©Á•œˆ°€‰¥˜ˆ°€‰Ý•‰Àˆ°€‰‰µÀ‰t¹¥Ñ•È ¤(€€€€€€€€¹…¹ä¡ñ­¥¹‘ð‘…Ñ…}ÕÉ°¹ÍÑ…ÉÑÍ}Ý¥Ñ  ™™½Éµ…Ð„ ‰‘…Ñ„é¥µ…”½í­¥¹‘ôí‰…Í”ØÐ°ˆ¤¤¤ì(€€€€€€€É•ÑÕÉ¸ÉÈ¡)ÍY…±Õ”èé™É½µ}ÍÑÈ ‰Q•áÑÕÉ”µÕÍÐ‰”„‰½Õ¹‘••µ‰•‘‘•É…ÍÑ•È¥µ…”ìUI1Ì…¹MY…É”Õ¹…Ù…¥±…‰±”ˆ¤¤ì(€€€ô(€€€±•ÐÑ•áÑÕÉ”€ôÉ•…Ñ•}µ¥±­ÉÕÍÑ}Á±…•¡½±‘•É}Ñ•áÑÕÉ”¡°¤üì(€€€±•Ð¥µ…”€ôÝ•‰}ÍåÌèé!Ñµ±%µ…•±•µ•¹Ðèé¹•Ü ¤üì(€€€±•Ð±}™½É}±½…€ô°¹±½¹” ¤ì(€€€±•ÐÑ•áÑÕÉ•}™½É}±½…€ôÑ•áÑÕÉ”¹±½¹” ¤ì(€€€±•Ð¥µ…•}™½É}±½…€ô¥µ…”¹±½¹” ¤ì(€€€±•ÐÍÑ…Ñ”€ôIŒèé¹•Ü¡I•™•±°èé¹•Ü¡9½¹”¤¤ì(€€€±•ÐÍÑ…Ñ•}™½É}±½…€ôÍÑ…Ñ”¹±½¹” ¤ì(€€€±•ÐÁ¥á•±Í}™½É}±½…€ôÑ½Ñ…±}Á¥á•±Ì¹±½¹” ¤ì(€€€±•Ð…±±½…Ñ•‘}Á¥á•±Ì€ôIŒèé¹•Ü¡•±°èé¹•Ü À¤¤ì(€€€±•Ð…±±½…Ñ•‘}™½É}±½…€ô…±±½…Ñ•‘}Á¥á•±Ì¹±½¹” ¤ì(€€€±•Ð½¹±½…€ô±½ÍÕÉ”èèñ‘å¸¹5ÕÐ¡Ý•‰}ÍåÌèéÙ•¹Ð¤øèéÝÉ…À¡	½àèé¹•Ü¡µ½Ù”ñ}•Ù•¹Ñðì(€€€€€€€±•ÐÝ¥‘Ñ €ô¥µ…•}™½É}±½…¹¹…ÑÕÉ…±}Ý¥‘Ñ  ¤ì(€€€€€€€±•Ð¡•¥¡Ð€ô¥µ…•}™½É}±½…¹¹…ÑÕÉ…±}¡•¥¡Ð ¤ì(€€€€€€€±•ÐÁ¥á•±Ì€ôÔØÐèé™É½´¡Ý¥‘Ñ ¤€¨ÔØÐèé™É½´¡¡•¥¡Ð¤ì(€€€€€€€¥˜Ý¥‘Ñ €ôô€Àñð¡•¥¡Ð€ôô€ÀñðÝ¥‘Ñ €ø€ÐÀäØñð¡•¥¡Ð€ø€ÐÀäØñð(€€€€€€€€€€€Á¥á•±Ì€ø€à€¨€ÄÀÈÐ€¨€ÄÀÈÐñð(€€€€€€€€€€€Á¥á•±Í}™½É}±½…¹•Ð ¤¹Í…ÑÕÉ…Ñ¥¹}ÍÕˆ¡…±±½…Ñ•‘}™½É}±½…¹•Ð ¤¤€¬Á¥á•±Ì€ø€ÌÈ€¨€ÄÀÈÐ€¨€ÄÀÈÐì(€€€€€€€€€€€€©ÍÑ…Ñ•}™½É}±½…¹‰½ÉÉ½Ý}µÕÐ ¤€ôM½µ”¡ÉÈ ‰•½‘•¥µ…”•á••‘Ì€ÐÀäØÁ¥á•±ÌÁ•ÈÍ¥‘”½È€àµ•…Á¥á•±Ìˆ¹Ñ½}ÍÑÉ¥¹œ ¤¤¤ì(€€€€€€€€€€€É•ÑÕÉ¸ì(€€€€€€€ô(€€€€€€€±}™½É}±½…¹…Ñ¥Ù•}Ñ•áÑÕÉ”¡Ý•‰}ÍåÌèé]•‰°ÉI•¹‘•É¥¹½¹Ñ•áÐèéQaQUIÀ¤ì(€€€€€€€±}™½É}±½…¹‰¥¹‘}Ñ•áÑÕÉ” (€€€€€€€€€€€Ý•‰}ÍåÌèé]•‰°ÉI•¹‘•É¥¹½¹Ñ•áÐèéQaQUI|É°(€€€€€€€€€€€M½µ” ™Ñ•áÑÕÉ•}™½É}±½…¤°(€€€€€€€€¤ì(€€€€€€€±•ÐÉ•ÍÕ±Ð€ô±}™½É}±½…¹Ñ•á}¥µ…•|É‘}Ý¥Ñ¡}ÔÌÉ}…¹‘}ÔÌÉ}…¹‘}¡Ñµ±}¥µ…•}•±•µ•¹Ð (€€€€€€€€€€€Ý•‰}ÍåÌèé]•‰°ÉI•¹‘•É¥¹½¹Ñ•áÐèéQaQUI|É°(€€€€€€€€€€€€À°(€€€€€€€€€€€Ý•‰}ÍåÌèé]•‰°ÉI•¹‘•É¥¹½¹Ñ•áÐèéI	…Ì¤ÌÈ°(€€€€€€€€€€€Ý•‰}ÍåÌèé]•‰°ÉI•¹‘•É¥¹½¹Ñ•áÐèéI	°(€€€€€€€€€€€Ý•‰}ÍåÌèé]•‰°ÉI•¹‘•É¥¹½¹Ñ•áÐèéU9M%9}	eQ°(€€€€€€€€€€€€™¥µ…•}™½É}±½…°(€€€€€€€€¤ì(€€€€€€€±•ÐÉ•ÍÕ±Ð€ôÉ•ÍÕ±Ð¹µ…Á}•ÉÈ¡ñ•ÉÉ½Éð•ÉÉ½È¹…Í}ÍÑÉ¥¹œ ¤¹Õ¹ÝÉ…Á}½É}•±Í”¡ñð€‰ATÕÁ±½…™…¥±•ˆ¹Ñ½}ÍÑÉ¥¹œ ¤¤¤(€€€€€€€€€€€€¹…¹‘}Ñ¡•¸¡ð ¥ð¥˜±}™½É}±½…¹•Ñ}•ÉÉ½È ¤€ôôÝ•‰}ÍåÌèé]•‰°ÉI•¹‘•É¥¹½¹Ñ•áÐèé9=}II=Hì=¬  ¤¤ô(€€€€€€€€€€€€€€€•±Í”ìÉÈ ‰ATÑ•áÑÕÉ”ÕÁ±½…™…¥±•ˆ¹Ñ½}ÍÑÉ¥¹œ ¤¤ô¤ì(€€€€€€€¥˜É•ÍÕ±Ð¹¥Í}½¬ ¤ì(€€€€€€€€€€€Á¥á•±Í}™½É}±½…¹Í•Ð¡Á¥á•±Í}™½É}±½…¹•Ð ¤¹Í…ÑÕÉ…Ñ¥¹}ÍÕˆ¡…±±½…Ñ•‘}™½É}±½…¹•Ð ¤¤€¬Á¥á•±Ì¤ì(€€€€€€€€€€€…±±½…Ñ•‘}™½É}±½…¹Í•Ð¡Á¥á•±Ì¤ì(€€€€€€€ô(€€€€€€€€©ÍÑ…Ñ•}™½É}±½…¹‰½ÉÉ½Ý}µÕÐ ¤€ôM½µ”¡É•ÍÕ±Ð¤ì(€€€ô¤¤ì(€€€±•ÐÍÑ…Ñ•}™½É}•ÉÉ½È€ôÍÑ…Ñ”¹±½¹” ¤ì(€€€±•Ð½¹•ÉÉ½È€ô±½ÍÕÉ”èèñ‘å¸¹5ÕÐ¡Ý•‰}ÍåÌèéÙ•¹Ð¤øèéÝÉ…À¡	½àèé¹•Ü¡µ½Ù”ñ}•Ù•¹Ñðì(€€€€€€€€©ÍÑ…Ñ•}™½É}•ÉÉ½È¹‰½ÉÉ½Ý}µÕÐ ¤€ôM½µ”¡ÉÈ ‰%µ…”½Õ±¹½Ð‰”‘•½‘•ˆ¹Ñ½}ÍÑÉ¥¹œ ¤¤¤ì(€€€ô¤¤ì(€€€¥µ…”¹Í•Ñ}½¹±½…¡M½µ”¡½¹±½…¹…Í}É•˜ ¤¹Õ¹¡•­•‘}É•˜ ¤¤¤ì(€€€¥µ…”¹Í•Ñ}½¹•ÉÉ½È¡M½µ”¡½¹•ÉÉ½È¹…Í}É•˜ ¤¹Õ¹¡•­•‘}É•˜ ¤¤¤ì(€€€¥µ…”¹Í•Ñ}ÍÉŒ¡‘…Ñ…}ÕÉ°¤ì(€€€=¬¡5¥±­IÕÍÑQ•áÑÕÉ•ÍÍ•ÐìÑ•áÑÕÉ”°¥µ…”°ÍÑ…Ñ”°Ñ½Ñ…±}Á¥á•±Ì°…±±½…Ñ•‘}Á¥á•±Ì°}½¹±½…è½¹±½…°}½¹•ÉÉ½Èè½¹•ÉÉ½Èô¤)ô()™¸½µÁ¥±•}µ¥±­ÉÕÍÑ}Í¡…‘•È (€€€°è€™Ý•‰}ÍåÌèé]•‰°ÉI•¹‘•É¥¹½¹Ñ•áÐ°(€€€Í¡…‘•É}ÑåÁ”èÔÌÈ°(€€€Í½ÕÉ”è€™ÍÑÈ°(¤€´øI•ÍÕ±ÐñÝ•‰}ÍåÌèé]•‰±M¡…‘•È°)ÍY…±Õ”øì(€€€±•ÐÍ¡…‘•È€ô°(€€€€€€€€¹É•…Ñ•}Í¡…‘•È¡Í¡…‘•É}ÑåÁ”¤(€€€€€€€€¹½­}½É}•±Í”¡ñð)ÍY…±Õ”èé™É½µ}ÍÑÈ ‰]•‰0Í¡…‘•È…±±½…Ñ¥½¸™…¥±•ˆ¤¤üì(€€€°¹Í¡…‘•É}Í½ÕÉ” ™Í¡…‘•È°Í½ÕÉ”¤ì(€€€°¹½µÁ¥±•}Í¡…‘•È ™Í¡…‘•È¤ì(€€€¥˜°(€€€€€€€€¹•Ñ}Í¡…‘•É}Á…É…µ•Ñ•È ™Í¡…‘•È°Ý•‰}ÍåÌèé]•‰°ÉI•¹‘•É¥¹½¹Ñ•áÐèé=5A%1}MQQUL¤(€€€€€€€€¹…Í}‰½½° ¤(€€€€€€€€¹Õ¹ÝÉ…Á}½È¡™…±Í”¤(€€€ì(€€€€€€€=¬¡Í¡…‘•È¤(€€€ô•±Í”ì(€€€€€€€±•Ð•ÉÉ½È€ô°¹•Ñ}Í¡…‘•É}¥¹™½}±½œ ™Í¡…‘•È¤¹Õ¹ÝÉ…Á}½É}•±Í”¡ñð€‰5¥±­IÕÍÐ]•‰0Í¡…‘•È½µÁ¥±”™…¥±•ˆ¹Ñ½}ÍÑÉ¥¹œ ¤¤ì(€€€€€€€°¹‘•±•Ñ•}Í¡…‘•È¡M½µ” ™Í¡…‘•È¤¤ì(€€€€€€€ÉÈ¡)ÍY…±Õ”èé™É½µ}ÍÑÈ ™•ÉÉ½È¤¤(€€€ô)ô()™¸±¥¹­}µ¥±­ÉÕÍÑ}ÁÉ½É…´ (€€€°è€™Ý•‰}ÍåÌèé]•‰°ÉI•¹‘•É¥¹½¹Ñ•áÐ°(€€€Ù•ÉÑ•á}Í¡…‘•Èè€™Ý•‰}ÍåÌèé]•‰±M¡…‘•È°(€€€™É…µ•¹Ñ}Í¡…‘•Èè€™Ý•‰}ÍåÌèé]•‰±M¡…‘•È°(¤€´øI•ÍÕ±ÐñÝ•‰}ÍåÌèé]•‰±AÉ½É…´°)ÍY…±Õ”øì(€€€±•ÐÁÉ½É…´€ô°(€€€€€€€€¹É•…Ñ•}ÁÉ½É…´ ¤(€€€€€€€€¹½­}½É}•±Í”¡ñð)ÍY…±Õ”èé™É½µ}ÍÑÈ ‰]•‰0ÁÉ½É…´…±±½…Ñ¥½¸™…¥±•ˆ¤¤üì(€€€°¹…ÑÑ…¡}Í¡…‘•È ™ÁÉ½É…´°Ù•ÉÑ•á}Í¡…‘•È¤ì(€€€°¹…ÑÑ…¡}Í¡…‘•È ™ÁÉ½É…´°™É…µ•¹Ñ}Í¡…‘•È¤ì(€€€°¹±¥¹­}ÁÉ½É…´ ™ÁÉ½É…´¤ì(€€€°¹‘•Ñ…¡}Í¡…‘•È ™ÁÉ½É…´°Ù•ÉÑ•á}Í¡…‘•È¤ì(€€€°¹‘•Ñ…¡}Í¡…‘•È ™ÁÉ½É…´°™É…µ•¹Ñ}Í¡…‘•È¤ì(€€€°¹‘•±•Ñ•}Í¡…‘•È¡M½µ”¡Ù•ÉÑ•á}Í¡…‘•È¤¤ì(€€€°¹‘•±•Ñ•}Í¡…‘•È¡M½µ”¡™É…µ•¹Ñ}Í¡…‘•È¤¤ì(€€€¥˜°(€€€€€€€€¹•Ñ}ÁÉ½É…µ}Á…É…µ•Ñ•È ™ÁÉ½É…´°Ý•‰}ÍåÌèé]•‰°ÉI•¹‘•É¥¹½¹Ñ•áÐèé1%9-}MQQUL¤(€€€€€€€€¹…Í}‰½½° ¤(€€€€€€€€¹Õ¹ÝÉ…Á}½È¡™…±Í”¤(€€€ì(€€€€€€€=¬¡ÁÉ½É…´¤(€€€ô•±Í”ì(€€€€€€€±•Ð•ÉÉ½È€ô°¹•Ñ}ÁÉ½É…µ}¥¹™½}±½œ ™ÁÉ½É…´¤¹Õ¹ÝÉ…Á}½É}•±Í”¡ñð€‰5¥±­IÕÍÐ]•‰0ÁÉ½É…´±¥¹¬™…¥±•ˆ¹Ñ½}ÍÑÉ¥¹œ ¤¤ì(€€€€€€€°¹‘•±•Ñ•}ÁÉ½É…´¡M½µ” ™ÁÉ½É…´¤¤ì(€€€€€€€ÉÈ¡)ÍY…±Õ”èé™É½µ}ÍÑÈ ™•ÉÉ½È¤¤(€€€ô)ô()½¹ÍÐ5%1-IUMQ}]	1}YIQa}M!Hè€™ÍÑÈ€ôÈŒˆÙ•ÉÍ¥½¸€ÌÀÀ•Ì)¥¸Ù•ŒÈÁ½Í¥Ñ¥½¸ì)½ÕÐÙ•ŒÈÙ}ÕØì)Ù½¥µ…¥¸ ¤ì(€Ù}ÕØ€ôÁ½Í¥Ñ¥½¸€¨€À¸Ô€¬Ù•ŒÈ À¸Ô¤ì(€±}A½Í¥Ñ¥½¸€ôÙ•ŒÐ¡Á½Í¥Ñ¥½¸°€À¸À°€Ä¸À¤ì)ô(ˆŒì()½¹ÍÐ5%1-IUMQ}QI9M1Q}YIQa}M!Hè€™ÍÑÈ€ôÈŒˆÙ•ÉÍ¥½¸€ÌÀÀ•Ì)¥¸Ù•ŒÈÁ½Í¥Ñ¥½¸ì)Õ¹¥™½É´Ù•ŒÐµ½Ñ¥½¸ì)Õ¹¥™½É´™±½…Ð¥Í]…ÉÀì)½ÕÐÙ•ŒÈÕØì)Ù½¥µ…¥¸ ¤ì(€ÕØ€ôÁ½Í¥Ñ¥½¸€¨€À¸Ô€¬Ù•ŒÈ À¸Ô¤ì(€¥˜€¡¥Í]…ÉÀ€ø€À¸Ô¤ì(€€€™±½…ÐŒ€ô½Ì¡µ½Ñ¥½¸¹à¤°Ì€ôÍ¥¸¡µ½Ñ¥½¸¹à¤ì(€€€ÕØ€ôµ…ÐÈ¡Œ°€µÌ°Ì°Œ¤€¨€¡ÕØ€´Ù•ŒÈ À¸Ô¤€´µ½Ñ¥½¸¹éÜ¤€¼µ…à¡µ½Ñ¥½¸¹ä°€À¸ÀÀÄ¤€¬Ù•ŒÈ À¸Ô¤ì(€ô(€±}A½Í¥Ñ¥½¸€ôÙ•ŒÐ¡Á½Í¥Ñ¥½¸°€À¸À°€Ä¸À¤ì)ô(ˆŒì()½¹ÍÐ5%1-IUMQ}QI9M1Q}5M!}YIQa}M!Hè€™ÍÑÈ€ôÈŒˆÙ•ÉÍ¥½¸€ÌÀÀ•Ì)¥¸Ù•ŒÈÁ½Í¥Ñ¥½¸ì)¥¸Ù•ŒÈÍ½ÕÉ•UØì)½ÕÐÙ•ŒÈÕØì)Ù½¥µ…¥¸ ¤ì(€ÕØ€ôÍ½ÕÉ•UØì(€±}A½Í¥Ñ¥½¸€ôÙ•ŒÐ¡Á½Í¥Ñ¥½¸°€À¸À°€Ä¸À¤ì)ô(ˆŒì()½¹ÍÐ5%1-IUMQ}]	1}I59Q}	=dè€™ÍÑÈ€ôÈŒˆ)Õ¹¥™½É´Ù•ŒÐÕ}µ½Ñ¥½¸ì)Õ¹¥™½É´Í…µÁ±•ÈÉÕ}ÁÉ•Ù¥½ÕÍÉ…µ”ì)Õ¹¥™½É´™±½…ÐÕ}™••‘‰…¬ì)Õ¹¥™½É´™±½…ÐÕ}‘¥ÍÁ±…å=¹±äì)Õ¹¥™½É´™±½…ÐÕ}½ÕÑÁÕÑ±Á¡„ì)¥¸Ù•ŒÈÙ}ÕØì)½ÕÐÙ•ŒÐ½ÕÑ½±½Èì)Ù½¥µ…¥¸ ¤ì(€Ù•ŒÈ•¹Ñ•É•€ô€¡Ù}ÕØ€´Ù•ŒÈ À¸Ô¤¤€¼µ…à¡Õ}µ½Ñ¥½¸¹ä°€À¸ÀÀÄ¤ì(€™±½…ÐÌ€ôÍ¥¸¡Õ}µ½Ñ¥½¸¹à¤°Œ€ô½Ì¡Õ}µ½Ñ¥½¸¹à¤ì(€Ù•ŒÈ™••‘‰…­UØ€ôÙ•ŒÈ¡Œ©•¹Ñ•É•¹àµÌ©•¹Ñ•É•¹ä°Ì©•¹Ñ•É•¹à­Œ©•¹Ñ•É•¹ä¤€¬Ù•ŒÈ À¸Ô¤€¬Õ}µ½Ñ¥½¸¹éÜì(€Ù•ŒÈÍ…µÁ±•UØ€ôÕ}‘¥ÍÁ±…å=¹±ä€ø€À¸Ô€üÙ}ÕØ€è™••‘‰…­UØì(€™±½…ÐÉ•Ñ•¹Ñ¥½¸€ôÕ}‘¥ÍÁ±…å=¹±ä€ø€À¸Ô€ü€Ä¸À€è±…µÀ¡Õ}™••‘‰…¬°€À¸À°€Ä¸À¤ì(€½ÕÑ½±½È€ôÙ•ŒÐ¡Ñ•áÑÕÉ”¡Õ}ÁÉ•Ù¥½ÕÍÉ…µ”°±…µÀ¡Í…µÁ±•UØ°Ù•ŒÈ À¸À¤°Ù•ŒÈ Ä¸À¤¤¤¹Éˆ€¨É•Ñ•¹Ñ¥½¸°Õ}½ÕÑÁÕÑ±Á¡„¤ì(€½ÕÑ½±½È¹„€¨ôµ¥±­ÉÕÍÑ}ÑÉ…¹Í¥Ñ¥½¹}µ…Í¬¡Ù}ÕØ¤ì)ô(ˆŒì()½¹ÍÐ5%1-IUMQ}AI%5%Q%Y}YIQa}M!Hè€™ÍÑÈ€ôÈŒˆÙ•ÉÍ¥½¸€ÌÀÀ•Ì)¥¸Ù•ŒÈÁ½Í¥Ñ¥½¸ì)¥¸Ù•ŒÐ½±½Èì)Õ¹¥™½É´™±½…ÐÕ}ÁÉ¥µ¥Ñ¥Ù•A½¥¹ÑM¥é”ì)½ÕÐÙ•ŒÐÙ}½±½Èì)Ù½¥µ…¥¸ ¤ì(€Ù}½±½È€ô½±½Èì(€±}A½¥¹ÑM¥é”€ôÕ}ÁÉ¥µ¥Ñ¥Ù•A½¥¹ÑM¥é”ì(€±}A½Í¥Ñ¥½¸€ôÙ•ŒÐ¡Á½Í¥Ñ¥½¸°€À¸À°€Ä¸À¤ì)ô(ˆŒì()½¹ÍÐ5%1-IUMQ}AI%5%Q%Y}I59Q}M!Hè€™ÍÑÈ€ôÈŒˆÙ•ÉÍ¥½¸€ÌÀÀ•Ì)ÁÉ•¥Í¥½¸¡¥¡À™±½…Ðì)¥¸Ù•ŒÐÙ}½±½Èì)½ÕÐÙ•ŒÐ½ÕÑ½±½Èì)Ù½¥µ…¥¸ ¤ì(€½ÕÑ½±½È€ôÙ}½±½Èì)ô(ˆŒì()½¹ÍÐ5%1-IUMQ}QaQUI}YIQa}M!Hè€™ÍÑÈ€ôÈŒˆÙ•ÉÍ¥½¸€ÌÀÀ•Ì)¥¸Ù•ŒÈÁ½Í¥Ñ¥½¸ì)¥¸Ù•ŒÈÍ½ÕÉ•UØì)½ÕÐÙ•ŒÈÙ}ÕØì)Ù½¥µ…¥¸ ¤ì(€Ù}ÕØ€ôÍ½ÕÉ•UØì(€±}A½Í¥Ñ¥½¸€ôÙ•ŒÐ¡Á½Í¥Ñ¥½¸°€À¸À°€Ä¸À¤ì)ô(ˆŒì()½¹ÍÐ5%1-IUMQ}QaQUI}I59Q}M!Hè€™ÍÑÈ€ôÈŒˆÙ•ÉÍ¥½¸€ÌÀÀ•Ì)ÁÉ•¥Í¥½¸¡¥¡À™±½…Ðì)Õ¹¥™½É´Í…µÁ±•ÈÉÕ}Ñ•áÑÕÉ”ì)Õ¹¥™½É´Ù•ŒÌÕ}Ñ¥¹Ðì)Õ¹¥™½É´™±½…ÐÕ}…±Á¡„ì)¥¸Ù•ŒÈÙ}ÕØì)½ÕÐÙ•ŒÐ½ÕÑ½±½Èì)Ù½¥µ…¥¸ ¤ì(€Ù•ŒÐÑ•á•°€ôÑ•áÑÕÉ”¡Õ}Ñ•áÑÕÉ”°Ù}ÕØ¤ì(€½ÕÑ½±½È€ôÙ•ŒÐ¡Ñ•á•°¹Éˆ€¨Õ}Ñ¥¹Ð°Ñ•á•°¹„€¨Õ}…±Á¡„¤ì)ô(ˆŒì()½¹ÍÐ5%1-IUMQ}]IA}I%}YIQa}M!Hè€™ÍÑÈ€ôÈŒˆÙ•ÉÍ¥½¸€ÌÀÀ•Ì)¥¸Ù•ŒÈÁ½Í¥Ñ¥½¸ì)¥¸Ù•ŒÈÍ½ÕÉ•UØì)½ÕÐÙ•ŒÈÙ}Í½ÕÉ•UØì)Ù½¥µ…¥¸ ¤ì(€Ù}Í½ÕÉ•UØ€ôÍ½ÕÉ•UØì(€±}A½Í¥Ñ¥½¸€ôÙ•ŒÐ¡Á½Í¥Ñ¥½¸°€À¸À°€Ä¸À¤ì)ô(ˆŒì()½¹ÍÐ5%1-IUMQ}]IA}I%}I59Q}M!Hè€™ÍÑÈ€ôÈŒˆÙ•ÉÍ¥½¸€ÌÀÀ•Ì)ÁÉ•¥Í¥½¸¡¥¡À™±½…Ðì)Õ¹¥™½É´Ù•ŒÌÕ}½±½Èì)Õ¹¥™½É´™±½…ÐÕ}™••‘‰…¬ì)Õ¹¥™½É´™±½…ÐÕ}½ÕÑÁÕÑ±Á¡„ì)Õ¹¥™½É´Í…µÁ±•ÈÉÕ}ÁÉ•Ù¥½ÕÍÉ…µ”ì)¥¸Ù•ŒÈÙ}Í½ÕÉ•UØì)½ÕÐÙ•ŒÐ½ÕÑ½±½Èì)Ù½¥µ…¥¸ ¤ì(€Ù•ŒÌÁÉ•Ù¥½ÕÌ€ôÑ•áÑÕÉ”¡Õ}ÁÉ•Ù¥½ÕÍÉ…µ”°±…µÀ¡Ù}Í½ÕÉ•UØ°Ù•ŒÈ À¸À¤°Ù•ŒÈ Ä¸À¤¤¤¹Éˆì(€Ù•ŒÌ‰…Í”€ôÁÉ•Ù¥½ÕÌ€¨±…µÀ¡Õ}™••‘‰…¬°€À¸À°€Ä¸À¤ì(€½ÕÑ½±½È€ôÙ•ŒÐ¡‰…Í”°Õ}½ÕÑÁÕÑ±Á¡„¤ì)ô(ˆŒì()™¸É•¹‘•É}µ¥±­ÉÕÍÑ}…¹Ù…Í}™É…µ” (€€€½¹Ñ•áÐè€™Ý•‰}ÍåÌèé…¹Ù…ÍI•¹‘•É¥¹½¹Ñ•áÐÉ°(€€€…¹Ù…Ìè€™Ý•‰}ÍåÌèé!Ñµ±…¹Ù…Í±•µ•¹Ð°(€€€™É…µ”è€™5¥±­IÕÍÑÉ…µ”°(€€€Ñ¥µ”è˜ØÐ°(¤ì(€€€±•ÐÝ¥‘Ñ €ô…¹Ù…Ì¹Ý¥‘Ñ  ¤…Ì˜ØÐì(€€€±•Ð¡•¥¡Ð€ô…¹Ù…Ì¹¡•¥¡Ð ¤…Ì˜ØÐì(€€€½¹Ñ•áÐ¹Í•Ñ}™¥±±}ÍÑå±•}ÍÑÈ ™™½Éµ…Ð„ ‰É‰„ ä°€ÄÌ°€Äà°ìè¸Íô¤ˆ°™É…µ”¹‰…­É½Õ¹‘}…±Á¡„¤¤ì(€€€½¹Ñ•áÐ¹™¥±±}É•Ð À¸À°€À¸À°Ý¥‘Ñ °¡•¥¡Ð¤ì((€€€±•Ð€¡È°œ°ˆ¤€ô™É…µ”¹Ý…Ù•}½±½Èì(€€€±•Ð•¹Ñ•É}à€ôÝ¥‘Ñ €¨€ À¸Ô€¬™É…µ”¹‘à¤ì(€€€±•Ð•¹Ñ•É}ä€ô¡•¥¡Ð€¨€ À¸Ô€¬™É…µ”¹‘ä¤ì(€€€±•Ð‰…Í”€ôÝ¥‘Ñ ¹µ¥¸¡¡•¥¡Ð¤€¨™É…µ”¹Ý…Ù•}É…‘¥ÕÌ€¨™É…µ”¹é½½´ì(€€€½¹Ñ•áÐ¹Í…Ù” ¤ì(€€€±•Ð|€ô½¹Ñ•áÐ¹ÑÉ…¹Í±…Ñ”¡•¹Ñ•É}à°•¹Ñ•É}ä¤ì(€€€±•Ð|€ô½¹Ñ•áÐ¹É½Ñ…Ñ”¡™É…µ”¹É½Ñ…Ñ¥½¸€¬Ñ¥µ”€¨€À¸Àà¤ì(€€€½¹Ñ•áÐ¹Í•Ñ}ÍÑÉ½­•}ÍÑå±•}ÍÑÈ ™™½Éµ…Ð„ ‰É‰„¡íÉô°íô°í‰ô°€À¸äÈ¤ˆ¤¤ì(€€€½¹Ñ•áÐ¹Í•Ñ}±¥¹•}Ý¥‘Ñ  È¸À¤ì(€€€½¹Ñ•áÐ¹‰•¥¹}Á…Ñ  ¤ì(€€€™½È¥¹‘•à¥¸€À¸¸ÄäÈì(€€€€€€€±•ÐÕ¹¥Ð€ô¥¹‘•à…Ì˜ØÐ€¼€ÄäÈ¸Àì(€€€€€€€±•Ð…¹±”€ôÕ¹¥Ð€¨ÍÑèé˜ØÐèé½¹ÍÑÌèéQTì(€€€€€€€±•ÐÉ…‘¥ÕÌ€ô‰…Í”(€€€€€€€€€€€€¨€ À¸ÜÈ(€€€€€€€€€€€€€€€€¬€À¸ÄÈ€¨€¡Ñ¥µ”€¨€Ä¸ä€¬…¹±”€¨€Ì¸À¤¹Í¥¸ ¤(€€€€€€€€€€€€€€€€¬€À¸Àà€¨€¡Ñ¥µ”€¨€È¸Ü€¬…¹±”€¨€Ü¸À¤¹½Ì ¤¤ì(€€€€€€€±•Ðà€ôÉ…‘¥ÕÌ€¨…¹±”¹½Ì ¤ì(€€€€€€€±•Ðä€ôÉ…‘¥ÕÌ€¨…¹±”¹Í¥¸ ¤ì(€€€€€€€¥˜¥¹‘•à€ôô€Àì(€€€€€€€€€€€½¹Ñ•áÐ¹µ½Ù•}Ñ¼¡à°ä¤ì(€€€€€€€ô•±Í”ì(€€€€€€€€€€€½¹Ñ•áÐ¹±¥¹•}Ñ¼¡à°ä¤ì(€€€€€€€ô(€€€ô(€€€½¹Ñ•áÐ¹±½Í•}Á…Ñ  ¤ì(€€€½¹Ñ•áÐ¹ÍÑÉ½­” ¤ì((€€€½¹Ñ•áÐ¹Í•Ñ}™¥±±}ÍÑå±•}ÍÑÈ ™™½Éµ…Ð„ ‰É‰„¡íÉô°íô°í‰ô°€À¸ÄÐ¤ˆ¤¤ì(€€€½¹Ñ•áÐ¹™¥±° ¤ì((€€€½¹Ñ•áÐ¹Í•Ñ}ÍÑÉ½­•}ÍÑå±•}ÍÑÈ ‰É‰„ ÈÔÔ°€ÈÀä°€ÄÀÈ°€À¸ÌÐ¤ˆ¤ì(€€€½¹Ñ•áÐ¹Í•Ñ}±¥¹•}Ý¥‘Ñ  Ä¸À¤ì(€€€™½ÈÉ¥¹œ¥¸€Ä¸¸ôÐì(€€€€€€€½¹Ñ•áÐ¹‰•¥¹}Á…Ñ  ¤ì(€€€€€€€±•ÐÉ¥¹}É…‘¥ÕÌ€ô‰…Í”€¨É¥¹œ…Ì˜ØÐ€¨€À¸Äà€¨€ Ä¸À€¬€À¸ÀÌ€¨€¡Ñ¥µ”€¬É¥¹œ…Ì˜ØÐ¤¹Í¥¸ ¤¤ì(€€€€€€€±•Ð|€ô½¹Ñ•áÐ¹…ÉŒ À¸À°€À¸À°É¥¹}É…‘¥ÕÌ°€À¸À°ÍÑèé˜ØÐèé½¹ÍÑÌèéQT¤ì(€€€€€€€½¹Ñ•áÐ¹ÍÑÉ½­” ¤ì(€€€ô(€€€™½ÈÍ¡…Á”¥¸€À¸¹™É…µ”¹Í¡…Á•}½Õ¹Ð¹µ¥¸ Ø¤ì(€€€€€€€±•ÐÍ¥‘•Ì€ô€Ì€¬€¡Í¡…Á”€”€Ô¤ì(€€€€€€€±•ÐÉ…‘¥ÕÌ€ô‰…Í”€¨€ À¸ÄØ€¬Í¡…Á”…Ì˜ØÐ€¨€À¸ÀÌÔ¤ì(€€€€€€€±•ÐÍÁ¥¸€ôÑ¥µ”€¨€ À¸Ð€¬Í¡…Á”…Ì˜ØÐ€¨€À¸Àä¤ì(€€€€€€€½¹Ñ•áÐ¹‰•¥¹}Á…Ñ  ¤ì(€€€€€€€™½ÈÍ¥‘”¥¸€À¸¸õÍ¥‘•Ìì(€€€€€€€€€€€±•Ð…¹±”€ôÍÁ¥¸€¬Í¥‘”…Ì˜ØÐ€¼Í¥‘•Ì…Ì˜ØÐ€¨ÍÑèé˜ØÐèé½¹ÍÑÌèéQTì(€€€€€€€€€€€±•Ðà€ôÉ…‘¥ÕÌ€¨…¹±”¹½Ì ¤ì(€€€€€€€€€€€±•Ðä€ôÉ…‘¥ÕÌ€¨…¹±”¹Í¥¸ ¤ì(€€€€€€€€€€€¥˜Í¥‘”€ôô€Àì(€€€€€€€€€€€€€€€½¹Ñ•áÐ¹µ½Ù•}Ñ¼¡à°ä¤ì(€€€€€€€€€€€ô•±Í”ì(€€€€€€€€€€€€€€€½¹Ñ•áÐ¹±¥¹•}Ñ¼¡à°ä¤ì(€€€€€€€€€€€ô(€€€€€€€ô(€€€€€€€½¹Ñ•áÐ¹Í•Ñ}ÍÑÉ½­•}ÍÑå±•}ÍÑÈ ™™½Éµ…Ð„ ‰É‰„¡íÉô°íô°í‰ô°€À¸ÐÈ¤ˆ¤¤ì(€€€€€€€½¹Ñ•áÐ¹ÍÑÉ½­” ¤ì(€€€ô(€€€½¹Ñ•áÐ¹É•ÍÑ½É” ¤ì((€€€½¹Ñ•áÐ¹Í•Ñ}ÍÑÉ½­•}ÍÑå±•}ÍÑÈ ‰É‰„ ÈÄØ°€ÈÌÈ°€ÈÈÔ°€À¸ÌØ¤ˆ¤ì(€€€½¹Ñ•áÐ¹Í•Ñ}±¥¹•}Ý¥‘Ñ  Ä¸Ô¤ì(€€€™½ÈÝ…Ù”¥¸€À¸¹™É…µ”¹Ý…Ù•™½Éµ}½Õ¹Ð¹±…µÀ Ä°€Ì¤ì(€€€€€€€½¹Ñ•áÐ¹‰•¥¹}Á…Ñ  ¤ì(€€€€€€€™½È¥¹‘•à¥¸€À¸¸ÄÈàì(€€€€€€€€€€€±•Ðà€ôÝ¥‘Ñ €¨¥¹‘•à…Ì˜ØÐ€¼€ÄÈÜ¸Àì(€€€€€€€€€€€±•Ð…µÀ€ô€¡Ñ¥µ”€¨€ Ô¸À€¬Ý…Ù”…Ì˜ØÐ¤€¬¥¹‘•à…Ì˜ØÐ€¨€À¸Ää¤¹Í¥¸ ¤(€€€€€€€€€€€€€€€€¨€ À¸Äà€¬€À¸Àà€¨Ý…Ù”…Ì˜ØÐ€¬€À¸Äà€¨€¡Ñ¥µ”€¨€È¸À¤¹Í¥¸ ¤¹…‰Ì ¤¤ì(€€€€€€€€€€€±•Ð‰…Í•±¥¹”€ô€À¸Üà€´Ý…Ù”…Ì˜ØÐ€¨€À¸ÄØì(€€€€€€€€€€€±•Ðä€ô¡•¥¡Ð€¨€¡‰…Í•±¥¹”€¬…µÀ€¨€À¸Èà¤ì(€€€€€€€€€€€¥˜¥¹‘•à€ôô€Àì(€€€€€€€€€€€€€€€½¹Ñ•áÐ¹µ½Ù•}Ñ¼¡à°ä¤ì(€€€€€€€€€€€ô•±Í”ì(€€€€€€€€€€€€€€€½¹Ñ•áÐ¹±¥¹•}Ñ¼¡à°ä¤ì(€€€€€€€€€€€ô(€€€€€€€ô(€€€€€€€½¹Ñ•áÐ¹ÍÑÉ½­” ¤ì(€€€ô(€€€É•¹‘•É}µ¥±­ÉÕÍÑ}…¹Ù…Í}ÁÉ¥µ¥Ñ¥Ù•Ì¡½¹Ñ•áÐ°Ý¥‘Ñ °¡•¥¡Ð°™É…µ”¤ì(€€€É•¹‘•É}µ¥±­ÉÕÍÑ}…¹Ù…Í}Ñ•áÑÕÉ•‘}ÁÉ¥µ¥Ñ¥Ù•Ì¡½¹Ñ•áÐ°Ý¥‘Ñ °¡•¥¡Ð°™É…µ”¤ì)ô()™¸É•¹‘•É}µ¥±­ÉÕÍÑ}…¹Ù…Í}½Ù•É±…å}™É…µ” (€€€½¹Ñ•áÐè€™Ý•‰}ÍåÌèé…¹Ù…ÍI•¹‘•É¥¹½¹Ñ•áÐÉ°(€€€…¹Ù…Ìè€™Ý•‰}ÍåÌèé!Ñµ±…¹Ù…Í±•µ•¹Ð°(€€€™É…µ”è€™5¥±­IÕÍÑÉ…µ”°(€€€Ñ¥µ”è˜ØÐ°(¤ì(€€€±•ÐÝ¥‘Ñ €ô…¹Ù…Ì¹Ý¥‘Ñ  ¤…Ì˜ØÐì(€€€±•Ð¡•¥¡Ð€ô…¹Ù…Ì¹¡•¥¡Ð ¤…Ì˜ØÐì(€€€±•Ð€¡È°œ°ˆ¤€ô™É…µ”¹Ý…Ù•}½±½Èì(€€€½¹Ñ•áÐ¹Í…Ù” ¤ì(€€€±•Ð|€ô½¹Ñ•áÐ¹ÑÉ…¹Í±…Ñ”¡Ý¥‘Ñ €¨€ À¸Ô€¬™É…µ”¹‘à¤°¡•¥¡Ð€¨€ À¸Ô€¬™É…µ”¹‘ä¤¤ì(€€€±•Ð|€ô½¹Ñ•áÐ¹É½Ñ…Ñ”¡™É…µ”¹É½Ñ…Ñ¥½¸€¬Ñ¥µ”€¨€À¸ÀÔ¤ì(€€€½¹Ñ•áÐ¹Í•Ñ}ÍÑÉ½­•}ÍÑå±•}ÍÑÈ ™™½Éµ…Ð„ ‰É‰„¡íÉô°íô°í‰ô°€À¸Øà¤ˆ¤¤ì(€€€½¹Ñ•áÐ¹Í•Ñ}±¥¹•}Ý¥‘Ñ  Ä¸Ô¤ì(€€€±•Ð‰…Í”€ôÝ¥‘Ñ ¹µ¥¸¡¡•¥¡Ð¤€¨™É…µ”¹Ý…Ù•}É…‘¥ÕÌ€¨™É…µ”¹é½½´ì(€€€™½ÈÉ¥¹œ¥¸€À¸¹™É…µ”¹Í¡…Á•}½Õ¹Ð¹±…µÀ Ä°€Ô¤ì(€€€€€€€½¹Ñ•áÐ¹‰•¥¹}Á…Ñ  ¤ì(€€€€€€€±•ÐÉ…‘¥ÕÌ€ô‰…Í”€¨€ À¸ÈÈ€¬É¥¹œ…Ì˜ØÐ€¨€À¸ÄÄ¤ì(€€€€€€€±•Ð|€ô½¹Ñ•áÐ¹…ÉŒ À¸À°€À¸À°É…‘¥ÕÌ°€À¸À°ÍÑèé˜ØÐèé½¹ÍÑÌèéQT¤ì(€€€€€€€½¹Ñ•áÐ¹ÍÑÉ½­” ¤ì(€€€ô(€€€½¹Ñ•áÐ¹É•ÍÑ½É” ¤ì(€€€É•¹‘•É}µ¥±­ÉÕÍÑ}…¹Ù…Í}ÁÉ¥µ¥Ñ¥Ù•Ì¡½¹Ñ•áÐ°Ý¥‘Ñ °¡•¥¡Ð°™É…µ”¤ì(€€€É•¹‘•É}µ¥±­ÉÕÍÑ}…¹Ù…Í}Ñ•áÑÕÉ•‘}ÁÉ¥µ¥Ñ¥Ù•Ì¡½¹Ñ•áÐ°Ý¥‘Ñ °¡•¥¡Ð°™É…µ”¤ì)ô()™¸µ¥±­ÉÕÍÑ}…¹Ù…Í}½±½È¡½±½Èèm˜ØÐì€Ñt¤€´øMÑÉ¥¹œì(€€€™½Éµ…Ð„ (€€€€€€€€‰É‰„¡ìè¸Áô°ìè¸Áô°ìè¸Áô°ìè¸Íô¤ˆ°(€€€€€€€±…µÁ}Õ¹¥Ð¡½±½ÉlÁt¤€¨€ÈÔÔ¸À°(€€€€€€€±…µÁ}Õ¹¥Ð¡½±½ÉlÅt¤€¨€ÈÔÔ¸À°(€€€€€€€±…µÁ}Õ¹¥Ð¡½±½ÉlÉt¤€¨€ÈÔÔ¸À°(€€€€€€€±…µÁ}Õ¹¥Ð¡½±½ÉlÍt¤(€€€€¤)ô()™¸µ¥±­ÉÕÍÑ}±¥Á}Ñ½}…¹Ù…Ì¡Ù•ÉÑ•àè€™m˜ØÑt°Ý¥‘Ñ è˜ØÐ°¡•¥¡Ðè˜ØÐ¤€´ø€¡˜ØÐ°˜ØÐ¤ì(€€€€ (€€€€€€€€¡Ù•ÉÑ•à¹™¥ÉÍÐ ¤¹½Á¥• ¤¹Õ¹ÝÉ…Á}½É}‘•™…Õ±Ð ¤€¨€À¸Ô€¬€À¸Ô¤€¨Ý¥‘Ñ °(€€€€€€€€ Ä¸À€´€¡Ù•ÉÑ•à¹•Ð Ä¤¹½Á¥• ¤¹Õ¹ÝÉ…Á}½É}‘•™…Õ±Ð ¤€¨€À¸Ô€¬€À¸Ô¤¤€¨¡•¥¡Ð°(€€€€¤)ô()™¸É•¹‘•É}µ¥±­ÉÕÍÑ}…¹Ù…Í}ÁÉ¥µ¥Ñ¥Ù•Ì (€€€½¹Ñ•áÐè€™Ý•‰}ÍåÌèé…¹Ù…ÍI•¹‘•É¥¹½¹Ñ•áÐÉ°(€€€Ý¥‘Ñ è˜ØÐ°(€€€¡•¥¡Ðè˜ØÐ°(€€€™É…µ”è€™5¥±­IÕÍÑÉ…µ”°(¤ì(€€€™½ÈÁÉ¥µ¥Ñ¥Ù”¥¸€™™É…µ”¹ÁÉ¥µ¥Ñ¥Ù•Ìì(€€€€€€€¥˜ÁÉ¥µ¥Ñ¥Ù”¹Ù•ÉÑ¥•Ì¹±•¸ ¤€ð€Ðì(€€€€€€€€€€€½¹Ñ¥¹Õ”ì(€€€€€€€ô(€€€€€€€±•Ð½±½È€ôµ¥±­ÉÕÍÑ}…¹Ù…Í}½±½È¡ÁÉ¥µ¥Ñ¥Ù”¹½±½È¤ì(€€€€€€€µ…Ñ ÁÉ¥µ¥Ñ¥Ù”¹µ½‘”ì(€€€€€€€€€€€5¥±­IÕÍÑAÉ¥µ¥Ñ¥Ù•5½‘”èé1¥¹•MÑÉ¥À€ôøì(€€€€€€€€€€€€€€€½¹Ñ•áÐ¹‰•¥¹}Á…Ñ  ¤ì(€€€€€€€€€€€€€€€™½È€¡¥¹‘•à°Ù•ÉÑ•à¤¥¸ÁÉ¥µ¥Ñ¥Ù”¹Ù•ÉÑ¥•Ì¹¡Õ¹­Ì È¤¹•¹Õµ•É…Ñ” ¤ì(€€€€€€€€€€€€€€€€€€€±•Ð€¡à°ä¤€ôµ¥±­ÉÕÍÑ}±¥Á}Ñ½}…¹Ù…Ì¡Ù•ÉÑ•à°Ý¥‘Ñ °¡•¥¡Ð¤ì(€€€€€€€€€€€€€€€€€€€¥˜¥¹‘•à€ôô€Àì(€€€€€€€€€€€€€€€€€€€€€€€½¹Ñ•áÐ¹µ½Ù•}Ñ¼¡à°ä¤ì(€€€€€€€€€€€€€€€€€€€ô•±Í”ì(€€€€€€€€€€€€€€€€€€€€€€€½¹Ñ•áÐ¹±¥¹•}Ñ¼¡à°ä¤ì(€€€€€€€€€€€€€€€€€€€ô(€€€€€€€€€€€€€€€ô(€€€€€€€€€€€€€€€½¹Ñ•áÐ¹Í•Ñ}ÍÑÉ½­•}ÍÑå±•}ÍÑÈ ™½±½È¤ì(€€€€€€€€€€€€€€€½¹Ñ•áÐ¹Í•Ñ}±¥¹•}Ý¥‘Ñ  Ä¸Ô¤ì(€€€€€€€€€€€€€€€½¹Ñ•áÐ¹ÍÑÉ½­” ¤ì(€€€€€€€€€€€ô(€€€€€€€€€€€5¥±­IÕÍÑAÉ¥µ¥Ñ¥Ù•5½‘”èé1¥¹•Ì€ôøì(€€€€€€€€€€€€€€€½¹Ñ•áÐ¹Í•Ñ}ÍÑÉ½­•}ÍÑå±•}ÍÑÈ ™½±½È¤ì(€€€€€€€€€€€€€€€½¹Ñ•áÐ¹Í•Ñ}±¥¹•}Ý¥‘Ñ  Ä¸À¤ì(€€€€€€€€€€€€€€€™½È±¥¹”¥¸ÁÉ¥µ¥Ñ¥Ù”¹Ù•ÉÑ¥•Ì¹¡Õ¹­Ì Ð¤ì(€€€€€€€€€€€€€€€€€€€¥˜±¥¹”¹±•¸ ¤€ð€Ðì(€€€€€€€€€€€€€€€€€€€€€€€½¹Ñ¥¹Õ”ì(€€€€€€€€€€€€€€€€€€€ô(€€€€€€€€€€€€€€€€€€€±•Ð€¡àÄ°äÄ¤€ôµ¥±­ÉÕÍÑ}±¥Á}Ñ½}…¹Ù…Ì ™±¥¹•lÀ¸¸Ét°Ý¥‘Ñ °¡•¥¡Ð¤ì(€€€€€€€€€€€€€€€€€€€±•Ð€¡àÈ°äÈ¤€ôµ¥±­ÉÕÍÑ}±¥Á}Ñ½}…¹Ù…Ì ™±¥¹•lÈ¸¸Ñt°Ý¥‘Ñ °¡•¥¡Ð¤ì(€€€€€€€€€€€€€€€€€€€½¹Ñ•áÐ¹‰•¥¹}Á…Ñ  ¤ì(€€€€€€€€€€€€€€€€€€€½¹Ñ•áÐ¹µ½Ù•}Ñ¼¡àÄ°äÄ¤ì(€€€€€€€€€€€€€€€€€€€½¹Ñ•áÐ¹±¥¹•}Ñ¼¡àÈ°äÈ¤ì(€€€€€€€€€€€€€€€€€€€½¹Ñ•áÐ¹ÍÑÉ½­” ¤ì(€€€€€€€€€€€€€€€ô(€€€€€€€€€€€ô(€€€€€€€€€€€5¥±­IÕÍÑAÉ¥µ¥Ñ¥Ù•5½‘”èéA½¥¹ÑÌ€ôøì(€€€€€€€€€€€€€€€½¹Ñ•áÐ¹Í•Ñ}™¥±±}ÍÑå±•}ÍÑÈ ™½±½È¤ì(€€€€€€€€€€€€€€€™½ÈÙ•ÉÑ•à¥¸ÁÉ¥µ¥Ñ¥Ù”¹Ù•ÉÑ¥•Ì¹¡Õ¹­Ì È¤ì(€€€€€€€€€€€€€€€€€€€±•Ð€¡à°ä¤€ôµ¥±­ÉÕÍÑ}±¥Á}Ñ½}…¹Ù…Ì¡Ù•ÉÑ•à°Ý¥‘Ñ °¡•¥¡Ð¤ì(€€€€€€€€€€€€€€€€€€€½¹Ñ•áÐ¹‰•¥¹}Á…Ñ  ¤ì(€€€€€€€€€€€€€€€€€€€±•Ð|€ô½¹Ñ•áÐ¹…ÉŒ¡à°ä°€È¸À°€À¸À°ÍÑèé˜ØÐèé½¹ÍÑÌèéQT¤ì(€€€€€€€€€€€€€€€€€€€½¹Ñ•áÐ¹™¥±° ¤ì(€€€€€€€€€€€€€€€ô(€€€€€€€€€€€ô(€€€€€€€€€€€5¥±­IÕÍÑAÉ¥µ¥Ñ¥Ù•5½‘”èéQÉ¥…¹±•…¸€ôøì(€€€€€€€€€€€€€€€½¹Ñ•áÐ¹‰•¥¹}Á…Ñ  ¤ì(€€€€€€€€€€€€€€€™½È€¡¥¹‘•à°Ù•ÉÑ•à¤¥¸ÁÉ¥µ¥Ñ¥Ù”¹Ù•ÉÑ¥•Ì¹¡Õ¹­Ì È¤¹•¹Õµ•É…Ñ” ¤ì(€€€€€€€€€€€€€€€€€€€±•Ð€¡à°ä¤€ôµ¥±­ÉÕÍÑ}±¥Á}Ñ½}…¹Ù…Ì¡Ù•ÉÑ•à°Ý¥‘Ñ °¡•¥¡Ð¤ì(€€€€€€€€€€€€€€€€€€€¥˜¥¹‘•à€ôô€Àì(€€€€€€€€€€€€€€€€€€€€€€€½¹Ñ•áÐ¹µ½Ù•}Ñ¼¡à°ä¤ì(€€€€€€€€€€€€€€€€€€€ô•±Í”ì(€€€€€€€€€€€€€€€€€€€€€€€½¹Ñ•áÐ¹±¥¹•}Ñ¼¡à°ä¤ì(€€€€€€€€€€€€€€€€€€€ô(€€€€€€€€€€€€€€€ô(€€€€€€€€€€€€€€€½¹Ñ•áÐ¹±½Í•}Á…Ñ  ¤ì(€€€€€€€€€€€€€€€½¹Ñ•áÐ¹Í•Ñ}™¥±±}ÍÑå±•}ÍÑÈ ™½±½È¤ì(€€€€€€€€€€€€€€€½¹Ñ•áÐ¹™¥±° ¤ì(€€€€€€€€€€€ô(€€€€€€€€€€€5¥±­IÕÍÑAÉ¥µ¥Ñ¥Ù•5½‘”èéQÉ¥…¹±•Ì€ôøì(€€€€€€€€€€€€€€€½¹Ñ•áÐ¹Í•Ñ}™¥±±}ÍÑå±•}ÍÑÈ ™½±½È¤ì(€€€€€€€€€€€€€€€™½ÈÑÉ¥…¹±”¥¸ÁÉ¥µ¥Ñ¥Ù”¹Ù•ÉÑ¥•Ì¹¡Õ¹­Ì Ø¤ì(€€€€€€€€€€€€€€€€€€€¥˜ÑÉ¥…¹±”¹±•¸ ¤€ð€Øì(€€€€€€€€€€€€€€€€€€€€€€€½¹Ñ¥¹Õ”ì(€€€€€€€€€€€€€€€€€€€ô(€€€€€€€€€€€€€€€€€€€½¹Ñ•áÐ¹‰•¥¹}Á…Ñ  ¤ì(€€€€€€€€€€€€€€€€€€€±•Ð€¡àÄ°äÄ¤€ôµ¥±­ÉÕÍÑ}±¥Á}Ñ½}…¹Ù…Ì ™ÑÉ¥…¹±•lÀ¸¸Ét°Ý¥‘Ñ °¡•¥¡Ð¤ì(€€€€€€€€€€€€€€€€€€€±•Ð€¡àÈ°äÈ¤€ôµ¥±­ÉÕÍÑ}±¥Á}Ñ½}…¹Ù…Ì ™ÑÉ¥…¹±•lÈ¸¸Ñt°Ý¥‘Ñ °¡•¥¡Ð¤ì(€€€€€€€€€€€€€€€€€€€±•Ð€¡àÌ°äÌ¤€ôµ¥±­ÉÕÍÑ}±¥Á}Ñ½}…¹Ù…Ì ™ÑÉ¥…¹±•lÐ¸¸Ùt°Ý¥‘Ñ °¡•¥¡Ð¤ì(€€€€€€€€€€€€€€€€€€€½¹Ñ•áÐ¹µ½Ù•}Ñ¼¡àÄ°äÄ¤ì(€€€€€€€€€€€€€€€€€€€½¹Ñ•áÐ¹±¥¹•}Ñ¼¡àÈ°äÈ¤ì(€€€€€€€€€€€€€€€€€€€½¹Ñ•áÐ¹±¥¹•}Ñ¼¡àÌ°äÌ¤ì(€€€€€€€€€€€€€€€€€€€½¹Ñ•áÐ¹±½Í•}Á…Ñ  ¤ì(€€€€€€€€€€€€€€€€€€€½¹Ñ•áÐ¹™¥±° ¤ì(€€€€€€€€€€€€€€€ô(€€€€€€€€€€€ô(€€€€€€€ô(€€€ô)ô()™¸É•¹‘•É}µ¥±­ÉÕÍÑ}…¹Ù…Í}Ñ•áÑÕÉ•‘}ÁÉ¥µ¥Ñ¥Ù•Ì (€€€½¹Ñ•áÐè€™Ý•‰}ÍåÌèé…¹Ù…ÍI•¹‘•É¥¹½¹Ñ•áÐÉ°(€€€Ý¥‘Ñ è˜ØÐ°(€€€¡•¥¡Ðè˜ØÐ°(€€€™É…µ”è€™5¥±­IÕÍÑÉ…µ”°(¤ì(€€€™½ÈÁÉ¥µ¥Ñ¥Ù”¥¸€™™É…µ”¹Ñ•áÑÕÉ•‘}ÁÉ¥µ¥Ñ¥Ù•Ìì(€€€€€€€¥˜ÁÉ¥µ¥Ñ¥Ù”¹Ù•ÉÑ¥•Ì¹±•¸ ¤€ð€Øì(€€€€€€€€€€€½¹Ñ¥¹Õ”ì(€€€€€€€ô(€€€€€€€½¹Ñ•áÐ¹‰•¥¹}Á…Ñ  ¤ì(€€€€€€€™½È€¡¥¹‘•à°Ù•ÉÑ•à¤¥¸ÁÉ¥µ¥Ñ¥Ù”¹Ù•ÉÑ¥•Ì¹¡Õ¹­Ì È¤¹•¹Õµ•É…Ñ” ¤ì(€€€€€€€€€€€±•Ð€¡à°ä¤€ôµ¥±­ÉÕÍÑ}±¥Á}Ñ½}…¹Ù…Ì¡Ù•ÉÑ•à°Ý¥‘Ñ °¡•¥¡Ð¤ì(€€€€€€€€€€€¥˜¥¹‘•à€ôô€Àì(€€€€€€€€€€€€€€€½¹Ñ•áÐ¹µ½Ù•}Ñ¼¡à°ä¤ì(€€€€€€€€€€€ô•±Í”ì(€€€€€€€€€€€€€€€½¹Ñ•áÐ¹±¥¹•}Ñ¼¡à°ä¤ì(€€€€€€€€€€€ô(€€€€€€€ô(€€€€€€€½¹Ñ•áÐ¹±½Í•}Á…Ñ  ¤ì(€€€€€€€½¹Ñ•áÐ¹Í•Ñ}™¥±±}ÍÑå±•}ÍÑÈ ™µ¥±­ÉÕÍÑ}…¹Ù…Í}½±½È¡ÁÉ¥µ¥Ñ¥Ù”¹½±½È¤¤ì(€€€€€€€½¹Ñ•áÐ¹™¥±° ¤ì(€€€€€€€½¹Ñ•áÐ¹Í•Ñ}ÍÑÉ½­•}ÍÑå±•}ÍÑÈ ‰É‰„ ÈÔÔ°€ÈÔÔ°€ÈÔÔ°€À¸ÈÈ¤ˆ¤ì(€€€€€€€½¹Ñ•áÐ¹Í•Ñ}±¥¹•}Ý¥‘Ñ  Ä¸À¤ì(€€€€€€€½¹Ñ•áÐ¹ÍÑÉ½­” ¤ì(€€€ô)ô(

@@ -21,17 +21,24 @@ revision recorded below; no renderer algorithm or source code from that
 CC-BY-NC implementation is copied into MilkRust. See also the upstream MilkDrop3
 README's documented saved progress, direction and random values.
 
-The experimental WebGL and native GL routes support a uniform **Fade** envelope
-with only known saved metadata. The WebGL import path accepts `.milk2` files when
-the content passes this same gate; the filename extension does not widen the
-supported format subset. The uniform Fade uses the saved progress directly;
-directional spatial-mask semantics remain unsupported. Other named spatial
-patterns and embedded sprites retain explicit renderer requirements and fail
-closed. Parsing and round-trip
-preservation do not imply visual equivalence. Generic renderer qualification
-remains conservative. Regression cases are source only and have not run. Full
-`.milk2` compatibility remains open until all saved spatial patterns, extension
-behavior and reference GPU sequences are implemented and qualified.
+The WebGL and native GL/GLES renderers consume the saved pattern name, progress,
+direction, and five saved random values. MilkRust contains deterministic spatial
+masks for the documented patterns (`Fade`, `zoom`, `side`, `plasma`, `cercle`,
+`plasma2/3`, `snail/2/3`, `triangle`, `donuts`, `corner`, `patches`,
+`checkerboard`, `bubbles`, `stars`, `cisor`, `wave`, `curtain`, `vertical`,
+`horizontal`, `linesvertical/horizontal`, `square`, `stars2`, `clock`, `nuclear`,
+`arrow`, `cross`, and `cross2`). These are independent procedural formulas
+based on the documented names and saved fields, not a port of MilkDrop3's
+transition renderer. The Canvas fallback rejects spatial patterns instead of
+silently showing a uniform cross-fade. Embedded sprite/trailer extensions other
+than bounded `NAME=` metadata still fail closed.
+
+Parsing and rendering these masks do not imply visual equivalence. Exact
+per-pattern semantics, saved-file comparisons against reference GPU output,
+pattern-specific progress behavior, embedded extension behavior, and generic
+renderer/device qualification remain open. Regression cases are source only and
+have not run. Full `.milk2` compatibility remains open until those comparisons
+pass.
 
 Observed format source: [MDropDX12 564407e](https://github.com/shanevbg/MDropDX12/tree/564407e127c4bef5c5dfbb23fb8f5d1d8afb6120), `src/mDropDX12/engine_presets.cpp` and `engine.cpp`. This citation records format facts, not permission to incorporate its rendering implementation.
 

@@ -16,6 +16,13 @@ pub struct SavedBlend {
 }
 
 impl SavedBlend {
+    /// MilkDrop3's documented saved patterns. These are lowered by MilkRust's
+    /// GPU renderers to a deterministic spatial reveal mask; they do not claim
+    /// pixel-identical parity with MilkDrop3's proprietary transition code.
+    pub fn pattern_code(&self) -> Option<i32> {
+        blend_pattern_code(&self.pattern)
+    }
+
     /// MilkDrop 3.2 adds a display-name record after the two preset blocks.
     /// It is metadata, not an executable sprite/shader extension, so it must
     /// not disable an otherwise supported uniform Fade blend.
@@ -50,8 +57,16 @@ impl SavedBlend {
                 "random_1" | "random_2" | "random_3" | "random_4" | "random_5"))
     }
 
+    pub fn supports_rendered_pattern(&self) -> bool {
+        self.pattern_code().is_some()
+            && self.has_only_supported_trailer_metadata()
+            && self.header.keys().all(|key| matches!(key.as_str(),
+                "blending_pattern" | "blending_progress" | "blending_direction" |
+                "random_1" | "random_2" | "random_3" | "random_4" | "random_5"))
+    }
+
     pub fn render_requirement(&self) -> Option<String> {
-        if self.supports_uniform_composite() { None } else {
+        if self.supports_rendered_pattern() { None } else {
             Some(format!("milk2-saved-blend-pattern:{}{}", self.pattern,
                 if self.trailer.trim().is_empty() { "" } else { ":embedded-extension" }))
         }
@@ -76,6 +91,124 @@ impl SavedBlend {
         result
     }
 }
+
+/// Stable IDs shared by the WebGL and native GLES/GL renderers.
+pub fn blend_pattern_code(pattern: &str) -> Option<i32> {
+    Some(match pattern.trim().to_ascii_lowercase().as_str() {
+        "fade" => 0,
+        "zoom" => 1,
+        "side" => 2,
+        "plasma" => 3,
+        "cercle" | "circle" => 4,
+        "plasma2" => 5,
+        "plasma3" => 6,
+        "snail" => 7,
+        "snail2" => 8,
+        "snail3" => 9,
+        "triangle" => 10,
+        "donuts" => 11,
+        "corner" => 12,
+        "patches" => 13,
+        "checkerboard" => 14,
+        "bubbles" => 15,
+        "stars" => 16,
+        "cisor" => 17,
+        "wave" => 18,
+        "curtain" => 19,
+        "vertical" => 20,
+        "horizontal" => 21,
+        "linesvertical" => 22,
+        "lineshorizontal" => 23,
+        "square" => 24,
+        "stars2" => 25,
+        "clock" => 26,
+        "nuclear" => 27,
+        "arrow" => 28,
+        "cross" => 29,
+        "cross2" => 30,
+        _ => return None,
+    })
+}
+
+/// Shared GLSL for deterministic .milk2 spatial reveal masks. The equations
+/// are MilkRust's implementation from documented pattern names, direction and
+/// saved random values; upstream reference parity remains a qualification task.
+pub const GLSL_TRANSITION_MASK: &str = r#"
+uniform int u_transitionPattern;
+uniform float u_transitionProgress;
+uniform float u_transitionDirection;
+uniform float u_transitionRandom1;
+uniform float u_transitionRandom2;
+uniform float u_transitionRandom3;
+uniform float u_transitionRandom4;
+uniform float u_transitionRandom5;
+uniform vec2 u_transitionResolution;
+float milkrust_transition_hash(vec2 p) {
+  return fract(sin(dot(p, vec2(127.1, 311.7)) + u_transitionRandom1 * 17.0 + u_transitionRandom5 * 31.0) * 43758.5453123);
+}
+float milkrust_transition_mask(vec2 uv) {
+  float progress = clamp(u_transitionProgress, 0.0, 1.0);
+  if (u_transitionPattern == 0) return 1.0;
+  if (progress <= 0.0) return 0.0;
+  if (progress >= 1.0) return 1.0;
+  vec2 p = clamp(uv, vec2(0.0), vec2(1.0));
+  vec2 centered = p - vec2(0.5);
+  float radius = clamp(length(centered) * 1.41421356, 0.0, 1.0);
+  float angle = fract(atan(centered.y, centered.x) * 0.15915494 + 0.5);
+  float value = p.x;
+  if (u_transitionPattern == 1) value = radius;
+  else if (u_transitionPattern == 2 || u_transitionPattern == 20) value = p.x;
+  else if (u_transitionPattern == 3) value = 0.5 + 0.24*sin(p.x*17.0+u_transitionRandom1*6.28318)*cos(p.y*13.0+u_transitionRandom2*6.28318) + 0.18*sin((p.x+p.y)*23.0+u_transitionRandom3*6.28318);
+  else if (u_transitionPattern == 4) value = radius;
+  else if (u_transitionPattern == 5) value = 0.5 + 0.25*sin(p.x*29.0+cos(p.y*17.0+u_transitionRandom1*6.28318)) + 0.2*cos(p.y*31.0+p.x*11.0+u_transitionRandom2*6.28318);
+  else if (u_transitionPattern == 6) value = 0.5 + 0.25*cos((p.x-p.y)*27.0+u_transitionRandom3*6.28318) + 0.2*sin((p.x+p.y)*19.0+u_transitionRandom4*6.28318);
+  else if (u_transitionPattern == 7) value = fract(angle + radius*2.0 + u_transitionRandom2);
+  else if (u_transitionPattern == 8) value = fract(angle*2.0 + radius*3.0 + u_transitionRandom3);
+  else if (u_transitionPattern == 9) value = fract(angle*3.0 - radius*4.0 + u_transitionRandom4);
+  else if (u_transitionPattern == 10) value = clamp(max(abs(centered.x)*1.5, abs(centered.y)*1.7320508) * 1.1547005, 0.0, 1.0);
+  else if (u_transitionPattern == 11) value = fract(radius*6.0 + u_transitionRandom5);
+  else if (u_transitionPattern == 12) value = clamp(max(p.x, p.y), 0.0, 1.0);
+  else if (u_transitionPattern == 13) {
+    vec2 cell = floor(p*8.0); vec2 local = fract(p*8.0)-0.5;
+    value = clamp(milkrust_transition_hash(cell)*0.72 + length(local)*0.42, 0.0, 1.0);
+  }
+  else if (u_transitionPattern == 14) {
+    vec2 cell = floor(p*8.0); float parity = mod(cell.x+cell.y, 2.0);
+    value = clamp(parity*0.58 + milkrust_transition_hash(cell)*0.32 + radius*0.1, 0.0, 1.0);
+  }
+  else if (u_transitionPattern == 15) {
+    vec2 cell = floor(p*8.0); vec2 local = fract(p*8.0);
+    vec2 center = vec2(milkrust_transition_hash(cell), milkrust_transition_hash(cell+vec2(19.0,7.0)));
+    float distanceToBubble = length(local-center);
+    value = clamp(milkrust_transition_hash(cell+vec2(5.0,13.0))*0.7 + distanceToBubble*0.9, 0.0, 1.0);
+  }
+  else if (u_transitionPattern == 16 || u_transitionPattern == 25) {
+    vec2 cell = floor(p*10.0); vec2 local = fract(p*10.0)-0.5;
+    float star = max(abs(local.x), abs(local.y)) + 0.35*min(abs(local.x), abs(local.y));
+    float seed = milkrust_transition_hash(cell);
+    value = clamp(seed*0.72 + star*(u_transitionPattern == 16 ? 0.62 : 0.9), 0.0, 1.0);
+  }
+  else if (u_transitionPattern == 17) value = clamp(abs(centered.x-centered.y)*1.41421356, 0.0, 1.0);
+  else if (u_transitionPattern == 18) value = clamp(p.x + 0.16*sin(p.y*25.13274+u_transitionRandom1*6.28318), 0.0, 1.0);
+  else if (u_transitionPattern == 19) value = clamp(p.x + 0.2*sin(p.y*12.56637+u_transitionRandom2*6.28318), 0.0, 1.0);
+  else if (u_transitionPattern == 21) value = p.y;
+  else if (u_transitionPattern == 22) value = fract(p.x*12.0 + u_transitionRandom3);
+  else if (u_transitionPattern == 23) value = fract(p.y*12.0 + u_transitionRandom4);
+  else if (u_transitionPattern == 24) value = clamp(max(abs(centered.x),abs(centered.y))*2.0, 0.0, 1.0);
+  else if (u_transitionPattern == 26) value = angle;
+  else if (u_transitionPattern == 27) value = fract(radius*7.0 + angle*0.75 + u_transitionRandom5);
+  else if (u_transitionPattern == 28) value = clamp(max(p.x,abs(centered.y)*1.8),0.0,1.0);
+  else if (u_transitionPattern == 29) value = clamp(max(abs(centered.x),abs(centered.y))*2.0,0.0,1.0);
+  else if (u_transitionPattern == 30) {
+    vec2 cell = floor(p*6.0); float parity = mod(cell.x+cell.y,2.0);
+    float crossValue = clamp(max(abs(centered.x),abs(centered.y))*2.0,0.0,1.0);
+    value = clamp(0.58*crossValue+0.42*parity,0.0,1.0);
+  }
+  if (u_transitionDirection < 0.0) value = 1.0-value;
+  float edge = max(0.0015, 1.5/max(max(u_transitionResolution.x,u_transitionResolution.y),1.0));
+  return 1.0-smoothstep(progress-edge, progress+edge, clamp(value,0.0,1.0));
+}
+"#;
 
 pub fn has_wrapper(source: &str) -> bool {
     source.lines().any(|line| {
