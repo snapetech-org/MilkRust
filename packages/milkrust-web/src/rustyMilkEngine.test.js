@@ -366,6 +366,22 @@ describe('createMilkRustEngine', () => {
     engine.dispose();
   });
 
+  it('pauses frame work while the context is lost and reports recovery', async () => {
+    let status = { state: 'context-lost' };
+    rustEngine.renderStatusJson = () => JSON.stringify(status);
+    const engine = await createMilkRustEngine({
+      audioContext: { createAnalyser, currentTime: 1 },
+      audioNode: { connect: mock.fn(), disconnect: mock.fn() }, canvas: {},
+    });
+    const frames = rustEngine.render.mock.calls.length;
+    assert.equal(engine.render().waitingForContext, true);
+    assert.equal(rustEngine.render.mock.calls.length, frames);
+    status = { state: 'preview' };
+    assert.equal(engine.render().waitingForContext, false);
+    assert.equal(rustEngine.render.mock.calls.length, frames + 1);
+    engine.dispose();
+  });
+
   it('fires plugin hooks for engine lifecycle events', async () => {
     const analyser = createAnalyser();
     const audioNode = {

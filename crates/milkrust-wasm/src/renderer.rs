@@ -158,22 +158,28 @@ struct MilkRustTranslatedProgram {
 }
 
 struct MilkRustTextureAsset {
+    gl: web_sys::WebGl2RenderingContext,
     texture: web_sys::WebGlTexture,
-    image: web_sys::HtmlImageElement,
+    image: Option<web_sys::HtmlImageElement>,
+    width: u32,
+    height: u32,
     // None while loading, Some(Ok) after upload, Some(Err) after decode/upload failure.
     state: Rc<RefCell<Option<Result<(), String>>>>,
     total_pixels: Rc<Cell<u64>>,
-    allocated_pixels: Rc<Cell<u64>>,
-    _onload: Closure<dyn FnMut(web_sys::Event)>,
-    _onerror: Closure<dyn FnMut(web_sys::Event)>,
+    reserved_pixels: u64,
+    _onload: Option<Closure<dyn FnMut(web_sys::Event)>>,
+    _onerror: Option<Closure<dyn FnMut(web_sys::Event)>>,
 }
 
 impl Drop for MilkRustTextureAsset {
     fn drop(&mut self) {
-        self.image.set_onload(None);
-        self.image.set_onerror(None);
-        self.image.set_src("");
-        self.total_pixels.set(self.total_pixels.get().saturating_sub(self.allocated_pixels.get()));
+        if let Some(image) = &self.image {
+            image.set_onload(None);
+            image.set_onerror(None);
+            image.set_src("");
+        }
+        self.gl.delete_texture(Some(&self.texture));
+        self.total_pixels.set(self.total_pixels.get().saturating_sub(self.reserved_pixels));
     }
 }
 
@@ -691,7 +697,7 @@ impl MilkRustWebGlRenderer {
             let dimensions = self.shader_resources.borrow().dimensions(name).or_else(|| {
                 let assets = self.named_textures.borrow();
                 get_milkrust_texture_name_aliases(name).iter().find_map(|alias|
-                    assets.get(alias).map(|asset| (asset.image.natural_width(), asset.image.natural_height())))
+                    assets.get(alias).map(|asset| asset.image.as_ref().map_or((asset.width, asset.height), |image| (image.natural_width(), image.natural_height()))))
             });
             let (width, height) = dimensions.filter(|(w,h)| *w > 0 && *h > 0)
                 .ok_or_else(|| JsValue::from_str("Shader texture dimensions are unavailable"))?;
@@ -1148,7 +1154,7 @@ impl Drop for MilkRustWebGlRenderer {
             if let Some(program) = cache.get_mut().take() { self.gl.delete_program(Some(&program.program)); }
         }
         self.gl.delete_texture(Some(&self.placeholder_texture));
-        for asset in self.named_textures.get_mut().values() { self.gl.delete_texture(Some(&asset.texture)); }
+        self.named_textures.get_mut().clear();
     }
 }
 
@@ -1327,62 +1333,78 @@ fn create_milkrust_texture_from_data_url(
     data_url: &str,
     total_pixels: Rc<Cell<u64>>,
 ) -> Result<MilkRustTextureAsset, JsValue> {
-    if data_url.len() > 24 * 1024 * 1024 || !["png", "jpeg", "gif", "webp", "bmp"].iter()
-        .any(|kind| data_url.starts_with(&format!("data:image/{kind};base64,"))) {
-        return Err(JsValue::from_str("Texture must be a bounded embedded raster image; URLs and SVG are unavailable"));
+    use milkrust_core::texture::{self, Format};
+    let source = texture::from_data_url(data_url).map_err(|e| JsValue::from_str(&e))?;
+    let (width, height) = (source.width, source.height);
+    let pixels = u64::from(width) * u64::from(height);
+    if total_pixels.get() + pixels > 32 * 1024 * 1024 {
+        return Err(JsValue::from_str("Preset exceeds its 32-megapixel decoded texture budget"));
     }
     let texture = create_milkrust_placeholder_texture(gl)?;
+    // Reserve before asynchronous decoding: concurrent onload callbacks cannot
+    // each admit an image against the same unused allocation budget.
+    total_pixels.set(total_pixels.get() + pixels);
+    let mut asset = MilkRustTextureAsset {
+        gl: gl.clone(), texture, image: None, width, height,
+        state: Rc::new(RefCell::new(None)), total_pixels, reserved_pixels: pixels,
+        _onload: None, _onerror: None,
+    };
+    if matches!(source.format, Format::Dds | Format::Tga) {
+        let decoded = source.decode_legacy().map_err(|e| JsValue::from_str(&e))?;
+        let stride = width as usize * 4;
+        let mut flipped = Vec::with_capacity(decoded.pixels.len());
+        for row in decoded.pixels.chunks_exact(stride).rev() { flipped.extend_from_slice(row); }
+        gl.active_texture(web_sys::WebGl2RenderingContext::TEXTURE0);
+        gl.bind_texture(web_sys::WebGl2RenderingContext::TEXTURE_2D, Some(&asset.texture));
+        gl.pixel_storei(web_sys::WebGl2RenderingContext::UNPACK_ALIGNMENT, 1);
+        gl.pixel_storei(web_sys::WebGl2RenderingContext::UNPACK_FLIP_Y_WEBGL, 0);
+        gl.tex_image_2d_with_i32_and_i32_and_i32_and_format_and_type_and_opt_u8_array(
+            web_sys::WebGl2RenderingContext::TEXTURE_2D, 0,
+            web_sys::WebGl2RenderingContext::RGBA as i32, width as i32, height as i32, 0,
+            web_sys::WebGl2RenderingContext::RGBA, web_sys::WebGl2RenderingContext::UNSIGNED_BYTE,
+            Some(&flipped),
+        )?;
+        if gl.get_error() != web_sys::WebGl2RenderingContext::NO_ERROR {
+            return Err(JsValue::from_str("Legacy texture GPU upload failed"));
+        }
+        *asset.state.borrow_mut() = Some(Ok(()));
+        return Ok(asset);
+    }
     let image = web_sys::HtmlImageElement::new()?;
     let gl_for_load = gl.clone();
-    let texture_for_load = texture.clone();
+    let texture_for_load = asset.texture.clone();
     let image_for_load = image.clone();
-    let state = Rc::new(RefCell::new(None));
-    let state_for_load = state.clone();
-    let pixels_for_load = total_pixels.clone();
-    let allocated_pixels = Rc::new(Cell::new(0));
-    let allocated_for_load = allocated_pixels.clone();
+    let state_for_load = asset.state.clone();
     let onload = Closure::<dyn FnMut(web_sys::Event)>::wrap(Box::new(move |_event| {
-        let width = image_for_load.natural_width();
-        let height = image_for_load.natural_height();
-        let pixels = u64::from(width) * u64::from(height);
-        if width == 0 || height == 0 || width > 4096 || height > 4096 ||
-            pixels > 8 * 1024 * 1024 ||
-            pixels_for_load.get().saturating_sub(allocated_for_load.get()) + pixels > 32 * 1024 * 1024 {
-            *state_for_load.borrow_mut() = Some(Err("Decoded image exceeds 4096 pixels per side or 8 megapixels".to_string()));
+        // EXIF orientation can swap dimensions without changing the pixel budget.
+        let actual = (image_for_load.natural_width(), image_for_load.natural_height());
+        if actual != (width, height) && actual != (height, width) {
+            *state_for_load.borrow_mut() = Some(Err("Decoded dimensions disagree with admitted texture header".into()));
             return;
         }
         gl_for_load.active_texture(web_sys::WebGl2RenderingContext::TEXTURE0);
-        gl_for_load.bind_texture(
-            web_sys::WebGl2RenderingContext::TEXTURE_2D,
-            Some(&texture_for_load),
-        );
+        gl_for_load.bind_texture(web_sys::WebGl2RenderingContext::TEXTURE_2D, Some(&texture_for_load));
         gl_for_load.pixel_storei(web_sys::WebGl2RenderingContext::UNPACK_FLIP_Y_WEBGL, 1);
         let result = gl_for_load.tex_image_2d_with_u32_and_u32_and_html_image_element(
-            web_sys::WebGl2RenderingContext::TEXTURE_2D,
-            0,
-            web_sys::WebGl2RenderingContext::RGBA as i32,
-            web_sys::WebGl2RenderingContext::RGBA,
-            web_sys::WebGl2RenderingContext::UNSIGNED_BYTE,
-            &image_for_load,
+            web_sys::WebGl2RenderingContext::TEXTURE_2D, 0,
+            web_sys::WebGl2RenderingContext::RGBA as i32, web_sys::WebGl2RenderingContext::RGBA,
+            web_sys::WebGl2RenderingContext::UNSIGNED_BYTE, &image_for_load,
         );
         gl_for_load.pixel_storei(web_sys::WebGl2RenderingContext::UNPACK_FLIP_Y_WEBGL, 0);
-        let result = result.map_err(|error| error.as_string().unwrap_or_else(|| "GPU upload failed".to_string()))
+        *state_for_load.borrow_mut() = Some(result.map_err(|error| error.as_string().unwrap_or_else(|| "GPU upload failed".into()))
             .and_then(|()| if gl_for_load.get_error() == web_sys::WebGl2RenderingContext::NO_ERROR { Ok(()) }
-                else { Err("GPU texture upload failed".to_string()) });
-        if result.is_ok() {
-            pixels_for_load.set(pixels_for_load.get().saturating_sub(allocated_for_load.get()) + pixels);
-            allocated_for_load.set(pixels);
-        }
-        *state_for_load.borrow_mut() = Some(result);
+                else { Err("GPU texture upload failed".into()) }));
     }));
-    let state_for_error = state.clone();
+    let state_for_error = asset.state.clone();
     let onerror = Closure::<dyn FnMut(web_sys::Event)>::wrap(Box::new(move |_event| {
-        *state_for_error.borrow_mut() = Some(Err("Image could not be decoded".to_string()));
+        *state_for_error.borrow_mut() = Some(Err("Image could not be decoded".into()));
     }));
     image.set_onload(Some(onload.as_ref().unchecked_ref()));
     image.set_onerror(Some(onerror.as_ref().unchecked_ref()));
+    asset.image = Some(image.clone());
+    asset._onload = Some(onload); asset._onerror = Some(onerror);
     image.set_src(data_url);
-    Ok(MilkRustTextureAsset { texture, image, state, total_pixels, allocated_pixels, _onload: onload, _onerror: onerror })
+    Ok(asset)
 }
 
 fn compile_milkrust_shader(

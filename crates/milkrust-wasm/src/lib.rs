@@ -1,6 +1,6 @@
 mod renderer;
 
-use std::{cell::RefCell, collections::BTreeMap, rc::Rc};
+use std::{cell::{Cell, RefCell}, collections::BTreeMap, rc::Rc};
 
 pub use renderer::{milkrust_renderer, MilkRustRenderer};
 use milkrust_core::{
@@ -9,7 +9,7 @@ use milkrust_core::{
     serialize_milkrust_preset_set, validate_milkrust_webgl_import as validate_milkrust_import, MilkRustFrameSetRuntime,
     MilkRustIndexedEntry, MilkRustInputState, MilkRustValue,
 };
-use wasm_bindgen::prelude::*;
+use wasm_bindgen::{prelude::*, JsCast};
 
 /// Initialize the matching compiler module before importing shader presets.
 #[cfg(target_arch = "wasm32")]
@@ -49,6 +49,10 @@ pub struct WasmMilkRustEngine {
     title: String,
     render_error: Option<String>,
     waiting_for_textures: bool,
+    context_lost: Rc<Cell<bool>>,
+    restore_requested: Rc<Cell<bool>>,
+    on_context_lost: Closure<dyn FnMut(web_sys::Event)>,
+    on_context_restored: Closure<dyn FnMut(web_sys::Event)>,
 }
 
 #[wasm_bindgen(js_class = MilkRustEngine)]
@@ -64,6 +68,26 @@ impl WasmMilkRustEngine {
             validate_milkrust_import(&source).unwrap_or_else(|_| milkrust_preset_name(&source));
         let texture_assets = Rc::new(RefCell::new(BTreeMap::new()));
         let renderer = milkrust_renderer(&canvas, texture_assets.clone())?;
+        let context_lost = Rc::new(Cell::new(false));
+        let restore_requested = Rc::new(Cell::new(false));
+        let lost = context_lost.clone();
+        let on_context_lost = Closure::<dyn FnMut(web_sys::Event)>::wrap(Box::new(move |event| {
+            // Opt into WebGL recovery; without preventDefault the browser may
+            // permanently abandon the context. Do not touch GPU state here.
+            event.prevent_default();
+            lost.set(true);
+        }));
+        let lost = context_lost.clone();
+        let restore = restore_requested.clone();
+        let on_context_restored = Closure::<dyn FnMut(web_sys::Event)>::wrap(Box::new(move |_event| {
+            lost.set(false);
+            restore.set(true);
+        }));
+        canvas.add_event_listener_with_callback("webglcontextlost", on_context_lost.as_ref().unchecked_ref())?;
+        if let Err(error) = canvas.add_event_listener_with_callback("webglcontextrestored", on_context_restored.as_ref().unchecked_ref()) {
+            let _ = canvas.remove_event_listener_with_callback("webglcontextlost", on_context_lost.as_ref().unchecked_ref());
+            return Err(error);
+        }
         Ok(Self {
             canvas,
             renderer,
@@ -73,19 +97,27 @@ impl WasmMilkRustEngine {
             title,
             render_error: None,
             waiting_for_textures: false,
+            context_lost,
+            restore_requested,
+            on_context_lost,
+            on_context_restored,
         })
     }
 
     #[wasm_bindgen(js_name = rendererLabel)]
     pub fn renderer_label(&self) -> String {
-        if let Some(error) = &self.render_error { format!("Renderer stopped: {error}") }
+        if self.context_lost.get() { "Waiting for graphics context recovery".to_string() }
+        else if self.restore_requested.get() { "Restoring graphics resources".to_string() }
+        else if let Some(error) = &self.render_error { format!("Renderer stopped: {error}") }
         else if self.waiting_for_textures { "Waiting for preset textures".to_string() }
         else { self.renderer.label().to_string() }
     }
 
     #[wasm_bindgen(js_name = renderStatusJson)]
     pub fn render_status_json(&self) -> String {
-        serde_json::json!({"state": if self.render_error.is_some() { "failed" }
+        serde_json::json!({"state": if self.context_lost.get() { "context-lost" }
+            else if self.restore_requested.get() { "recovering-context" }
+            else if self.render_error.is_some() { "failed" }
             else if self.waiting_for_textures { "waiting-textures" } else { "preview" },
             "error": self.render_error, "fidelity": "not-assessed"}).to_string()
     }
@@ -356,6 +388,21 @@ impl WasmMilkRustEngine {
         mouse_dx: f64,
         mouse_dy: f64,
     ) {
+        if self.context_lost.get() { return; }
+        if self.restore_requested.replace(false) {
+            // Recreate every GPU handle and texture from retained source/assets.
+            // CPU equation state survives; unavailable feedback history restarts.
+            match milkrust_renderer(&self.canvas, self.texture_assets.clone()) {
+                Ok(renderer) => {
+                    self.renderer = renderer;
+                    self.render_error = None;
+                    self.waiting_for_textures = false;
+                },
+                Err(error) => {
+                    self.render_error = Some(error.as_string().unwrap_or_else(|| "Graphics context recovery failed".into()));
+                },
+            }
+        }
         if self.render_error.is_some() { return; }
         let input = MilkRustInputState {
             mouse_down,
@@ -401,6 +448,13 @@ impl WasmMilkRustEngine {
         let height = (height.max(1) as f64 * scale).floor().max(1.0) as u32;
         if self.canvas.width() != width { self.canvas.set_width(width); }
         if self.canvas.height() != height { self.canvas.set_height(height); }
+    }
+}
+
+impl Drop for WasmMilkRustEngine {
+    fn drop(&mut self) {
+        let _ = self.canvas.remove_event_listener_with_callback("webglcontextlost", self.on_context_lost.as_ref().unchecked_ref());
+        let _ = self.canvas.remove_event_listener_with_callback("webglcontextrestored", self.on_context_restored.as_ref().unchecked_ref());
     }
 }
 

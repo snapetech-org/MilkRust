@@ -45,6 +45,10 @@ GPU capture or device run was performed for this source-only continuation.
   The candidate builder pins source URLs and creates pending per-preset/target
   evidence inventories. It does not create passing reports or promote downloads.
   Historical and converted community candidates retain their unresolved rights.
+- WebGL admits static raster headers before codec allocation, reserves aggregate
+  pixel capacity before asynchronous loading, and decodes legacy DDS/TGA through
+  bounded Rust code. Context restoration recreates GPU resources from retained
+  source/assets. Native/browser decoder, upload and recovery regressions are unrun.
 - Private JIT build entrypoints include native C++ and browser compiler delivery.
   Regression sources cover the typed compiler, resource bindings, unsafe input,
   initialization retry and browser render failures; they remain unrun.
@@ -64,7 +68,7 @@ GPU capture or device run was performed for this source-only continuation.
   encodings, sprite extensions and unsupported formats. UTF-8, BOM-marked UTF-16
   and Windows-1252 now have bounded decoders; preserve every remaining exception.
 - Compiler/driver hang containment, browser decoder allocation isolation,
-  context-loss/recovery, long-run resource/performance and accessibility evidence.
+  recovery qualification, long-run resource/performance and accessibility evidence.
 - Qualified broader archives, rights review for historical collections, production
   key custody, committed public roots, signed publication and installed-app checks.
 

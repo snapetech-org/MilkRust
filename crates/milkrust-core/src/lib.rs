@@ -3,6 +3,7 @@ use std::collections::BTreeMap;
 
 pub mod input_limits;
 pub mod text;
+pub mod texture;
 pub mod milk2;
 mod hlsl;
 pub mod resources;

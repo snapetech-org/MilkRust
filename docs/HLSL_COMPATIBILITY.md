@@ -119,3 +119,25 @@ Texture uploads use consistent bottom-up GL orientation. Program-local uniform
 location caches avoid repeating hundreds of driver queries each frame. Added
 compiler and browser integration cases are source only; no execution or
 reference-image result is implied.
+
+## Embedded browser textures
+
+The WebGL path validates MIME, strict base64, encoded size and raster dimensions
+before creating an HTML image. PNG/JPEG/BMP/static GIF/WebP use the browser codec;
+legacy DDS (DXT1/3/5 and masked RGB24/32) and TGA (truecolor/grayscale, raw/RLE)
+use bounded Rust decoding and direct RGBA upload. Both paths use 4096-per-side,
+8-megapixel-per-image and 32-megapixel-per-preset limits. Pixel capacity is reserved
+before asynchronous loads and returned on disposal, including upload failures.
+DDS/TGA rows are oriented consistently with native uploads, and named samplers
+receive actual dimensions. EXIF dimension swaps preserve the same pixel budget.
+Animated raster containers are explicitly rejected by this static texture path;
+the browser codec and graphics driver still are not process-isolated. CPU and
+browser upload regression sources have been added but not executed.
+
+The WASM engine owns removable context-loss/restoration listeners. It requests
+browser recovery, pauses equation/frame work while lost, and recreates all GPU
+handles and textures on the first frame after restoration. Preset text, assets
+and CPU equation state survive; feedback history restarts because the old GPU
+contents no longer exist. SDK callers receive a recoverable waiting state and
+a clearing update. The private browser integration source now exercises actual
+`WEBGL_lose_context` restoration and nonblank rendering; it remains unrun.

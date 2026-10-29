@@ -47,10 +47,16 @@ try {
     if (!gl) throw new Error('WebGL2 required for compiler integration');
     const engine = new module.MilkRustEngine(canvas);
     const preset = (shader) => 'name=Compiler integration\ndecay=0.9\nwave_a=0\n' + shader.split('\n').map((line, i) => `comp_shader_${i+1}=${line}`).join('\n');
+    // Authored in-memory legacy texture, not an external corpus/download.
+    const tga = new Uint8Array(18 + 2*3);
+    tga[2]=2; tga[12]=2; tga[14]=1; tga[16]=24; tga[17]=32;
+    tga.set([0,0,255,0,255,0],18);
+    const legacyTexture = 'data:image/x-tga;base64,' + btoa(String.fromCharCode(...tga));
+    cases.push({ id: 'legacy-tga-dimensions', shader: 'shader_body { ret=tex2D(sampler_pc_art,uv).rgb * (texsize_art.x/2); }', textures: {art: legacyTexture} });
     const rows = [];
     try {
       for (const test of cases) {
-        engine.loadPresetText(preset(test.shader), test.id + '.milk', '{}');
+        engine.loadPresetText(preset(test.shader), test.id + '.milk', JSON.stringify(test.textures || {}));
         for (let frame = 0; frame < 3; frame++) engine.render(frame/30, 0.4, 0.3, 0.2, '-1,0,1,0', '0.2,0.5,0.1', 0, 0.5, 0.5, 0, 0);
         const status = JSON.parse(engine.renderStatusJson());
         if (status.state !== 'preview') throw new Error(`${test.id}: ${JSON.stringify(status)}`);
@@ -65,15 +71,31 @@ try {
         if (lit < canvas.width * canvas.height / 20 || max - min < 10) throw new Error(`${test.id}: blank or uniform output`);
         rows.push({ id: test.id, status: 'pass', litPixels: lit, range: max-min });
       }
+      const loss = gl.getExtension('WEBGL_lose_context');
+      if (!loss) throw new Error('Context recovery integration requires WEBGL_lose_context');
+      const event = (name) => new Promise((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error(`${name} timed out`)), 5000);
+        canvas.addEventListener(name, () => { clearTimeout(timer); resolve(); }, { once: true });
+      });
+      let signal = event('webglcontextlost');
+      loss.loseContext(); await signal;
+      if (JSON.parse(engine.renderStatusJson()).state !== 'context-lost') throw new Error('Loss was not reported');
+      signal = event('webglcontextrestored');
+      loss.restoreContext(); await signal;
+      for (let i=0; i<3; i++) engine.render(1+i/30,0.4,0.3,0.2,'-1,0,1,0','0.2,0.5,0.1',0,0.5,0.5,0,0);
+      if (JSON.parse(engine.renderStatusJson()).state !== 'preview' || gl.getError() !== gl.NO_ERROR) throw new Error('Renderer did not recover');
+      const recoveredPixels = new Uint8Array(canvas.width*canvas.height*4);
+      gl.readPixels(0,0,canvas.width,canvas.height,gl.RGBA,gl.UNSIGNED_BYTE,recoveredPixels);
+      if (!recoveredPixels.some((value,index) => index%4!==3 && value>12)) throw new Error('Recovery produced a blank frame');
       for (const shader of invalid) {
         let rejected = false;
         try { engine.loadPresetText(preset(shader), 'invalid.milk', '{}'); } catch { rejected = true; }
         if (!rejected) throw new Error('Invalid shader import was accepted');
       }
     } finally { engine.free(); }
-    return { schemaVersion: 1, profile: 'milkrust-hlslparser-es300-v1', rows, rejected: invalid.length, fidelity: 'not-assessed', physicalDevice: false };
+    return { schemaVersion: 1, profile: 'milkrust-hlslparser-es300-v1', rows, rejected: invalid.length, contextRecovery: 'pass', fidelity: 'not-assessed', physicalDevice: false };
   }, { cases, invalid });
-  assert.equal(report.rows.length, cases.length);
+  assert.equal(report.rows.length, cases.length + 1);
   if (process.env.RUNNER_TEMP) await writeFile(resolve(process.env.RUNNER_TEMP, 'milkrust-hlsl-browser.json'), JSON.stringify(report, null, 2) + '\n');
   console.log(JSON.stringify(report));
 } finally {

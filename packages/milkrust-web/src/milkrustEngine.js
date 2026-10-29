@@ -532,6 +532,7 @@ export const createMilkRustEngine = async ({
   const webGpuStatus = getWebGpuStatus(rendererBackend);
   let presetIndex = 0;
   let wasWaitingForTextures = false;
+  let wasWaitingForContext = false;
   let presetLibrary = [...milkrustPresets];
   let activePresetTitle = rustEngine.loadPresetText(
     presetLibrary[presetIndex].source,
@@ -852,6 +853,13 @@ export const createMilkRustEngine = async ({
       return result;
     },
     render: () => {
+      if (typeof rustEngine.renderStatusJson === 'function' &&
+          parseJson(rustEngine.renderStatusJson())?.state === 'context-lost') {
+        wasWaitingForContext = true;
+        return { presetName: activePresetTitle, waitingForContext: true };
+      }
+      const contextRecovered = wasWaitingForContext;
+      wasWaitingForContext = false;
       const now = audioContext.currentTime || 0;
       const frame = frameReader.read();
       runFrameHooks(now, frame);
@@ -883,8 +891,9 @@ export const createMilkRustEngine = async ({
         presetIndex,
         presetName: activePresetTitle,
       });
-      return automatedPresetName || waitingForTextures || textureStateChanged
-        ? { presetName: automatedPresetName || activePresetTitle, waitingForTextures } : null;
+      return automatedPresetName || waitingForTextures || textureStateChanged || contextRecovered
+        ? { presetName: automatedPresetName || activePresetTitle, waitingForTextures,
+          ...(contextRecovered ? { waitingForContext: false } : {}) } : null;
     },
     resize: (width, height) => {
       rustEngine.resize(width, height);
