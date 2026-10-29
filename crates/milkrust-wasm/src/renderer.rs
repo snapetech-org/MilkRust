@@ -1,7 +1,7 @@
 mod sprites;
 mod shader_resources;
 use shader_resources::ShaderResources;
-use std::{cell::{Cell, RefCell}, collections::BTreeMap, rc::Rc};
+use std::{cell::{Cell, RefCell}, collections::{BTreeMap, BTreeSet}, rc::Rc};
 
 use milkrust_core::{
     clamp_unit, create_repeated_milkrust_colors, get_milkrust_texture_name_aliases,
@@ -165,6 +165,7 @@ struct MilkRustTextureAsset {
     additional_frames: Vec<web_sys::WebGlTexture>,
     delays_seconds: Vec<f64>,
     repeat_count: Option<u16>,
+    animated: bool,
     dimensions: Rc<Cell<(u32, u32)>>,
     // None while loading, Some(Ok) after upload, Some(Err) after decode/upload failure.
     state: Rc<RefCell<Option<Result<(), String>>>>,
@@ -263,8 +264,10 @@ impl MilkRustWebGlRendererSet {
         for (renderer, entry) in renderers.iter().zip(&frame_set.entries) {
             renderer.prepare_stages(&entry.frame)?;
             if !renderer.prepare_textures(&entry.frame)? { return Ok(false); }
-            for sprite in &frame_set.sprites {
+            renderer.retain_keyed_sprite_textures(&frame_set.sprites, entry.index);
+            for sprite in frame_set.sprites.iter().filter(|sprite| sprite.preset_index == entry.index) {
                 if renderer.named_texture_for(&sprite.texture)?.is_none() { return Ok(false); }
+                renderer.prepare_sprite_texture(sprite)?;
             }
         }
         for (index, entry) in frame_set.entries.iter().enumerate() {
@@ -278,7 +281,7 @@ impl MilkRustWebGlRendererSet {
             }
         }
         self.gl.bind_framebuffer(web_sys::WebGl2RenderingContext::FRAMEBUFFER, None);
-        for sprite in frame_set.sprites.iter().filter(|sprite| !sprite.milk2 || sprite.layer == 0) {
+        for sprite in frame_set.sprites.iter().filter(|sprite| sprite.layer == 0) {
             let renderer = renderers.get(sprite.preset_index)
                 .ok_or_else(|| JsValue::from_str("Sprite owner has no active preset renderer"))?;
             // Milk2 layers 1–4 entered feedback at their ordered scene stage.
@@ -516,18 +519,18 @@ impl MilkRustWebGlRenderer {
                 MilkRustDrawCommand::SpriteLayer(sprite_layer) => {
                     ordered_sprite_layers = true;
                     for sprite in sprites.iter().filter(|sprite| sprite.preset_index == entry.index
-                        && sprite.milk2 && sprite.layer == usize::from(sprite_layer)) {
+                        && sprite.layer == usize::from(sprite_layer)) {
                         self.draw_sprite(sprite, false)?;
-                        if sprite.final_burn { self.draw_sprite(sprite, true)?; }
+                        if sprite.burn { self.draw_sprite(sprite, sprite.final_burn)?; }
                     }
                 }
             }
         }
         if !ordered_sprite_layers {
             // Preserve older FrameSet producers without scene-layer markers.
-            for sprite in sprites.iter().filter(|sprite| sprite.preset_index == entry.index && sprite.milk2 && sprite.layer > 0) {
+            for sprite in sprites.iter().filter(|sprite| sprite.preset_index == entry.index && sprite.layer > 0) {
                 self.draw_sprite(sprite, false)?;
-                if sprite.final_burn { self.draw_sprite(sprite, true)?; }
+                if sprite.burn { self.draw_sprite(sprite, sprite.final_burn)?; }
             }
         }
         self.shader_resources.borrow_mut().build(frame, &targets.targets[write_index].texture);
@@ -569,9 +572,8 @@ impl MilkRustWebGlRenderer {
         }
         self.gl.bind_framebuffer(web_sys::WebGl2RenderingContext::FRAMEBUFFER, Some(&targets.targets[write_index].framebuffer));
         for sprite in sprites.iter().filter(|sprite| sprite.preset_index == entry.index
-            && sprite.burn && (!sprite.milk2 || sprite.layer == 0)) {
+            && sprite.burn && sprite.layer == 0) {
             self.draw_sprite(sprite, false)?;
-            if sprite.milk2 && sprite.final_burn { self.draw_sprite(sprite, true)?; }
         }
         self.gl.bind_framebuffer(web_sys::WebGl2RenderingContext::FRAMEBUFFER, None);
         targets.read_index = write_index;
@@ -835,7 +837,9 @@ impl MilkRustWebGlRenderer {
                 .ok_or_else(|| JsValue::from_str("Shader texture dimensions are unavailable"))?;
             self.gl.uniform4f(uniform(&format!("texsize_{}", milkrust_core::resources::base_name(name))).as_ref(),
                 width as f32, height as f32, 1.0/width as f32, 1.0/height as f32);
-            if !milkrust_core::resources::texture_kind(name).is_builtin() { self.gl.generate_mipmap(target); }
+            if !milkrust_core::resources::texture_kind(name).is_builtin() && !self.named_texture_is_animated(name) {
+                self.gl.generate_mipmap(target);
+            }
             self.shader_resources.borrow().bind_sampler(texture_unit as u32, name);
             self.gl.uniform1i(
                 uniform(&format!("shaderTexture{index}")).as_ref(),
@@ -1138,15 +1142,44 @@ impl MilkRustWebGlRenderer {
 
     fn draw_sprite(&self, sprite: &milkrust_core::sprites::Frame, restore_final_burn_geometry: bool) -> Result<(), JsValue> {
         let texture = self.named_texture_for_at(&sprite.texture, sprite.time)?.ok_or_else(|| JsValue::from_str("Sprite image is still loading"))?;
-        let dimensions = {
+        let (dimensions, animated) = {
             let textures = self.named_textures.borrow();
             get_milkrust_texture_name_aliases(&sprite.texture).iter().find_map(|alias| textures.get(alias))
-                .map(|asset| asset.dimensions.get())
+                .map(|asset| (asset.dimensions.get(), asset.animated))
                 .ok_or_else(|| JsValue::from_str("Sprite image dimensions are unavailable"))?
         };
         let mut pass = self.sprite_pass.borrow_mut();
         if pass.is_none() { *pass = Some(sprites::SpritePass::new(self.gl.clone())?); }
-        pass.as_mut().unwrap().draw(sprite, &texture, dimensions, restore_final_burn_geometry)
+        pass.as_mut().unwrap().draw(sprite, &texture, dimensions, restore_final_burn_geometry, animated)
+    }
+
+    fn prepare_sprite_texture(&self, sprite: &milkrust_core::sprites::Frame) -> Result<(), JsValue> {
+        if !sprite.color_key_enabled() { return Ok(()); }
+        let (dimensions, animated) = {
+            let textures = self.named_textures.borrow();
+            get_milkrust_texture_name_aliases(&sprite.texture).iter().find_map(|alias| textures.get(alias))
+                .map(|asset| (asset.dimensions.get(), asset.animated))
+                .ok_or_else(|| JsValue::from_str("Sprite image dimensions are unavailable"))?
+        };
+        if animated { return Ok(()); }
+        let image = self.named_texture_for_at(&sprite.texture, sprite.time)?
+            .ok_or_else(|| JsValue::from_str("Sprite image is still loading"))?;
+        let mut pass = self.sprite_pass.borrow_mut();
+        if pass.is_none() { *pass = Some(sprites::SpritePass::new(self.gl.clone())?); }
+        pass.as_mut().unwrap().prepare_keyed(&sprite.texture, &image, dimensions, sprite.color_key, self.texture_pixels.get())
+    }
+
+    fn retain_keyed_sprite_textures(&self, sprites: &[milkrust_core::sprites::Frame], owner: usize) {
+        let active = sprites.iter().filter(|sprite| sprite.preset_index == owner
+                && sprite.color_key_enabled() && !self.named_texture_is_animated(&sprite.texture))
+            .map(|sprite| (sprite.texture.to_ascii_lowercase(), sprite.color_key)).collect::<BTreeSet<_>>();
+        if let Some(pass) = self.sprite_pass.borrow_mut().as_mut() { pass.retain_keyed(&active); }
+    }
+
+    fn named_texture_is_animated(&self, raw_name: &str) -> bool {
+        let textures = self.named_textures.borrow();
+        get_milkrust_texture_name_aliases(raw_name).iter().find_map(|alias|
+            textures.get(alias).map(|asset| asset.animated)).unwrap_or(false)
     }
 
     fn prepare_textures(&self, frame: &MilkRustFrame) -> Result<bool, JsValue> {
@@ -1575,12 +1608,14 @@ fn create_milkrust_texture_from_data_url(
     total_pixels.set(total_pixels.get() + pixels);
     let mut asset = MilkRustTextureAsset {
         gl: gl.clone(), texture, additional_frames: Vec::new(), delays_seconds: Vec::new(), repeat_count: None,
+        animated: false,
         dimensions: Rc::new(Cell::new((width, height))),
         state: Rc::new(RefCell::new(None)), total_pixels, reserved_pixels: pixels,
         worker: None, worker_url: None, worker_timeout_id: None,
         _onmessage: None, _onerror: None, _timeout: None,
     };
     if matches!(source.format, Format::Gif) {
+        asset.animated = true;
         let animation = source.decode_gif().map_err(|e| JsValue::from_str(&e))?;
         if animation.decoded_pixels() != pixels {
             return Err(JsValue::from_str("GIF frame count changed after pixel reservation"));
@@ -1604,7 +1639,6 @@ fn create_milkrust_texture_from_data_url(
                 if index != 0 { gl.delete_texture(Some(&texture)); }
                 return Err(error);
             }
-            gl.generate_mipmap(web_sys::WebGl2RenderingContext::TEXTURE_2D);
             if gl.get_error() != web_sys::WebGl2RenderingContext::NO_ERROR {
                 if index != 0 { gl.delete_texture(Some(&texture)); }
                 return Err(JsValue::from_str("Animated GIF texture upload failed"));
@@ -1631,6 +1665,7 @@ fn create_milkrust_texture_from_data_url(
             web_sys::WebGl2RenderingContext::RGBA, web_sys::WebGl2RenderingContext::UNSIGNED_BYTE,
             Some(&flipped),
         )?;
+        gl.generate_mipmap(web_sys::WebGl2RenderingContext::TEXTURE_2D);
         if gl.get_error() != web_sys::WebGl2RenderingContext::NO_ERROR {
             return Err(JsValue::from_str("Legacy texture GPU upload failed"));
         }
@@ -1703,6 +1738,7 @@ fn create_milkrust_texture_from_data_url(
         );
         gl_for_load.pixel_storei(web_sys::WebGl2RenderingContext::UNPACK_FLIP_Y_WEBGL, 0);
         bitmap.close();
+        if result.is_ok() { gl_for_load.generate_mipmap(web_sys::WebGl2RenderingContext::TEXTURE_2D); }
         let result = result.map_err(|error| error.as_string().unwrap_or_else(|| "GPU upload failed".into()))
             .and_then(|()| if gl_for_load.get_error() == web_sys::WebGl2RenderingContext::NO_ERROR { Ok(()) }
                 else { Err("GPU texture upload failed".into()) });

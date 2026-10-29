@@ -209,10 +209,10 @@ pub(crate) fn classic_vertices(samples: &[f64], scope: &Scope) -> Vec<f64> {
 pub(crate) fn classic(wave: &[f64], spectrum: &[f64], stereo: Option<&Stereo>, scope: &Scope, rgb: [f64; 3]) -> Vec<MilkRustPrimitive> {
     let n = |key, fallback| number(scope, key, fallback);
     let mode = (n("wave_mode", 0.0) as i64).rem_euclid(9);
-    let mut alpha = n("wave_a", 1.0);
+    let mut alpha = n("wave_a", 0.8);
     if n("wave_mod_alpha", n("modwavealphabyvolume", 0.0)) != 0.0 {
-        let start = n("wave_mod_alpha_start", n("modwavealphastart", 0.0));
-        let end = n("wave_mod_alpha_end", n("modwavealphaend", 1.0));
+        let start = n("wave_mod_alpha_start", n("modwavealphastart", 0.75));
+        let end = n("wave_mod_alpha_end", n("modwavealphaend", 0.95));
         let volume = (n("bass", 0.0) + n("mid", 0.0) + n("treb", 0.0)) / 3.0;
         alpha *= if (end - start).abs() < 1.0e-9 { if volume >= end { 1.0 } else { 0.0 } }
             else { ((volume - start) / (end - start)).clamp(0.0, 1.0) };
@@ -226,13 +226,15 @@ pub(crate) fn classic(wave: &[f64], spectrum: &[f64], stereo: Option<&Stereo>, s
     }
     let mut color = [rgb[0], rgb[1], rgb[2], alpha.clamp(0.0, 1.0)];
     if color[3] == 0.0 { return Vec::new(); }
-    if n("wave_brighten", n("maximizewavecolor", 0.0)) != 0.0 {
+    if n("wave_brighten", n("maximizewavecolor", 1.0)) != 0.0 {
         let maximum = rgb.into_iter().fold(0.0_f64, f64::max);
         if maximum > 0.0 { for value in &mut color[..3] { *value /= maximum; } }
     }
     classic_paths(wave, spectrum, stereo, scope).into_iter().flat_map(|vertices| {
-        stroke(vertices, Vec::new(), color, n("wave_usedots", n("wave_dots", 0.0)) != 0.0,
-            n("wave_thick", 0.0) != 0.0, n("wave_additive", n("additivewave", 0.0)) != 0.0, true, scope)
+        stroke(vertices, Vec::new(), color,
+            n("wave_usedots", n("wave_dots", n("usedots", 0.0))) != 0.0,
+            n("wave_thick", n("thick", 0.0)) != 0.0,
+            n("wave_additive", n("additivewave", 0.0)) != 0.0, true, scope)
     }).collect()
 }
 

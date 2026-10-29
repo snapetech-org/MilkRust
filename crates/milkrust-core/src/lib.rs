@@ -31,14 +31,14 @@ pub struct MilkRustPreset {
 impl Default for MilkRustPreset {
     fn default() -> Self {
         Self {
-            decay: 0.89,
-            rot: 0.012,
-            wave_a: 0.86,
-            wave_b: 0.92,
-            wave_g: 0.58,
-            wave_r: 0.16,
-            wave_scale: 1.25,
-            zoom: 1.02,
+            decay: 0.98,
+            rot: 0.0,
+            wave_a: 0.8,
+            wave_b: 1.0,
+            wave_g: 1.0,
+            wave_r: 1.0,
+            wave_scale: 1.0,
+            zoom: 1.0,
         }
     }
 }
@@ -256,14 +256,14 @@ fn milkrust_preset_from_document(preset_document: &MilkRustPresetDocument) -> Mi
             .unwrap_or(default)
     };
     MilkRustPreset {
-        decay: get("decay", 0.89),
-        rot: get("rot", 0.012),
-        wave_a: get("wave_a", 0.86),
-        wave_b: get("wave_b", 0.92),
-        wave_g: get("wave_g", 0.58),
-        wave_r: get("wave_r", 0.16),
-        wave_scale: get("wave_scale", 1.25),
-        zoom: get("zoom", 1.02),
+        decay: get("decay", 0.98),
+        rot: get("rot", 0.0),
+        wave_a: get("wave_a", 0.8),
+        wave_b: get("wave_b", 1.0),
+        wave_g: get("wave_g", 1.0),
+        wave_r: get("wave_r", 1.0),
+        wave_scale: get("wave_scale", 1.0),
+        zoom: get("zoom", 1.0),
     }
 }
 
@@ -451,6 +451,26 @@ fn milkrust_transition_mode(parsed: &MilkRustPresetSet) -> String {
     }
 }
 
+const MILKDROP_SCOPE_DEFAULTS: &[(&str, f64)] = &[
+    ("decay", 0.98), ("zoom", 1.0), ("zoomexp", 1.0), ("rot", 0.0),
+    ("cx", 0.5), ("cy", 0.5), ("sx", 1.0), ("sy", 1.0), ("dx", 0.0), ("dy", 0.0),
+    ("warpscale", 1.0), ("warpanimspeed", 1.0), ("warp", 1.0), ("shader", 0.0),
+    ("red_blue", 0.0),
+    ("gamma", 2.0), ("echo_zoom", 2.0), ("echo_alpha", 0.0), ("echo_orient", 0.0),
+    ("wrap", 1.0), ("brighten", 0.0), ("darken", 0.0), ("solarize", 0.0), ("invert", 0.0),
+    ("darken_center", 0.0), ("blur1_min", 0.0), ("blur2_min", 0.0), ("blur3_min", 0.0),
+    ("blur1_max", 1.0), ("blur2_max", 1.0), ("blur3_max", 1.0), ("blur1_edge_darken", 0.25),
+    ("wave_mode", 0.0), ("wave_a", 0.8), ("wave_scale", 1.0), ("wave_smoothing", 0.75),
+    ("wave_mystery", 0.0), ("wave_r", 1.0), ("wave_g", 1.0), ("wave_b", 1.0),
+    ("wave_x", 0.5), ("wave_y", 0.5), ("modwavealphabyvolume", 0.0),
+    ("modwavealphastart", 0.75), ("modwavealphaend", 0.95),
+    ("usedots", 0.0), ("thick", 0.0), ("additivewave", 0.0), ("maximizewavecolor", 1.0),
+    ("mv_x", 12.0), ("mv_y", 9.0), ("mv_dx", 0.0), ("mv_dy", 0.0), ("mv_l", 0.9),
+    ("mv_r", 1.0), ("mv_g", 1.0), ("mv_b", 1.0), ("mv_a", 1.0),
+    ("ob_size", 0.01), ("ob_r", 0.0), ("ob_g", 0.0), ("ob_b", 0.0), ("ob_a", 0.0),
+    ("ib_size", 0.01), ("ib_r", 0.25), ("ib_g", 0.25), ("ib_b", 0.25), ("ib_a", 0.0),
+];
+
 fn create_milkrust_scope(
     preset: &MilkRustPresetDocument,
     time_seconds: f64,
@@ -459,6 +479,14 @@ fn create_milkrust_scope(
     treble: f64,
 ) -> BTreeMap<String, MilkRustValue> {
      let mut scope = classic_keys::scope(&preset.base_values);
+     for &(key, value) in MILKDROP_SCOPE_DEFAULTS {
+         scope.entry(key.to_string()).or_insert(MilkRustValue::Number(value));
+     }
+     for (target, source) in [("wave_usedots", "usedots"), ("wave_thick", "thick"),
+         ("wave_additive", "additivewave"), ("wave_brighten", "maximizewavecolor")] {
+         let value = scope.get(source).and_then(MilkRustValue::as_number).unwrap_or(0.0);
+         scope.entry(target.to_string()).or_insert(MilkRustValue::Number(value));
+     }
      for key in &Q_REGISTER_KEYS {
          scope.entry(key.to_string()).or_insert(MilkRustValue::Number(0.0));
      }
@@ -474,12 +502,32 @@ fn create_milkrust_scope(
      insert_num(&mut scope, "time", time_seconds);
      insert_num(&mut scope, "frame", (time_seconds * 60.0).floor());
      insert_num(&mut scope, "fps", 60.0);
-     insert_num(&mut scope, "wave_r", milkrust_base_number(&preset.base_values, "wave_r", 0.7));
-     insert_num(&mut scope, "wave_g", milkrust_base_number(&preset.base_values, "wave_g", 0.7));
-     insert_num(&mut scope, "wave_b", milkrust_base_number(&preset.base_values, "wave_b", 0.7));
+     insert_num(&mut scope, "wave_r", milkrust_base_number(&preset.base_values, "wave_r", 1.0));
+     insert_num(&mut scope, "wave_g", milkrust_base_number(&preset.base_values, "wave_g", 1.0));
+     insert_num(&mut scope, "wave_b", milkrust_base_number(&preset.base_values, "wave_b", 1.0));
      update_milkrust_scope_input(&mut scope, MilkRustInputState::default());
      scope
  }
+
+fn seed_milk2_header_scope(
+    scope: &mut BTreeMap<String, MilkRustValue>,
+    state: &milk2::HeaderState,
+) {
+    scope.entry("blending_pattern".into())
+        .or_insert_with(|| MilkRustValue::Text(state.pattern.clone()));
+    for (key, value) in [
+        ("blending_progress", state.progress),
+        ("blending_direction", f64::from(state.direction)),
+    ] {
+        scope.entry(key.into()).or_insert(MilkRustValue::Number(value));
+    }
+    if state.randoms_active {
+        for (index, value) in state.random.iter().enumerate() {
+            scope.entry(format!("random_{}", index + 1))
+                .or_insert(MilkRustValue::Number(*value));
+        }
+    }
+}
 
 #[allow(clippy::too_many_arguments)]
 fn update_milkrust_scope_audio(
@@ -664,6 +712,79 @@ pub fn milkrust_frame_from_source(
     milkrust_frame_from_source_with_audio(source, time_seconds, bass, mid, treble, &[], &[])
 }
 
+// The `.milk2` frame controls mixed by MilkDrop's saved-preset path. Mouse
+// inputs and the integer wave mode belong to the independent preset states.
+const MILK2_BLEND_NUMERIC_KEYS: &[(&str, f64)] = &[
+    ("decay", 0.98), ("wave_a", 0.8), ("wave_r", 1.0), ("wave_g", 1.0), ("wave_b", 1.0),
+    ("wave_x", 0.5), ("wave_y", 0.5), ("wave_mystery", 0.0),
+    ("ob_size", 0.01), ("ob_r", 0.0), ("ob_g", 0.0), ("ob_b", 0.0), ("ob_a", 0.0),
+    ("ib_size", 0.01), ("ib_r", 0.25), ("ib_g", 0.25), ("ib_b", 0.25), ("ib_a", 0.0),
+    ("mv_x", 12.0), ("mv_y", 9.0), ("mv_dx", 0.0), ("mv_dy", 0.0), ("mv_l", 0.9),
+    ("mv_r", 1.0), ("mv_g", 1.0), ("mv_b", 1.0), ("mv_a", 1.0),
+    ("echo_zoom", 2.0), ("echo_alpha", 0.0), ("gamma", 2.0),
+    ("blur1_min", 0.0), ("blur2_min", 0.0), ("blur3_min", 0.0),
+    ("blur1_max", 1.0), ("blur2_max", 1.0), ("blur3_max", 1.0), ("blur1_edge_darken", 0.25),
+];
+
+const MILK2_BLEND_SNAP_KEYS: &[(&str, f64)] = &[
+    ("echo_orient", 0.0), ("wave_usedots", 0.0), ("wave_thick", 0.0),
+    ("wave_additive", 0.0), ("wave_brighten", 1.0), ("darken_center", 0.0),
+    ("wrap", 1.0), ("invert", 0.0), ("brighten", 0.0), ("darken", 0.0), ("solarize", 0.0),
+];
+
+fn milkrust_milk2_blend_mix(progress: f64) -> f64 {
+    let progress = progress.clamp(0.0, 1.0);
+    0.5 - 0.5 * (std::f64::consts::PI * progress).cos()
+}
+
+fn milkrust_milk2_snap_point(old: &MilkRustPresetDocument, new: &MilkRustPresetDocument) -> f64 {
+    let old_composite = milkrust_shader_stages(old).composite.required;
+    let new_composite = milkrust_shader_stages(new).composite.required;
+    match (old_composite, new_composite) {
+        (true, false) => -0.01,
+        (false, true) => 1.01,
+        _ => 0.5,
+    }
+}
+
+fn blend_milkrust_milk2_scope(
+    new: &mut BTreeMap<String, MilkRustValue>,
+    old: &BTreeMap<String, MilkRustValue>,
+    mix: f64,
+    snap: f64,
+) {
+    let old_weight = 1.0 - mix;
+    for &(key, default) in MILK2_BLEND_NUMERIC_KEYS {
+        let value = mix * milkrust_scope_number(new, key, default)
+            + old_weight * milkrust_scope_number(old, key, default);
+        new.insert(key.to_string(), MilkRustValue::Number(value));
+    }
+    for &(key, default) in MILK2_BLEND_SNAP_KEYS {
+        if mix < snap {
+            new.insert(key.to_string(), MilkRustValue::Number(milkrust_scope_number(old, key, default)));
+        } else {
+            new.entry(key.to_string()).or_insert(MilkRustValue::Number(default));
+        }
+    }
+}
+
+fn restore_milkrust_milk2_scope_values(
+    target: &mut BTreeMap<String, MilkRustValue>,
+    original: &BTreeMap<String, MilkRustValue>,
+) {
+    for key in MILK2_BLEND_NUMERIC_KEYS.iter().chain(MILK2_BLEND_SNAP_KEYS).map(|(key, _)| *key) {
+        if let Some(value) = original.get(key) {
+            target.insert(key.to_string(), value.clone());
+        } else {
+            target.remove(key);
+        }
+    }
+}
+
+fn milkrust_milk2_scene_alpha(index: usize, progress: f64) -> f64 {
+    if index == 0 { 1.0 - progress.clamp(0.0, 1.0) } else { progress.clamp(0.0, 1.0) }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn build_milkrust_frame_from_scope(
     preset_document: &MilkRustPresetDocument,
@@ -674,17 +795,19 @@ fn build_milkrust_frame_from_scope(
     treble: f64,
     waveform: &[f64],
     spectrum: &[f64],
+    scene_alpha: f64,
+    hide_borders: bool,
 ) -> MilkRustFrame {
     let fallback = |key: &str, default: f64| {
         classic_keys::value(&preset_document.base_values, key)
             .and_then(|v| v.as_number())
             .unwrap_or(default)
     };
-    let wave_r = clamp_unit(milkrust_scope_number(scope, "wave_r", fallback("wave_r", 0.16)));
-    let wave_g = clamp_unit(milkrust_scope_number(scope, "wave_g", fallback("wave_g", 0.92)));
-    let wave_b = clamp_unit(milkrust_scope_number(scope, "wave_b", fallback("wave_b", 0.58)));
+    let wave_r = clamp_unit(milkrust_scope_number(scope, "wave_r", fallback("wave_r", 1.0)));
+    let wave_g = clamp_unit(milkrust_scope_number(scope, "wave_g", fallback("wave_g", 1.0)));
+    let wave_b = clamp_unit(milkrust_scope_number(scope, "wave_b", fallback("wave_b", 1.0)));
     let wave_scale = clamp_range(
-        milkrust_scope_number(scope, "wave_scale", fallback("wave_scale", 1.25)),
+        milkrust_scope_number(scope, "wave_scale", fallback("wave_scale", 1.0)),
         0.2,
         3.0,
     );
@@ -697,14 +820,15 @@ fn build_milkrust_frame_from_scope(
     let generated = create_milkrust_audio_samples(time_seconds,bass,mid,treble,192);
     let samples = if waveform.is_empty() { generated.as_slice() } else { waveform };
     let warp_mesh = create_milkrust_warp_mesh(preset_document, scope);
-    let scene = scene::build(&mut preset_document.clone(), &mut scope.clone(), samples, spectrum, None, [wave_r,wave_g,wave_b], warp_mesh.as_ref());
+    let scene = scene::build(&mut preset_document.clone(), &mut scope.clone(), samples, spectrum, None,
+        [wave_r,wave_g,wave_b], warp_mesh.as_ref(), scene_alpha, hide_borders);
     let q_registers = milkrust_q_registers(scope);
     let fft_bins = milkrust_sample_bins(spectrum);
     let waveform_bins = milkrust_sample_bins(waveform);
     MilkRustFrame {
         draw_order: scene.order, motion_vectors: scene.motion,
         background_alpha: clamp_range(
-            1.0 - milkrust_scope_number(scope, "decay", fallback("decay", 0.89)),
+            1.0 - milkrust_scope_number(scope, "decay", fallback("decay", 0.98)),
             0.0,
             1.0,
         ),
@@ -720,7 +844,7 @@ fn build_milkrust_frame_from_scope(
             .iter()
             .filter(|shape| milkrust_base_number(&shape.base_values, "enabled", 0.0) > 0.0)
             .count(),
-        rotation: milkrust_scope_number(scope, "rot", fallback("rot", 0.012)),
+        rotation: milkrust_scope_number(scope, "rot", fallback("rot", 0.0)),
         shader_source: translated_milkrust_shader_source(preset_document),
         shader_texture_samplers: milkrust_shader_texture_samplers(preset_document),
         shader_stages: milkrust_shader_stages(preset_document),
@@ -741,7 +865,7 @@ fn build_milkrust_frame_from_scope(
             .count(),
         warp_mesh,
         zoom: clamp_range(
-            milkrust_scope_number(scope, "zoom", fallback("zoom", 1.02)),
+            milkrust_scope_number(scope, "zoom", fallback("zoom", 1.0)),
             0.001,
             1.0e6,
         ),
@@ -762,6 +886,8 @@ fn build_milkrust_frame_from_runtime_scope(
      waveform: &[f64],
      spectrum: &[f64],
      stereo: Option<&audio::Stereo>,
+     scene_alpha: f64,
+     hide_borders: bool,
  ) -> MilkRustFrame {
      let preset = milkrust_preset_from_document(preset_document);
      let wave_r = clamp_unit(milkrust_scope_number(scope, "wave_r", preset.wave_r));
@@ -781,7 +907,8 @@ fn build_milkrust_frame_from_runtime_scope(
      let generated = create_milkrust_audio_samples(time_seconds,bass,mid,treble,192);
      let samples = if waveform.is_empty() { generated.as_slice() } else { waveform };
      let warp_mesh = create_milkrust_warp_mesh(preset_document, scope);
-     let scene = scene::build(preset_document, scope, samples, spectrum, stereo, [wave_r,wave_g,wave_b], warp_mesh.as_ref());
+     let scene = scene::build(preset_document, scope, samples, spectrum, stereo,
+         [wave_r,wave_g,wave_b], warp_mesh.as_ref(), scene_alpha, hide_borders);
      let q_registers = milkrust_q_registers(scope);
      let fft_bins = milkrust_sample_bins(spectrum);
      let waveform_bins = milkrust_sample_bins(waveform);
@@ -903,6 +1030,8 @@ pub fn milkrust_frame_from_source_with_audio_and_input(
         treble,
         waveform,
         spectrum,
+        1.0,
+        false,
     )
 }
 
@@ -950,40 +1079,44 @@ pub fn milkrust_frame_set_from_source_with_audio_and_input(
         return MilkRustFrameSet { sprites: Vec::new(), entries: Vec::new(), preset_count: 0, title,
             transition_mode, transition_seconds };
     }
-    let mut parent_scopes = Vec::with_capacity(parsed.presets.len());
-    let entries = parsed
-        .presets
-        .iter()
-        .enumerate()
-        .map(|(index, preset_document)| {
-            let mut scope =
-                create_milkrust_scope(preset_document, time_seconds, bass, mid, treble);
-            update_milkrust_scope_audio(
-                &mut scope,
-                time_seconds,
-                (time_seconds * 60.0).floor(),
-                bass,
-                mid,
-                treble,
-                waveform,
-                spectrum,
-            );
-            update_milkrust_scope_input(&mut scope, input);
-            if !preset_document.equations.init.trim().is_empty() {
-                if let Ok(next_scope) =
-                    evaluate_milkrust_equations(&preset_document.equations.init, &scope)
-                {
-                    scope = next_scope;
-                }
+    let mut scopes = Vec::with_capacity(parsed.presets.len());
+    for preset_document in &parsed.presets {
+        let mut scope = create_milkrust_scope(preset_document, time_seconds, bass, mid, treble);
+        update_milkrust_scope_audio(
+            &mut scope,
+            time_seconds,
+            (time_seconds * 60.0).floor(),
+            bass,
+            mid,
+            treble,
+            waveform,
+            spectrum,
+        );
+        update_milkrust_scope_input(&mut scope, input);
+        if !preset_document.equations.init.trim().is_empty() {
+            if let Ok(next_scope) = evaluate_milkrust_equations(&preset_document.equations.init, &scope) {
+                scope = next_scope;
             }
-            if !preset_document.equations.per_frame.trim().is_empty() {
-                if let Ok(next_scope) =
-                    evaluate_milkrust_equations(&preset_document.equations.per_frame, &scope)
-                {
-                    scope = next_scope;
-                }
+        }
+        if !preset_document.equations.per_frame.trim().is_empty() {
+            if let Ok(next_scope) = evaluate_milkrust_equations(&preset_document.equations.per_frame, &scope) {
+                scope = next_scope;
             }
-            parent_scopes.push(scope.clone());
+        }
+        scopes.push(scope);
+    }
+    if let Some(blend) = &parsed.saved_blend {
+        if scopes.len() == 2 {
+            let mix = milkrust_milk2_blend_mix(blend.progress);
+            let snap = milkrust_milk2_snap_point(&parsed.presets[0], &parsed.presets[1]);
+            let old = scopes[0].clone();
+            blend_milkrust_milk2_scope(&mut scopes[1], &old, mix, snap);
+        }
+    }
+    let parent_scopes = scopes.clone();
+    let entries = parsed.presets.iter().enumerate().map(|(index, preset_document)| {
+            let scene_alpha = parsed.saved_blend.as_ref()
+                .map_or(1.0, |blend| milkrust_milk2_scene_alpha(index, blend.progress));
             MilkRustCompositeFrame {
                 blend_alpha: match &parsed.saved_blend {
                     Some(blend) => if index == 0 { 1.0 } else { blend.progress },
@@ -1002,13 +1135,15 @@ pub fn milkrust_frame_set_from_source_with_audio_and_input(
                 composite_mode: milkrust_composite_mode(preset_document, index).to_string(),
                 frame: build_milkrust_frame_from_scope(
                     preset_document,
-                    &scope,
+                    &scopes[index],
                     time_seconds,
                     bass,
                     mid,
                     treble,
                     waveform,
                     spectrum,
+                    scene_alpha,
+                    parsed.saved_blend.is_some(),
                 ),
                 index,
                 title: if preset_document.title.trim().is_empty() {
@@ -1017,8 +1152,7 @@ pub fn milkrust_frame_set_from_source_with_audio_and_input(
                     preset_document.title.clone()
                 },
             }
-        })
-        .collect::<Vec<_>>();
+        }).collect::<Vec<_>>();
 
     let sprites = match sprites::Runtime::default().render_with_parents(&parsed.embedded_sprites, &parent_scopes, time_seconds,
         parsed.saved_blend.as_ref().map_or(1.0, |blend| blend.progress)) {
@@ -1224,6 +1358,8 @@ impl MilkRustRuntime {
             waveform,
             spectrum,
             None,
+            1.0,
+            false,
         );
         self.preset_document = Some(preset_document);
         frame
@@ -1232,6 +1368,7 @@ impl MilkRustRuntime {
 
 #[derive(Clone, Debug, Default)]
 pub struct MilkRustFrameSetRuntime {
+    milk2_header_state: milk2::HeaderState,
     stereo_audio: Option<audio::Stereo>,
     previous_time: Option<f64>,
     viewport: Option<(u32, u32)>,
@@ -1257,6 +1394,22 @@ impl MilkRustFrameSetRuntime {
         self.stereo_audio = Some(audio);
         Ok(())
     }
+
+    /// Snapshot process-wide saved-preset header state for a host that must
+    /// recreate this runtime between preset sequences.
+    pub fn milk2_header_state(&self) -> &milk2::HeaderState {
+        &self.milk2_header_state
+    }
+
+    /// Restore previously captured process-wide header state. The restored
+    /// values affect subsequently loaded sources; a currently loaded source
+    /// keeps the scope it already initialized.
+    pub fn restore_milk2_header_state(&mut self, state: milk2::HeaderState) -> Result<(), String> {
+        state.validate()?;
+        self.milk2_header_state = state;
+        Ok(())
+    }
+
     pub fn set_viewport(&mut self, width: u32, height: u32) -> Result<(), String> {
         if width == 0 || height == 0 || width > 4096 || height > 4096 || u64::from(width) * u64::from(height) > 8 * 1024 * 1024 {
             return Err("Runtime viewport exceeds its dimensions budget".into());
@@ -1341,15 +1494,28 @@ impl MilkRustFrameSetRuntime {
             return Err(error);
         }
         if self.source != source || self.preset_documents.is_empty() {
-            let parsed = parse_milkrust_preset_set(source, false);
+            let mut parsed = parse_milkrust_preset_set(source, false);
+            if let Some(blend) = parsed.saved_blend.as_mut() {
+                self.milk2_header_state.resolve(blend);
+            }
             let error = parsed.presets.iter().flat_map(|p| p.parse_errors.iter()).next().cloned()
                 .or_else(|| parsed.saved_blend.as_ref().and_then(milk2::SavedBlend::render_requirement));
             if let Some(error) = error { self.last_error = Some(error.clone()); return Err(error); }
         }
+        let prior_header_state = self.milk2_header_state.clone();
         let budget = milkrust_expr::limits::FrameEvaluation::begin();
         let mut frame = self.render_source_inner(source, time_seconds, bass, mid, treble, waveform, spectrum, input);
         let parsed = self.cached_preset_set.as_ref().expect("render_source_inner caches the parsed set");
-        let sprite_result = self.sprite_runtime.render_with_parents(&parsed.embedded_sprites, &self.scopes, time_seconds,
+        let mut sprite_scopes = self.scopes.clone();
+        if let Some(blend) = &parsed.saved_blend {
+            if sprite_scopes.len() == 2 && parsed.presets.len() == 2 {
+                let mix = milkrust_milk2_blend_mix(blend.progress);
+                let snap = milkrust_milk2_snap_point(&parsed.presets[0], &parsed.presets[1]);
+                let old = sprite_scopes[0].clone();
+                blend_milkrust_milk2_scope(&mut sprite_scopes[1], &old, mix, snap);
+            }
+        }
+        let sprite_result = self.sprite_runtime.render_with_parents(&parsed.embedded_sprites, &sprite_scopes, time_seconds,
             parsed.saved_blend.as_ref().map_or_else(|| milkrust_scope_number(&self.scopes[0], "progress", 1.0), |blend| blend.progress));
         let sprite_error = match sprite_result {
             Ok(sprites) => { frame.sprites = sprites; None }
@@ -1359,6 +1525,7 @@ impl MilkRustFrameSetRuntime {
             // Equations may have partially mutated registers before failure.
             // A later explicit retry starts with fresh state.
             *self = Self::default();
+            self.milk2_header_state = prior_header_state;
             self.last_error = Some(error.clone());
             return Err(error);
         }
@@ -1378,10 +1545,14 @@ impl MilkRustFrameSetRuntime {
         input: MilkRustInputState,
     ) -> MilkRustFrameSet {
         if self.source != source || self.preset_documents.is_empty() {
-            let parsed = parse_milkrust_preset_set(
+            let mut parsed = parse_milkrust_preset_set(
                 source,
                 milkrust_source_requires_milk2_error_context(source),
             );
+            if let Some(blend) = parsed.saved_blend.as_mut() {
+                self.milk2_header_state.resolve(blend);
+                self.milk2_header_state.update(blend);
+            }
             self.previous_time = None;
             self.sprite_runtime = sprites::Runtime::default();
             self.cached_preset_set = Some(parsed.clone());
@@ -1390,7 +1561,11 @@ impl MilkRustFrameSetRuntime {
             self.scopes = parsed
                 .presets
                 .iter()
-                .map(|preset| create_milkrust_scope(preset, time_seconds, bass, mid, treble))
+                .map(|preset| {
+                    let mut scope = create_milkrust_scope(preset, time_seconds, bass, mid, treble);
+                    seed_milk2_header_scope(&mut scope, &self.milk2_header_state);
+                    scope
+                })
                 .collect();
             self.preset_documents = parsed.presets;
             self.source = source.to_string();
@@ -1404,13 +1579,10 @@ impl MilkRustFrameSetRuntime {
         let title = milkrust_preset_set_title(preset_set);
         let transition_mode = milkrust_transition_mode(preset_set);
         let transition_seconds = milkrust_transition_seconds(preset_set);
-        let mut entries = Vec::with_capacity(self.preset_documents.len());
-
+        let capture_softcut_header = preset_set.saved_blend.is_none() && self.preset_documents.len() == 1;
         for index in 0..self.preset_documents.len() {
             let preset_document = &mut self.preset_documents[index];
             let scope = &mut self.scopes[index];
-            let translated_shader_source = translated_milkrust_shader_source(preset_document);
-            let shader_texture_samplers = milkrust_shader_texture_samplers(preset_document);
             let next_frame = milkrust_scope_number(scope, "frame", 0.0) + 1.0;
             update_milkrust_scope_audio(
                  scope,
@@ -1451,30 +1623,62 @@ impl MilkRustFrameSetRuntime {
                      *scope = next_scope;
                  }
              }
-             let blend_alpha = match &preset_set.saved_blend {
-                 Some(blend) => if index == 0 { 1.0 } else { blend.progress },
-                 None => milkrust_composite_alpha(preset_document, index),
-             };
-             let composite_mode = milkrust_composite_mode(preset_document, index);
-             let title = if preset_document.title.trim().is_empty() {
-                 format!("Preset {}", index + 1)
-             } else {
-                 preset_document.title.clone()
-             };
- let frame = build_milkrust_frame_from_runtime_scope(
-                  preset_document,
-                 scope,
-                 Some(translated_shader_source.as_str()),
-                 &shader_texture_samplers,
-                 &self.shader_stages[index],
-                 time_seconds,
-                 bass,
-                 mid,
-                 treble,
-                 waveform,
-                 spectrum,
-                 stereo.as_ref(),
-             );
+             if capture_softcut_header {
+                 self.milk2_header_state.update_from_scope(scope);
+             }
+        }
+
+        let old_scope_for_blend = preset_set.saved_blend.as_ref()
+            .and_then(|_| self.scopes.first().cloned());
+        let milk2_snap = if preset_set.saved_blend.is_some() && self.preset_documents.len() == 2 {
+            Some(milkrust_milk2_snap_point(&self.preset_documents[0], &self.preset_documents[1]))
+        } else { None };
+        let mut entries = Vec::with_capacity(self.preset_documents.len());
+        for index in 0..self.preset_documents.len() {
+            let preset_document = &mut self.preset_documents[index];
+            let scope = &mut self.scopes[index];
+            let translated_shader_source = translated_milkrust_shader_source(preset_document);
+            let shader_texture_samplers = milkrust_shader_texture_samplers(preset_document);
+            let original_scope = if preset_set.saved_blend.is_some() && index == 1 {
+                Some(scope.clone())
+            } else { None };
+            if let (Some(blend), Some(old_scope)) = (&preset_set.saved_blend, old_scope_for_blend.as_ref()) {
+                if index == 1 {
+                    let mix = milkrust_milk2_blend_mix(blend.progress);
+                    blend_milkrust_milk2_scope(scope, old_scope, mix, milk2_snap.unwrap_or(0.5));
+                }
+            }
+            let blend_alpha = match &preset_set.saved_blend {
+                Some(blend) => if index == 0 { 1.0 } else { blend.progress },
+                None => milkrust_composite_alpha(preset_document, index),
+            };
+            let scene_alpha = preset_set.saved_blend.as_ref()
+                .map_or(1.0, |blend| milkrust_milk2_scene_alpha(index, blend.progress));
+            let composite_mode = milkrust_composite_mode(preset_document, index);
+            let title = if preset_document.title.trim().is_empty() {
+                format!("Preset {}", index + 1)
+            } else {
+                preset_document.title.clone()
+            };
+            let frame = build_milkrust_frame_from_runtime_scope(
+                preset_document,
+                scope,
+                Some(translated_shader_source.as_str()),
+                &shader_texture_samplers,
+                &self.shader_stages[index],
+                time_seconds,
+                bass,
+                mid,
+                treble,
+                waveform,
+                spectrum,
+                stereo.as_ref(),
+                scene_alpha,
+                preset_set.saved_blend.is_some(),
+            );
+            if let Some(original_scope) = original_scope.as_ref() {
+                restore_milkrust_milk2_scope_values(scope, original_scope);
+            }
             entries.push(MilkRustCompositeFrame {
                 blend_alpha,
                 blend_pattern: preset_set.saved_blend.as_ref()
@@ -1529,21 +1733,40 @@ pub fn milkrust_preset_name(source: &str) -> String {
 }
 
 pub fn validate_milkrust_import(source: &str) -> Result<String, String> {
-    validate_milkrust_import_for_renderer(source, false)
+    validate_milkrust_import_for_renderer(source, false, None)
 }
 
 /// Allows the experimental WebGL stage implementation without changing the
 /// cross-renderer compatibility ledger or claiming measured visual fidelity.
 pub fn validate_milkrust_webgl_import(source: &str) -> Result<String, String> {
-    validate_milkrust_import_for_renderer(source, true)
+    validate_milkrust_import_for_renderer(source, true, None)
 }
 
-fn validate_milkrust_import_for_renderer(source: &str, webgl_stages: bool) -> Result<String, String> {
+/// Validate a WebGL/native-GPU preset against the persistent saved header state
+/// available to the runtime that will load it. Stateless pack validators should
+/// continue using `validate_milkrust_webgl_import` and fail closed when a file
+/// depends on history that is not available to them.
+pub fn validate_milkrust_webgl_import_with_state(
+    source: &str,
+    header_state: &milk2::HeaderState,
+) -> Result<String, String> {
+    header_state.validate()?;
+    validate_milkrust_import_for_renderer(source, true, Some(header_state))
+}
+
+fn validate_milkrust_import_for_renderer(
+    source: &str,
+    webgl_stages: bool,
+    header_state: Option<&milk2::HeaderState>,
+) -> Result<String, String> {
     validate_preset_source(source)?;
-    let parsed = parse_milkrust_preset_set(
+    let mut parsed = parse_milkrust_preset_set(
         source,
         milkrust_source_requires_milk2_error_context(source),
     );
+    if let (Some(state), Some(blend)) = (header_state, parsed.saved_blend.as_mut()) {
+        state.resolve(blend);
+    }
     if parsed.presets.is_empty() {
         return Err("MilkRust preset is empty".to_string());
     };
@@ -2925,7 +3148,7 @@ pub fn create_milkrust_webgpu_screen_border_vertices(
 ) -> Vec<f64> {
     let mut vertices = create_milkrust_webgpu_triangle_list_vertices(
         &create_milkrust_screen_border_vertices(
-            milkrust_scope_number(scope, "ob_size", 0.0),
+            milkrust_scope_number(scope, "ob_size", 0.0) * 0.5,
             0.0,
         ),
         [
@@ -2937,8 +3160,8 @@ pub fn create_milkrust_webgpu_screen_border_vertices(
     );
     vertices.extend(create_milkrust_webgpu_triangle_list_vertices(
         &create_milkrust_screen_border_vertices(
-            milkrust_scope_number(scope, "ib_size", 0.0),
-            clamp_unit(milkrust_scope_number(scope, "ob_size", 0.0)) * 2.0,
+            milkrust_scope_number(scope, "ib_size", 0.0) * 0.5,
+            clamp_unit(milkrust_scope_number(scope, "ob_size", 0.0)),
         ),
         [
             clamp_unit(milkrust_scope_number(scope, "ib_r", fallback_color[0])),

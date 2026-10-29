@@ -7,7 +7,7 @@ pub const ALIASES: &[(&str, &str)] = &[
     ("frating", "rating"), ("fgammaadj", "gamma"), ("fdecay", "decay"),
     ("fvideoechozoom", "echo_zoom"), ("fvideoechoalpha", "echo_alpha"),
     ("nvideoechoorientation", "echo_orient"), ("nwavemode", "wave_mode"),
-    ("badditivewaves", "additivewave"), ("bwavedots", "wave_dots"),
+    ("badditivewaves", "additivewave"), ("bwavedots", "wave_usedots"),
     ("bwavethick", "wave_thick"), ("bmodwavealphabyvolume", "modwavealphabyvolume"),
     ("bmaximizewavecolor", "maximizewavecolor"), ("btexwrap", "wrap"),
     ("bdarkencenter", "darken_center"), ("bredbluestereo", "red_blue"),
@@ -18,7 +18,7 @@ pub const ALIASES: &[(&str, &str)] = &[
     ("fwarpanimspeed", "warpanimspeed"), ("fwarpscale", "warpscale"),
     ("fzoomexponent", "zoomexp"), ("fshader", "shader"),
     ("nmotionvectorsx", "mv_x"), ("nmotionvectorsy", "mv_y"),
-    ("bspectrum", "spectrum"), ("busedots", "usedots"),
+    ("bspectrum", "spectrum"), ("busedots", "wave_usedots"),
     ("num_inst", "instances"), ("thickoutline", "thick"),
     ("bdrawthick", "thick"), ("badditive", "additive"),
 ];

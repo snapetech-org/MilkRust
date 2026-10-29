@@ -6,7 +6,7 @@ mod renderer;
 
 use std::{cell::RefCell, collections::BTreeMap, panic::{catch_unwind, AssertUnwindSafe},
     sync::atomic::{AtomicU64, Ordering}};
-use milkrust_core::{MilkRustFrameSetRuntime, MilkRustInputState, validate_milkrust_webgl_import};
+use milkrust_core::{MilkRustFrameSetRuntime, MilkRustInputState, validate_milkrust_webgl_import_with_state};
 use audio::Audio;
 use renderer::Renderer;
 
@@ -98,7 +98,7 @@ pub unsafe extern "C" fn milkrust_load(handle: u64, text_bytes: *const u8, lengt
         let source = decoded.source.as_str();
         // Uses the same explicitly implemented stage family as WebGL. A failed
         // translation/unsupported saved pattern never becomes a fallback scene.
-        validate_milkrust_webgl_import(source)?;
+        validate_milkrust_webgl_import_with_state(source, session.runtime.milk2_header_state())?;
         let parsed = milkrust_core::parse_milkrust_preset_set(source, false);
         let mut textures = parsed.embedded_sprites.iter().map(|sprite| sprite.texture.clone())
             .collect::<std::collections::BTreeSet<_>>();
@@ -122,7 +122,9 @@ pub unsafe extern "C" fn milkrust_load(handle: u64, text_bytes: *const u8, lengt
         }
         session.texture_names = textures.into_iter().collect::<Vec<_>>().join("\n");
         session.renderer.reset();
+        let header_state = session.runtime.milk2_header_state().clone();
         session.runtime = MilkRustFrameSetRuntime::default();
+        session.runtime.restore_milk2_header_state(header_state)?;
         session.source = source.to_string(); session.last_time = None; session.failed = false;
         Ok(())
     })

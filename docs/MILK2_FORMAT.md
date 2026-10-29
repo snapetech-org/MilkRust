@@ -15,17 +15,53 @@ other executable trailer content remains gated. Progress is a frozen blend posit
 does not advance as a transition timer. Each preset retains its own
 equation/register state and feedback targets.
 
-Each `.milk2` file supplies an independent saved-blend state. Missing pattern
-is empty and fails closed; missing progress defaults to `0.5`, direction to
-`1`, and each omitted random register to `0`. Loading a new file never inherits
-the preceding file's header values. Serialization preserves whether each
-optional header record was present. Direction is a signed integer in the saved
-header; only `-1` reverses the four direction-sensitive patterns, while other
-integer values preserve the normal orientation. A non-integer direction is
-rejected. When the header has no random records at all, analytic patterns use
-the reference renderer's midpoint random inputs (`0.5`); plasma uses its
-deterministically seeded legacy random sequence. In a partial random block,
-omitted registers remain zero.
+MilkDrop retains these header variables across sequential loads. A fresh host
+starts with an empty pattern, progress `1.0`, direction `0`, and random values
+of `0.0`; a missing key on a later `.milk2` load inherits the runtime's current
+value. Stateless parsing uses only those process-start defaults, while the
+persistent frame-set runtime resolves absent keys from the preceding `.milk2`
+header and updates the carried state when a new wrapper loads. An ordinary
+single-preset runtime also captures valid `blending_pattern`,
+`blending_progress`, `blending_direction`, and `random_1` through `random_5`
+register values after its per-frame equations, retaining omitted and invalid
+registers. The next source receives those shared globals before its own
+equations run. Hosts that recreate the frame-set runtime can snapshot and
+restore the validated `HeaderState`; restoration applies to subsequently
+loaded sources. Serialization preserves which optional records were present,
+even when rendering uses an inherited value.
+
+The persistent native and WebAssembly preset-load/inspect paths validate a
+wrapper against the runtime's carried header state before resetting its
+per-preset equations and renderer. Stateless import/pack validation has no
+history to consult and therefore rejects a wrapper whose omitted pattern has
+no valid process-start value.
+
+Direction is a signed integer in the saved header; only `-1` reverses the four
+direction-sensitive patterns, while other integer values preserve the normal
+orientation. A non-integer direction is rejected. Before any random registers
+have been initialized, analytic patterns use the reference renderer's midpoint
+random inputs (`0.5`), and plasma uses its deterministically seeded legacy
+random sequence. Once a saved random block has initialized the carried random
+state, omitted slots inherit their preceding values, including in partial
+blocks.
+
+Both preset scopes run their init and per-frame equations independently. For
+rendering, PRESET2 receives MilkDrop's cosine interpolation of the documented
+numeric controls from PRESET1: decay; wave alpha, RGB, position and mystery
+parameter; outer/inner border size, RGBA; motion-vector grid, offsets, length
+and RGBA; echo zoom/alpha; gamma; and all three blur min/max pairs plus the
+first edge-darken value. `wave_mode` remains an integer and is not interpolated.
+Echo orientation, waveform dots/thickness/additive/brightness, center darkening,
+texture wrapping, invert, brighten, darken and solarize snap at the
+composite-shader boundary (or the midpoint when both presets use the same
+shader mode). Live mouse input is passed to each preset's own scope and is not
+part of the saved render-control mix. That temporary mixed scope is restored
+after scene generation, so its values do not become PRESET2's next-frame
+equation state. Custom shape fills, outlines and custom waves use linear
+`1 - P` / `P` alpha weights for PRESET1 / PRESET2. Outer and inner preset
+borders are hidden throughout a saved double preset. In classic presets,
+`bWaveDots` and `bUseDots` seed the same `wave_usedots` render control used by
+per-frame equations.
 
 `milk2.rs` is an independent bounded parser of the documented wrapper. The
 saved-blend and sprite behavior is implemented from the compatible MIT
@@ -51,18 +87,19 @@ default, including when the `sprite` flag is omitted. Unknown flag values, unmat
 blocks and unrelated trailer records remain gated. The wrapper enforces the same
 2 MiB source budget when called independently of the preset importer.
 
-Within an active sprite block, repeated saved fields use their first value.
-Repeated sprite block indices still use the last complete block.
+Within an active sprite block, repeated saved fields use their first value,
+except `SpriteName`, whose last occurrence wins. A block with no non-empty
+`SpriteName` does not create a sprite. Repeated sprite block indices still use
+the last complete block.
 
 The mask arithmetic includes the no-random fallback, `-1` direction rule for
 the four direction-aware patterns and the non-square `horizontal` mesh
-behavior. Saved
-sprite handling includes per-owner scopes, flip UVs, saved offsets/repeats,
-fps-scaled `SpriteSpeed`, EEL-seeded alpha/repeat/burn/layer/blend controls,
-dynamic layer selection, and all eleven saved blend modes with default 0 and
-dynamic selectors clamped to 0–10. `SpriteRot` is retained but inert in the
-inspected classic loader. A missing pattern fails closed rather than selecting
-an invented transition.
+behavior. Saved sprite handling includes per-owner scopes, flip UVs, saved
+offsets/repeats, absolute-time `SpriteSpeed` for `SpriteRot` modes 1 and 2,
+saved alpha multiplication, static layer/blend selection, integer burn modes,
+and all eleven saved blend modes with default 4 and invalid values selecting
+mode 0. A missing pattern fails closed rather than selecting an invented
+transition.
 These are source-level implementations. GPU triangle interpolation,
 compositing, sprite filtering and draw order still need reference captures to
 qualify pixel behavior on each renderer. The Canvas and WGSL paths explicitly

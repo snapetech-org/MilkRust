@@ -1,13 +1,18 @@
 use wasm_bindgen::prelude::*;
-use web_sys::{WebGl2RenderingContext as Gl, WebGlTexture};
+use std::collections::{BTreeMap, BTreeSet};
+use web_sys::{WebGl2RenderingContext as Gl, WebGlFramebuffer, WebGlTexture};
+
+const KEY_FRAGMENT: &str = "#version 300 es\nprecision highp float; uniform sampler2D spriteSource; uniform vec3 spriteColorKey; out vec4 outColor; void main(){ivec2 p=ivec2(gl_FragCoord.xy);vec4 c=texelFetch(spriteSource,p,0);if(c.a>=1.0-0.5/255.0&&all(lessThan(abs(c.rgb-spriteColorKey),vec3(0.5/255.0))))c=vec4(0.0);outColor=c;}";
 
 pub struct SpritePass {
     gl: Gl,
     program: web_sys::WebGlProgram,
+    key_program: web_sys::WebGlProgram,
     buffer: web_sys::WebGlBuffer,
     sampler: web_sys::WebGlSampler,
     snapshot: WebGlTexture,
     dimensions: (i32, i32),
+    keyed: BTreeMap<(String, u32), (WebGlTexture, WebGlFramebuffer, u64)>,
 }
 
 impl SpritePass {
@@ -19,20 +24,113 @@ impl SpritePass {
             Err(error) => { gl.delete_shader(Some(&vertex)); return Err(error); }
         };
         let program = super::link_milkrust_program(&gl, &vertex, &fragment)?;
+        let key_vertex = super::compile_milkrust_shader(&gl, Gl::VERTEX_SHADER,
+            "#version 300 es\nin vec2 position; void main(){gl_Position=vec4(position,0,1);}")?;
+        let key_fragment = match super::compile_milkrust_shader(&gl, Gl::FRAGMENT_SHADER, KEY_FRAGMENT) {
+            Ok(fragment) => fragment,
+            Err(error) => { gl.delete_shader(Some(&key_vertex)); gl.delete_program(Some(&program)); return Err(error); }
+        };
+        let key_program = super::link_milkrust_program(&gl, &key_vertex, &key_fragment)?;
         let Some(buffer) = gl.create_buffer() else {
-            gl.delete_program(Some(&program)); return Err(JsValue::from_str("Sprite buffer unavailable"));
+            gl.delete_program(Some(&key_program)); gl.delete_program(Some(&program)); return Err(JsValue::from_str("Sprite buffer unavailable"));
         };
         let Some(sampler) = gl.create_sampler() else {
-            gl.delete_buffer(Some(&buffer)); gl.delete_program(Some(&program));
+            gl.delete_buffer(Some(&buffer)); gl.delete_program(Some(&key_program)); gl.delete_program(Some(&program));
             return Err(JsValue::from_str("Sprite sampler unavailable"));
         };
         let Some(snapshot) = gl.create_texture() else {
-            gl.delete_sampler(Some(&sampler)); gl.delete_buffer(Some(&buffer)); gl.delete_program(Some(&program));
+            gl.delete_sampler(Some(&sampler)); gl.delete_buffer(Some(&buffer)); gl.delete_program(Some(&key_program)); gl.delete_program(Some(&program));
             return Err(JsValue::from_str("Sprite snapshot unavailable"));
         };
         for parameter in [Gl::TEXTURE_MIN_FILTER, Gl::TEXTURE_MAG_FILTER] { gl.sampler_parameteri(&sampler, parameter, Gl::LINEAR as i32); }
         for parameter in [Gl::TEXTURE_WRAP_S, Gl::TEXTURE_WRAP_T] { gl.sampler_parameteri(&sampler, parameter, Gl::REPEAT as i32); }
-        Ok(Self { gl, program, buffer, sampler, snapshot, dimensions: (0, 0) })
+        Ok(Self { gl, program, key_program, buffer, sampler, snapshot, dimensions: (0, 0), keyed: BTreeMap::new() })
+    }
+
+    pub fn retain_keyed(&mut self, active: &BTreeSet<(String, u32)>) {
+        let gl = self.gl.clone();
+        self.keyed.retain(|key, (texture, framebuffer, _)| {
+            if active.contains(key) { true } else {
+                gl.delete_texture(Some(texture));
+                gl.delete_framebuffer(Some(framebuffer));
+                false
+            }
+        });
+    }
+
+    pub fn prepare_keyed(
+        &mut self,
+        name: &str,
+        image: &WebGlTexture,
+        image_size: (u32, u32),
+        color_key: u32,
+        source_pixels: u64,
+    ) -> Result<(), JsValue> {
+        let key = (name.to_ascii_lowercase(), color_key);
+        if self.keyed.contains_key(&key) { return Ok(()); }
+        if self.keyed.len() >= milkrust_core::sprites::MAX_SPRITES {
+            return Err(JsValue::from_str("Sprite color-key derivative limit exceeded"));
+        }
+        let pixels = u64::from(image_size.0) * u64::from(image_size.1);
+        let retained = self.keyed.values().map(|(_, _, pixels)| *pixels).sum::<u64>();
+        if source_pixels.checked_add(retained).and_then(|value| value.checked_add(pixels))
+            .is_none_or(|value| value > 32 * 1024 * 1024) {
+            return Err(JsValue::from_str("Sprite color-keyed textures exceed the 32 Mi-pixel renderer budget"));
+        }
+        let texture = self.gl.create_texture().ok_or_else(|| JsValue::from_str("Sprite key texture unavailable"))?;
+        let framebuffer = self.gl.create_framebuffer().ok_or_else(|| {
+            self.gl.delete_texture(Some(&texture)); JsValue::from_str("Sprite key framebuffer unavailable")
+        })?;
+        let gl = &self.gl;
+        gl.bind_texture(Gl::TEXTURE_2D, Some(&texture));
+        gl.tex_parameteri(Gl::TEXTURE_2D, Gl::TEXTURE_MIN_FILTER, Gl::LINEAR_MIPMAP_LINEAR as i32);
+        gl.tex_parameteri(Gl::TEXTURE_2D, Gl::TEXTURE_MAG_FILTER, Gl::LINEAR as i32);
+        gl.tex_parameteri(Gl::TEXTURE_2D, Gl::TEXTURE_WRAP_S, Gl::REPEAT as i32);
+        gl.tex_parameteri(Gl::TEXTURE_2D, Gl::TEXTURE_WRAP_T, Gl::REPEAT as i32);
+        if let Err(error) = gl.tex_image_2d_with_i32_and_i32_and_i32_and_format_and_type_and_opt_u8_array(
+            Gl::TEXTURE_2D, 0, Gl::RGBA8 as i32, image_size.0 as i32, image_size.1 as i32, 0,
+            Gl::RGBA, Gl::UNSIGNED_BYTE, None) {
+            gl.delete_texture(Some(&texture)); gl.delete_framebuffer(Some(&framebuffer)); return Err(error);
+        }
+        gl.bind_framebuffer(Gl::FRAMEBUFFER, Some(&framebuffer));
+        gl.framebuffer_texture_2d(Gl::FRAMEBUFFER, Gl::COLOR_ATTACHMENT0, Gl::TEXTURE_2D, Some(&texture), 0);
+        if gl.check_framebuffer_status(Gl::FRAMEBUFFER) != Gl::FRAMEBUFFER_COMPLETE {
+            gl.bind_framebuffer(Gl::FRAMEBUFFER, None); gl.delete_texture(Some(&texture)); gl.delete_framebuffer(Some(&framebuffer));
+            return Err(JsValue::from_str("Sprite key framebuffer is incomplete"));
+        }
+        gl.viewport(0, 0, image_size.0 as i32, image_size.1 as i32);
+        gl.disable(Gl::BLEND);
+        gl.active_texture(Gl::TEXTURE0);
+        gl.bind_texture(Gl::TEXTURE_2D, Some(image));
+        gl.bind_sampler(0, None);
+        gl.use_program(Some(&self.key_program));
+        let uniform = |name: &str| gl.get_uniform_location(&self.key_program, name);
+        gl.uniform1i(uniform("spriteSource").as_ref(), 0);
+        gl.uniform3f(uniform("spriteColorKey").as_ref(),
+            ((color_key >> 16) & 255) as f32 / 255.0,
+            ((color_key >> 8) & 255) as f32 / 255.0,
+            (color_key & 255) as f32 / 255.0);
+        let points = [-1.0f32, -1.0, 1.0, -1.0, -1.0, 1.0, -1.0, 1.0, 1.0, -1.0, 1.0, 1.0];
+        gl.bind_buffer(Gl::ARRAY_BUFFER, Some(&self.buffer));
+        gl.buffer_data_with_array_buffer_view(Gl::ARRAY_BUFFER, &js_sys::Float32Array::from(points.as_slice()), Gl::STREAM_DRAW);
+        let position = gl.get_attrib_location(&self.key_program, "position");
+        if position >= 0 {
+            gl.enable_vertex_attrib_array(position as u32);
+            gl.vertex_attrib_pointer_with_i32(position as u32, 2, Gl::FLOAT, false, 8, 0);
+        }
+        gl.draw_arrays(Gl::TRIANGLES, 0, 6);
+        gl.bind_texture(Gl::TEXTURE_2D, Some(&texture));
+        gl.generate_mipmap(Gl::TEXTURE_2D);
+        gl.bind_framebuffer(Gl::FRAMEBUFFER, None);
+        gl.viewport(0, 0, gl.drawing_buffer_width().max(1), gl.drawing_buffer_height().max(1));
+        gl.use_program(Some(&self.program));
+        gl.bind_sampler(0, None);
+        if gl.get_error() != Gl::NO_ERROR {
+            gl.delete_texture(Some(&texture)); gl.delete_framebuffer(Some(&framebuffer));
+            return Err(JsValue::from_str("WebGL failed while preparing a keyed sprite mip chain"));
+        }
+        self.keyed.insert(key, (texture, framebuffer, pixels));
+        Ok(())
     }
 
     pub fn draw(
@@ -41,8 +139,12 @@ impl SpritePass {
         image: &WebGlTexture,
         image_size: (u32, u32),
         restore_final_burn_geometry: bool,
+        animated: bool,
     ) -> Result<(), JsValue> {
         let gl = &self.gl;
+        let keyed = if !animated && sprite.color_key_enabled() {
+            self.keyed.get(&(sprite.texture.to_ascii_lowercase(), sprite.color_key)).map(|(texture, _, _)| texture)
+        } else { None };
         let size = (gl.drawing_buffer_width().max(1), gl.drawing_buffer_height().max(1));
         gl.active_texture(Gl::TEXTURE1);
         gl.bind_sampler(1, None);
@@ -60,7 +162,9 @@ impl SpritePass {
         gl.copy_tex_sub_image_2d(Gl::TEXTURE_2D, 0, 0, 0, 0, 0, size.0, size.1);
         gl.disable(Gl::BLEND);
         gl.active_texture(Gl::TEXTURE0);
-        gl.bind_texture(Gl::TEXTURE_2D, Some(image));
+        gl.sampler_parameteri(&self.sampler, Gl::TEXTURE_MIN_FILTER,
+            if animated { Gl::LINEAR as i32 } else { Gl::LINEAR_MIPMAP_LINEAR as i32 });
+        gl.bind_texture(Gl::TEXTURE_2D, Some(keyed.unwrap_or(image)));
         gl.bind_sampler(0, Some(&self.sampler));
         gl.use_program(Some(&self.program));
         let uniform = |name: &str| gl.get_uniform_location(&self.program, name);
@@ -71,7 +175,7 @@ impl SpritePass {
         gl.uniform4f(uniform("spriteTint").as_ref(), tint[0], tint[1], tint[2], tint[3]);
         let color_key = sprite.color_key_rgba();
         gl.uniform4f(uniform("spriteColorKey").as_ref(), color_key[0], color_key[1], color_key[2], color_key[3]);
-        gl.uniform1i(uniform("spriteColorKeyEnabled").as_ref(), if sprite.color_key_enabled() { 1 } else { 0 });
+        gl.uniform1i(uniform("spriteColorKeyEnabled").as_ref(), if sprite.color_key_enabled() && !animated && keyed.is_none() { 1 } else { 0 });
         gl.uniform1i(uniform("spriteBlend").as_ref(), sprite.blend_mode);
         let (positions, uvs) = sprite.geometry_for_target(
             image_size,
@@ -101,8 +205,13 @@ impl SpritePass {
 impl Drop for SpritePass {
     fn drop(&mut self) {
         self.gl.delete_program(Some(&self.program));
+        self.gl.delete_program(Some(&self.key_program));
         self.gl.delete_buffer(Some(&self.buffer));
         self.gl.delete_sampler(Some(&self.sampler));
         self.gl.delete_texture(Some(&self.snapshot));
+        for (_, (texture, framebuffer, _)) in &self.keyed {
+            self.gl.delete_texture(Some(texture));
+            self.gl.delete_framebuffer(Some(framebuffer));
+        }
     }
 }

@@ -1,6 +1,6 @@
 //! Native GL/GLES execution of MilkRust's frame graph. Feedback and final
 //! composite are distinct passes; each double-preset layer owns two targets.
-use std::{collections::BTreeMap, ffi::{c_void, CString}, ptr};
+use std::{collections::{BTreeMap, BTreeSet}, ffi::{c_void, CString}, ptr};
 use milkrust_core::{milk2, get_milkrust_texture_name_aliases, MilkRustCompositeFrame, MilkRustFrame, MilkRustFrameSet,
     MilkRustPrimitive, MilkRustPrimitiveMode, MilkRustDrawCommand, MilkRustShaderStage, MilkRustTexturedPrimitive, MilkRustTexturedPrimitiveMode};
 use crate::gl::*;
@@ -10,6 +10,7 @@ const VERTEX: &str = "#version 300 es\nin vec2 position; in vec2 sourceUv; in ve
 const COPY_BODY: &str = "uniform sampler2D previousFrame; uniform float feedback; uniform float outputAlpha; uniform float classicDisplay; in vec2 uv; out vec4 outColor; void main(){vec2 sampleUv=classicWrap>0.5?fract(uv):clamp(uv,0.0,1.0); vec3 color=classicDisplay>0.5?milkrust_classic_display(previousFrame,uv):texture(previousFrame,sampleUv).rgb*feedback;outColor=vec4(color,outputAlpha*milkrust_transition_mask(uv));}";
 const COLOR: &str = "#version 300 es\nprecision highp float; in vec4 tint; out vec4 outColor; void main(){outColor=tint;}";
 const TEXTURED: &str = "#version 300 es\nprecision highp float; uniform sampler2D previousFrame; in vec2 uv; in vec4 tint; out vec4 outColor; void main(){outColor=texture(previousFrame,uv)*tint;}";
+const SPRITE_KEY: &str = "#version 300 es\nprecision highp float; uniform sampler2D spriteSource; uniform vec3 spriteColorKey; out vec4 outColor; void main(){ivec2 p=ivec2(gl_FragCoord.xy);vec4 c=texelFetch(spriteSource,p,0);if(c.a>=1.0-0.5/255.0&&all(lessThan(abs(c.rgb-spriteColorKey),vec3(0.5/255.0))))c=vec4(0.0);outColor=c;}";
 const MAX_PIXELS: u64 = 8 * 1024 * 1024;
 const MAX_TEXTURE_PIXELS: u64 = 32 * 1024 * 1024;
 const MAX_VERTICES: usize = 262_144;
@@ -34,7 +35,7 @@ impl Drop for Program { fn drop(&mut self) { unsafe { (self.gl.delete_program)(s
 struct Shader { gl: Gl, id: u32 }
 impl Drop for Shader { fn drop(&mut self) { unsafe { (self.gl.delete_shader)(self.id); } } }
 struct Texture { gl: Gl, id: u32, pixels: u64, width: u32, height: u32 }
-struct TextureAsset { frames: Vec<Texture>, delays_seconds: Vec<f64>, repeat_count: Option<u16>, pixels: u64 }
+struct TextureAsset { frames: Vec<Texture>, delays_seconds: Vec<f64>, repeat_count: Option<u16>, pixels: u64, animated: bool }
 impl TextureAsset {
     fn frame_at(&self, seconds: f64) -> &Texture {
         let index = milkrust_core::texture::animation_frame_index(&self.delays_seconds, self.repeat_count, seconds);
@@ -42,8 +43,8 @@ impl TextureAsset {
     }
 }
 type TransitionMask = (milk2::TransitionMaskKey, Texture);
-struct Samplers { gl: Gl, ids: [u32; 4] }
-impl Drop for Samplers { fn drop(&mut self) { unsafe { (self.gl.delete_samplers)(4, self.ids.as_ptr()); } } }
+struct Samplers { gl: Gl, ids: [u32; 5] }
+impl Drop for Samplers { fn drop(&mut self) { unsafe { (self.gl.delete_samplers)(5, self.ids.as_ptr()); } } }
 impl Drop for Texture { fn drop(&mut self) { unsafe { (self.gl.delete_textures)(1, &self.id); } } }
 struct Target { gl: Gl, id: u32, texture: Texture }
 impl Drop for Target { fn drop(&mut self) { unsafe { (self.gl.delete_framebuffers)(1, &self.id); } } }
@@ -183,7 +184,7 @@ impl Target {
 }
 
 pub struct Renderer {
-    sprite_program: Program, sprite_snapshot: Option<Texture>,
+    sprite_program: Program, sprite_key_program: Program, sprite_keyed: BTreeMap<(String, u32), Target>, sprite_snapshot: Option<Texture>,
     gl: Gl, gles: bool, copy: Program, color: Program, textured: Program, blur_program: Program, samplers: Samplers, noise: BTreeMap<String, (Texture, u32)>,
     buffer: u32, vao: u32, max_texture: i32, texture_units: usize,
     width: u32, height: u32, capture: Option<(u32, u32, Target)>, layers: Vec<Layer>, textures: BTreeMap<String, TextureAsset>,
@@ -203,23 +204,28 @@ impl Renderer {
         let color = Program::new(gl, gles, COLOR)?;
         let textured = Program::new(gl, gles, TEXTURED)?;
         let sprite_program = Program::new(gl, gles, milkrust_core::sprites::FRAGMENT)?;
+        let sprite_key_program = Program::new(gl, gles, SPRITE_KEY)?;
         let blur_program = Program::new(gl, gles, resources::BLUR_FRAGMENT)?;
-        let mut samplers = Samplers { gl, ids: [0; 4] };
+        let mut samplers = Samplers { gl, ids: [0; 5] };
         unsafe {
-            (gl.gen_samplers)(4, samplers.ids.as_mut_ptr());
-            for (index, id) in samplers.ids.iter().enumerate() {
+            (gl.gen_samplers)(5, samplers.ids.as_mut_ptr());
+            for (index, id) in samplers.ids.iter().enumerate().take(4) {
                 if *id == 0 { return Err("GL could not allocate samplers".into()); }
                 (gl.sampler_parameter)(*id, 0x2801, if index & 1 != 0 { 0x2700 } else { 0x2703 });
                 (gl.sampler_parameter)(*id, 0x2800, if index & 1 != 0 { 0x2600 } else { 0x2601 });
                 for axis in [0x2802, 0x2803, 0x8072] { (gl.sampler_parameter)(*id, axis, if index & 2 != 0 { 0x2901 } else { 0x812F }); }
             }
+            if samplers.ids[4] == 0 { return Err("GL could not allocate animated sprite sampler".into()); }
+            (gl.sampler_parameter)(samplers.ids[4], 0x2801, 0x2601);
+            (gl.sampler_parameter)(samplers.ids[4], 0x2800, 0x2601);
+            for axis in [0x2802, 0x2803, 0x8072] { (gl.sampler_parameter)(samplers.ids[4], axis, 0x2901); }
         }
         let (mut buffer, mut vao, mut max_texture, mut units) = (0, 0, 0, 0);
         unsafe {
             (gl.get_integer)(0x0D33, &mut max_texture); (gl.get_integer)(0x8872, &mut units);
             (gl.gen_buffers)(1, &mut buffer); (gl.gen_vertex_arrays)(1, &mut vao);
         }
-        let result = Self { sprite_program, sprite_snapshot: None, gl, gles, copy, color, textured, blur_program, samplers, noise: BTreeMap::new(), buffer, vao, max_texture, texture_units: units.max(0) as usize,
+        let result = Self { sprite_program, sprite_key_program, sprite_keyed: BTreeMap::new(), sprite_snapshot: None, gl, gles, copy, color, textured, blur_program, samplers, noise: BTreeMap::new(), buffer, vao, max_texture, texture_units: units.max(0) as usize,
             width: 0, height: 0, capture: None, layers: Vec::new(), textures: BTreeMap::new(), transition_mask: None };
         if buffer == 0 || vao == 0 || max_texture < milk2::TRANSITION_GRID_WIDTH as i32 || units < 4 {
             return Err("Insufficient OpenGL context resources".into());
@@ -231,19 +237,24 @@ impl Renderer {
         Ok(result)
     }
 
-    pub fn reset(&mut self) { self.sprite_snapshot = None; self.layers.clear(); self.textures.clear(); self.noise.clear(); self.capture = None; self.transition_mask = None; self.width = 0; self.height = 0; }
+    pub fn reset(&mut self) { self.sprite_snapshot = None; self.sprite_keyed.clear(); self.layers.clear(); self.textures.clear(); self.noise.clear(); self.capture = None; self.transition_mask = None; self.width = 0; self.height = 0; }
 
     pub fn texture(&mut self, name: &str, width: u32, height: u32, bytes: &[u8]) -> Result<(), String> {
-        self.texture_frames(name, width, height, &[bytes], &[0.1])
+        self.upload_texture(name, width, height, &[bytes], &[0.1], None, false)
     }
 
     pub fn texture_frames(&mut self, name: &str, width: u32, height: u32,
         frames: &[&[u8]], delays_seconds: &[f64]) -> Result<(), String> {
-        self.texture_animation(name, width, height, frames, delays_seconds, Some(0))
+        self.upload_texture(name, width, height, frames, delays_seconds, Some(0), true)
     }
 
     pub fn texture_animation(&mut self, name: &str, width: u32, height: u32,
         frames: &[&[u8]], delays_seconds: &[f64], repeat_count: Option<u16>) -> Result<(), String> {
+        self.upload_texture(name, width, height, frames, delays_seconds, repeat_count, true)
+    }
+
+    fn upload_texture(&mut self, name: &str, width: u32, height: u32,
+        frames: &[&[u8]], delays_seconds: &[f64], repeat_count: Option<u16>, animated: bool) -> Result<(), String> {
         dimensions(width, height, self.max_texture)?;
         if name.is_empty() || name.len() > 512 || name.contains('\0') || frames.is_empty()
             || frames.len() > milkrust_core::texture::MAX_GIF_FRAMES || delays_seconds.len() != frames.len()
@@ -269,9 +280,12 @@ impl Renderer {
             let mut flipped = Vec::with_capacity(pixels.len());
             for row in pixels.chunks_exact(stride).rev() { flipped.extend_from_slice(row); }
             gpu_frames.push(Texture::new(self.gl, width, height, Some(&flipped))?);
-            unsafe { (self.gl.generate_mipmap)(TEXTURE_2D); }
+            if !animated { unsafe { (self.gl.generate_mipmap)(TEXTURE_2D); } }
         }
-        self.textures.insert(folded, TextureAsset { frames: gpu_frames, delays_seconds: delays_seconds.to_vec(), repeat_count, pixels });
+        // Replaced assets invalidate every keyed mip derivative; prepare()
+        // rebuilds only those used by the next active frame set.
+        self.sprite_keyed.clear();
+        self.textures.insert(folded, TextureAsset { frames: gpu_frames, delays_seconds: delays_seconds.to_vec(), repeat_count, pixels, animated });
         Ok(())
     }
 
@@ -296,6 +310,53 @@ impl Renderer {
         Err(format!("Missing texture: {name}"))
     }
 
+    fn named_texture_is_animated(&self, name: &str) -> bool {
+        get_milkrust_texture_name_aliases(name).iter().find_map(|alias|
+            self.textures.get(&alias.to_ascii_lowercase()).map(|asset| asset.animated)).unwrap_or(false)
+    }
+
+    fn prepare_keyed_sprite(&mut self, sprite: &milkrust_core::sprites::Frame) -> Result<(), String> {
+        if !sprite.color_key_enabled() || self.named_texture_is_animated(&sprite.texture) { return Ok(()); }
+        let cache_key = (sprite.texture.to_ascii_lowercase(), sprite.color_key);
+        if self.sprite_keyed.contains_key(&cache_key) { return Ok(()); }
+        if self.sprite_keyed.len() >= milkrust_core::sprites::MAX_SPRITES {
+            return Err("Sprite color-key derivative limit exceeded".into());
+        }
+        let (source, width, height) = {
+            let texture = self.named_texture_asset(&sprite.texture)?;
+            (texture.id, texture.width, texture.height)
+        };
+        let pixels = u64::from(width) * u64::from(height);
+        let retained = self.sprite_keyed.values().map(|target| target.texture.pixels).sum::<u64>();
+        let source_pixels = self.textures.values().map(|asset| asset.pixels).sum::<u64>();
+        if source_pixels.checked_add(retained).and_then(|total| total.checked_add(pixels))
+            .is_none_or(|total| total > MAX_TEXTURE_PIXELS) {
+            return Err("Sprite color-keyed textures exceed the 32 Mi-pixel renderer budget".into());
+        }
+        let target = Target::new(self.gl, width, height)?;
+        unsafe {
+            (self.gl.bind_framebuffer)(FRAMEBUFFER, target.id);
+            (self.gl.viewport)(0, 0, width as i32, height as i32);
+            (self.gl.disable)(BLEND);
+        }
+        self.bind_texture(0, source);
+        let key = sprite.color_key_rgba();
+        self.sprite_key_program.bind();
+        self.sprite_key_program.integer("spriteSource", 0);
+        self.sprite_key_program.vector3("spriteColorKey", key[0], key[1], key[2]);
+        let draw_result = self.draw(0x0004, &quad());
+        if draw_result.is_ok() { self.bind_texture(0, target.texture.id); }
+        unsafe {
+            if draw_result.is_ok() { (self.gl.generate_mipmap)(TEXTURE_2D); }
+            (self.gl.bind_framebuffer)(FRAMEBUFFER, 0);
+            (self.gl.viewport)(0, 0, self.width as i32, self.height as i32);
+        }
+        draw_result?;
+        if unsafe { (self.gl.get_error)() } != 0 { return Err("OpenGL failed while preparing a keyed sprite mip chain".into()); }
+        self.sprite_keyed.insert(cache_key, target);
+        Ok(())
+    }
+
     fn prepare(&mut self, frames: &MilkRustFrameSet, width: u32, height: u32) -> Result<(), String> {
         dimensions(width, height, self.max_texture)?;
         if frames.entries.is_empty() || frames.entries.len() > 2 { return Err("Expected one or two preset layers".into()); }
@@ -314,7 +375,14 @@ impl Renderer {
             self.transition_mask = None;
         }
         if frames.sprites.len() > milkrust_core::sprites::MAX_SPRITES { return Err("Too many sprite frames".into()); }
-        for sprite in &frames.sprites { self.named_texture(&sprite.texture)?; }
+        let active_keyed = frames.sprites.iter().filter(|sprite| sprite.color_key_enabled()
+                && !self.named_texture_is_animated(&sprite.texture))
+            .map(|sprite| (sprite.texture.to_ascii_lowercase(), sprite.color_key)).collect::<BTreeSet<_>>();
+        self.sprite_keyed.retain(|key, _| active_keyed.contains(key));
+        for sprite in &frames.sprites {
+            self.named_texture(&sprite.texture)?;
+            self.prepare_keyed_sprite(sprite)?;
+        }
         if !frames.sprites.is_empty() && self.sprite_snapshot.as_ref().is_none_or(|texture| texture.width != width || texture.height != height) {
             self.sprite_snapshot = Some(Texture::new(self.gl, width, height, None)?);
         }
@@ -553,6 +621,16 @@ impl Renderer {
 
     fn draw_sprite(&self, sprite: &milkrust_core::sprites::Frame, restore_final_burn_geometry: bool) -> Result<(), String> {
         let image = self.named_texture_asset_at(&sprite.texture, sprite.time)?;
+        let animated = self.named_texture_is_animated(&sprite.texture);
+        let mut image_id = image.id;
+        let mut keyed_mips = false;
+        if !animated && sprite.color_key_enabled() {
+            let key = (sprite.texture.to_ascii_lowercase(), sprite.color_key);
+            if let Some(target) = self.sprite_keyed.get(&key) {
+                image_id = target.texture.id;
+                keyed_mips = true;
+            }
+        }
         let background = self.sprite_snapshot.as_ref().ok_or("Missing sprite snapshot")?;
         // Copy from the currently bound render target; sampling the live target
         // would be undefined GL feedback, especially for multiple overlays.
@@ -561,8 +639,8 @@ impl Renderer {
             (self.gl.copy_tex_sub_image)(TEXTURE_2D, 0, 0, 0, 0, 0, self.width as i32, self.height as i32);
             (self.gl.disable)(BLEND);
         }
-        self.bind_texture(0, image.id);
-        unsafe { (self.gl.bind_sampler)(0, self.samplers.ids[2]); }
+        self.bind_texture(0, image_id);
+        unsafe { (self.gl.bind_sampler)(0, self.samplers.ids[if animated { 4 } else { 2 }]); }
         let program = &self.sprite_program;
         program.bind(); program.integer("spriteImage", 0); program.integer("spriteBackground", 1);
         program.vector2("spriteResolution", self.width as f32, self.height as f32);
@@ -570,7 +648,7 @@ impl Renderer {
         program.vector4("spriteTint", tint[0], tint[1], tint[2], tint[3]);
         let color_key = sprite.color_key_rgba();
         program.vector4("spriteColorKey", color_key[0], color_key[1], color_key[2], color_key[3]);
-        program.integer("spriteColorKeyEnabled", if sprite.color_key_enabled() { 1 } else { 0 });
+        program.integer("spriteColorKeyEnabled", if sprite.color_key_enabled() && !animated && !keyed_mips { 1 } else { 0 });
         program.integer("spriteBlend", sprite.blend_mode);
         let (positions, uvs) = sprite.geometry_for_target(
             (image.width, image.height),
@@ -615,18 +693,18 @@ impl Renderer {
                     MilkRustDrawCommand::SpriteLayer(sprite_layer) => {
                         ordered_sprite_layers = true;
                         for sprite in frames.sprites.iter().filter(|sprite| sprite.preset_index == index
-                            && sprite.milk2 && sprite.layer == usize::from(sprite_layer)) {
+                            && sprite.layer == usize::from(sprite_layer)) {
                             self.draw_sprite(sprite, false)?;
-                            if sprite.final_burn { self.draw_sprite(sprite, true)?; }
+                            if sprite.burn { self.draw_sprite(sprite, sprite.final_burn)?; }
                         }
                     }
                 }
             }
             if !ordered_sprite_layers {
                 // Preserve older FrameSet producers without scene-layer markers.
-                for sprite in frames.sprites.iter().filter(|sprite| sprite.preset_index == index && sprite.milk2 && sprite.layer > 0) {
+                for sprite in frames.sprites.iter().filter(|sprite| sprite.preset_index == index && sprite.layer > 0) {
                     self.draw_sprite(sprite, false)?;
-                    if sprite.final_burn { self.draw_sprite(sprite, true)?; }
+                    if sprite.burn { self.draw_sprite(sprite, sprite.final_burn)?; }
                 }
             }
             self.build_resources(frame, layer, layer.targets[write].texture.id)?;
@@ -648,21 +726,19 @@ impl Renderer {
             composite.float("classicDisplay", 1.0);
             if !frame.shader_stages.composite.required { unsafe { (self.gl.bind_sampler)(0, 0); } }
             self.draw(0x0004, &quad())?;
-            // Milk2 layer 0 and classic layers burn once per active frame.
-            // A finished Milk2 sprite gets its separate final stamp after the
-            // primary draw; classic sprites already burn once on this frame.
+            // Layer 0 is an output overlay. When it burns, it also stamps the
+            // feedback target after the composite has read that target.
             unsafe { (self.gl.bind_framebuffer)(FRAMEBUFFER, layer.targets[write].id); }
             for sprite in frames.sprites.iter().filter(|sprite| sprite.preset_index == index
-                && sprite.burn && (!sprite.milk2 || sprite.layer == 0)) {
+                && sprite.burn && sprite.layer == 0) {
                 self.draw_sprite(sprite, false)?;
-                if sprite.milk2 && sprite.final_burn { self.draw_sprite(sprite, true)?; }
             }
             self.layers[index].read = write;
         }
         unsafe { (self.gl.bind_framebuffer)(FRAMEBUFFER, output); }
-        // Classic sprites and Milk2 layer 0 overlay the composite. Milk2 layers
-        // 1–4 already entered the feedback image at their ordered scene stage.
-        for sprite in frames.sprites.iter().filter(|sprite| !sprite.milk2 || sprite.layer == 0) {
+        // Layer 0 overlays the composite. Layers 1–4 already entered the
+        // feedback image at their ordered scene stage.
+        for sprite in frames.sprites.iter().filter(|sprite| sprite.layer == 0) {
             self.draw_sprite(sprite, true)?;
         }
         unsafe {

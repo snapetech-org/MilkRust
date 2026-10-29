@@ -2,14 +2,14 @@
 use crate::MilkRustFrame;
 
 pub const VALUES: &[(&str, f64)] = &[
-    ("gamma", 1.0), ("echo_zoom", 1.0), ("echo_alpha", 0.0), ("echo_orient", 0.0),
+    ("gamma", 2.0), ("echo_zoom", 2.0), ("echo_alpha", 0.0), ("echo_orient", 0.0),
     ("brighten", 0.0), ("darken", 0.0), ("solarize", 0.0), ("invert", 0.0), ("wrap", 1.0),
 ];
 
 pub fn uniforms(frame: &MilkRustFrame) -> ([f32; 4], [f32; 4], f32) {
     let value = |name: &str, default: f64| frame.shader_values.get(name).copied().filter(|v| v.is_finite()).unwrap_or(default);
-    ([value("gamma", 1.0).clamp(0.0, 8.0) as f32,
-        value("echo_zoom", 1.0).abs().clamp(0.001, 1000.0) as f32,
+    ([value("gamma", 2.0).clamp(0.0, 8.0) as f32,
+        value("echo_zoom", 2.0).abs().clamp(0.001, 1000.0) as f32,
         value("echo_alpha", 0.0).clamp(0.0, 1.0) as f32,
         value("echo_orient", 0.0).trunc().rem_euclid(4.0) as f32],
      ["brighten", "darken", "solarize", "invert"].map(|key| if value(key, 0.0) != 0.0 { 1.0 } else { 0.0 }),

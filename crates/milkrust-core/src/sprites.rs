@@ -10,31 +10,20 @@ const MAX_SPRITE_RECORDS: usize = 64;
 const DEFAULT_COLOR_KEY_ARGB: u32 = 0;
 pub const SPRITE_BLEND_MODES: usize = 11;
 
-fn parse_color_key(value: &str) -> Result<u32, String> {
-    // The MD3 loader uses strtoul(..., base=0): 0x is hexadecimal, a leading
-    // zero is octal, and other values are decimal. Keep the result within the
-    // original 32-bit Windows unsigned-long domain before forcing opaque alpha.
-    let (negative, unsigned) = if let Some(value) = value.strip_prefix('-') {
-        (true, value)
-    } else if let Some(value) = value.strip_prefix('+') {
-        (false, value)
-    } else {
-        (false, value)
-    };
-    let (digits, radix) = if let Some(hex) = unsigned.strip_prefix("0x").or_else(|| unsigned.strip_prefix("0X")) {
-        (hex, 16)
-    } else if unsigned.len() > 1 && unsigned.starts_with('0') {
-        (unsigned, 8)
-    } else {
-        (unsigned, 10)
-    };
-    if digits.is_empty() {
-        return Err("Invalid sprite color key".into());
+fn parse_color_key(value: &str) -> Option<u32> {
+    // Mirror the saved-sprite `%X` scan: leading blanks and an optional
+    // prefix are accepted, parsing stops at the first non-hex byte, and an
+    // overlong value wraps in the legacy 32-bit unsigned destination.
+    let mut digits = value.trim_start().as_bytes();
+    if digits.len() >= 3 && digits[0] == b'0' && matches!(digits[1], b'x' | b'X')
+        && digits[2].is_ascii_hexdigit() {
+        digits = &digits[2..];
     }
-    let mut parsed = u64::from_str_radix(digits, radix).ok().filter(|value| *value <= u64::from(u32::MAX))
-        .ok_or("Invalid sprite color key")? as u32;
-    if negative { parsed = parsed.wrapping_neg(); }
-    Ok(parsed)
+    let count = digits.iter().take_while(|byte| byte.is_ascii_hexdigit()).count();
+    if count == 0 { return None; }
+    Some(digits[..count].iter().fold(0u32, |value, byte| {
+        value.wrapping_mul(16).wrapping_add((*byte as char).to_digit(16).unwrap_or(0))
+    }))
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -42,14 +31,14 @@ pub struct Definition {
     pub index: u32,
     /// Zero-based owner preset. A trailing sprite block in a `.milk2` belongs to PRESET2.
     pub preset_index: usize,
-    /// Milk2 sprites can use feedback layers 0–4; classic `.milk` is limited to 0–1.
+    /// MilkDrop 3 feedback layer: 0 is the output overlay; 1–4 enter feedback.
     pub milk2: bool,
     pub texture: String,
     pub color_key: u32,
     pub layer: i32,
     pub blend_mode: i32,
     pub alpha: f64,
-    pub burn_mode: f64,
+    pub burn_mode: i32,
     pub rotation_mode: f64,
     pub rotation_speed: f64,
     pub offset: [f64; 2],
@@ -113,7 +102,18 @@ pub fn extract(source: &str, enabled: bool) -> Result<Blocks, String> {
                 return Err("Mismatched embedded sprite block end".into());
             };
             if active_index != index { return Err("Mismatched embedded sprite block end".into()); }
-            if executable { definitions.insert(index, definition(index, owner, &records)?); }
+            if executable {
+                if let Some(parsed) = definition(index, owner, &records)? {
+                    // MD3 does not load or execute sprites on an invalid layer.
+                    // Preserve the original block, but keep it out of runtime
+                    // and dependency admission.
+                    if (0..=4).contains(&parsed.layer) {
+                        crate::validate_expression_source(&parsed.init)?;
+                        crate::validate_expression_source(&parsed.code)?;
+                        definitions.insert(index, parsed);
+                    }
+                }
+            }
             result.source.push_str(raw);
             result.source.push('\n');
             current = None;
@@ -124,9 +124,10 @@ pub fn extract(source: &str, enabled: bool) -> Result<Blocks, String> {
             let (key, value) = line.split_once('=').ok_or("Invalid embedded sprite record")?;
             let key = key.trim().to_ascii_lowercase();
             let value = value.trim().to_string();
-            // The legacy reader returns the first matching record for every
-            // field, including SpriteName.
-            records.entry(key).or_insert(value);
+            // The loader scans ordinary fields from the beginning, while the
+            // SpriteName lookup resolves the last occurrence.
+            if key == "spritename" { records.insert(key, value); }
+            else { records.entry(key).or_insert(value); }
         }
         let target = if current.is_some() { &mut result.source } else { &mut result.body };
         target.push_str(raw);
@@ -153,18 +154,18 @@ pub fn enabled(source: &str) -> bool {
     true
 }
 
-fn definition(index: u32, preset_index: usize, records: &BTreeMap<String, String>) -> Result<Definition, String> {
+fn definition(index: u32, preset_index: usize, records: &BTreeMap<String, String>) -> Result<Option<Definition>, String> {
     if !(1..=MAX_SPRITES as u32).contains(&index) { return Err("Embedded sprite index must be between 1 and 16".into()); }
-    let texture = records.get("spritename").or_else(|| records.get("img"))
-        .ok_or("Embedded sprite has no image name")?.trim_matches(['\'', '"']).replace('\\', "/");
+    let Some(name) = records.get("spritename") else { return Ok(None); };
+    let name = name.trim_matches(['\'', '"']);
+    if name.is_empty() { return Ok(None); }
+    let texture = name.replace('\\', "/");
     if texture.is_empty() || texture.len() > 512 || texture.starts_with('/') || texture.contains(':')
         || texture.chars().any(char::is_control) || texture.split('/').any(|v| v == ".." || v.is_empty()) {
         return Err("Embedded sprite image must be a relative pack asset".into());
     }
-    let color_key = match records.get("spritecolorkey").or_else(|| records.get("colorkey")) {
-        None => DEFAULT_COLOR_KEY_ARGB,
-        Some(value) => parse_color_key(value)?,
-    };
+    let color_key = records.get("spritecolorkey").and_then(|value| parse_color_key(value))
+        .unwrap_or(DEFAULT_COLOR_KEY_ARGB);
     let mut values = BTreeMap::new();
     for (key, fallback) in [("x", 0.5), ("y", 0.5), ("sx", 1.0), ("sy", 1.0), ("rot", 0.0),
         ("repeatx", 1.0), ("repeaty", 1.0), ("r", 1.0), ("g", 1.0), ("b", 1.0),
@@ -172,9 +173,9 @@ fn definition(index: u32, preset_index: usize, records: &BTreeMap<String, String
         values.insert(key.into(), MilkRustValue::Number(fallback));
     }
     let mut layer = 0i32;
-    let mut blend_mode = 0i32;
+    let mut blend_mode = 4i32;
     let mut alpha = 1.0;
-    let mut burn_mode = 1.0;
+    let mut burn_mode = 1i32;
     let mut rotation_mode = 0.0;
     let mut rotation_speed = 0.0;
     let mut repeat_multiplier = [1.0; 2];
@@ -183,7 +184,7 @@ fn definition(index: u32, preset_index: usize, records: &BTreeMap<String, String
     let mut init = BTreeMap::new();
     let mut code = BTreeMap::new();
     for (key, value) in records {
-        if matches!(key.as_str(), "spritename" | "img" | "spritecolorkey" | "colorkey") { continue; }
+        if matches!(key.as_str(), "spritename" | "spritecolorkey") { continue; }
         if let Some((prefix, number)) = key.split_once('_').filter(|(p, _)| matches!(*p, "init" | "code")) {
             let number = number.parse::<u32>().ok().filter(|n| (1..=255).contains(n)).ok_or("Invalid sprite equation line")?;
             if prefix == "init" { init.insert(number, value.as_str()); } else { code.insert(number, value.as_str()); }
@@ -204,8 +205,7 @@ fn definition(index: u32, preset_index: usize, records: &BTreeMap<String, String
             continue;
         }
         if matches!(key.as_str(), "spriteburn" | "burnmode") {
-            burn_mode = value.parse::<f64>().ok().filter(|v| v.is_finite() && v.abs() <= 1.0e9)
-                .ok_or("Invalid sprite burn value")?;
+            burn_mode = value.parse::<i32>().map_err(|_| "Invalid sprite burn value")?;
             continue;
         }
         if key == "spritealpha" {
@@ -236,12 +236,12 @@ fn definition(index: u32, preset_index: usize, records: &BTreeMap<String, String
         let number = value.parse::<f64>().ok().filter(|v| v.is_finite() && v.abs() <= 1.0e9).ok_or("Non-finite or oversized sprite value")?;
         values.insert(variable.into(), MilkRustValue::Number(number));
     }
-    // Saved records seed EEL registers before init_N runs. Preset equations
-    // may then replace these values, including alpha, burn, layer and repeat.
-    let saved_layer = layer.clamp(0, 4);
-    blend_mode = blend_mode.clamp(0, SPRITE_BLEND_MODES as i32 - 1);
-    values.insert("a".into(), MilkRustValue::Number(alpha));
-    values.insert("burn".into(), MilkRustValue::Number(burn_mode));
+    // SpriteAlpha multiplies the clamped EEL `a`; SpriteBurn selects whether
+    // EEL `burn` is honored. Layer and blend are static draw selectors.
+    let saved_layer = layer;
+    blend_mode = sprite_blend_mode(blend_mode);
+    values.insert("a".into(), MilkRustValue::Number(1.0));
+    values.insert("burn".into(), MilkRustValue::Number(1.0));
     values.insert("blendmode".into(), MilkRustValue::Number(f64::from(blend_mode)));
     values.insert("layer".into(), MilkRustValue::Number(f64::from(saved_layer)));
     values.insert("repeatx".into(), MilkRustValue::Number(repeat_multiplier[0]));
@@ -258,9 +258,7 @@ fn definition(index: u32, preset_index: usize, records: &BTreeMap<String, String
     // preset-set parser narrows ordinary `.milk` definitions to layer 0–1.
     let result = Definition { index, preset_index, milk2: true, texture, color_key, layer: saved_layer, blend_mode, alpha, burn_mode,
         rotation_mode, rotation_speed, offset, size_offset, repeat_multiplier, values, init: join(init), code: join(code) };
-    crate::validate_expression_source(&result.init)?;
-    crate::validate_expression_source(&result.code)?;
-    Ok(result)
+    Ok(Some(result))
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -272,9 +270,8 @@ pub struct Frame {
     pub time: f64,
     pub color_key: u32,
     pub blend_mode: i32,
-    /// Milk2 layers 1–4 enter feedback at their ordered scene stages. Layer 0
-    /// is a display overlay; `burn` controls its feedback stamp. Classic layers
-    /// 0–1 are display overlays and use the same per-frame burn rule.
+    /// Layers 1–4 enter feedback at their ordered scene stages. Layer 0 is a
+    /// display overlay; `burn` controls its feedback stamp.
     pub layer: usize,
     pub burn: bool,
     pub color: [f64; 4],
@@ -291,7 +288,8 @@ pub struct Frame {
 }
 
 impl Frame {
-    /// D3DCOLOR-compatible alpha byte after the EEL register is clamped.
+    /// D3DCOLOR-compatible alpha byte after `SpriteAlpha` multiplication.
+    /// The reference packer truncates and wraps the byte without re-clamping.
     pub fn alpha_byte(&self) -> u8 {
         sprite_alpha_byte(self.color[3])
     }
@@ -321,9 +319,9 @@ impl Frame {
         self.geometry_for_target(image, screen, false)
     }
 
-    /// Restore the uncorrected geometry used by display copies and the extra
-    /// final feedback stamp. The primary draw on the final burning frame gets
-    /// MilkDrop's 4:3 aspect correction.
+    /// `restore_final_burn_geometry` selects the normal geometry for the
+    /// display copy or a secondary layer burn. The final burning frame's
+    /// primary feedback draw uses MilkDrop's 4:3 aspect correction.
     pub fn geometry_for_target(
         &self,
         image: (u32, u32),
@@ -403,6 +401,7 @@ impl Runtime {
         if !measured_fps.is_finite() || measured_fps <= 0.0 { return Err("Invalid sprite frame rate".into()); }
         let mut frames = Vec::new();
         for (definition, instance) in definitions.iter().zip(&mut self.instances) {
+            if !(0..=4).contains(&definition.layer) { continue; }
             if instance.dead { continue; }
             if !instance.initialized { instance.scope = definition.values.clone(); }
             let parent = parents.get(definition.preset_index).or_else(|| parents.first())
@@ -427,30 +426,30 @@ impl Runtime {
                 instance.initialized = true;
             }
             instance.scope = evaluate_milkrust_equations(&definition.code, &instance.scope)?;
-            // MilkDrop appends this register update after code_N each frame.
-            // SpriteRot is saved metadata but is not used by the classic loader.
-            if definition.rotation_speed.abs() > 1.0e-6 {
-                let rotation = instance.scope.get("rot").and_then(MilkRustValue::as_number).unwrap_or(0.0)
-                    + definition.rotation_speed / fps;
-                if !rotation.is_finite() { return Err("Non-finite sprite rotation".into()); }
-                instance.scope.insert("rot".into(), MilkRustValue::Number(rotation));
-            }
             let value = |key: &str| instance.scope.get(key).and_then(MilkRustValue::as_number).unwrap_or(0.0);
             for key in ["x", "y", "sx", "sy", "rot", "repeatx", "repeaty", "r", "g", "b", "a", "burn", "blendmode", "done", "flipx", "flipy"] {
                 if !value(key).is_finite() { return Err(format!("Non-finite sprite variable: {key}")); }
             }
-            let rotation = value("rot");
+            let rotation = value("rot") + match definition.rotation_mode {
+                1.0 => time * definition.rotation_speed,
+                2.0 => -time * definition.rotation_speed,
+                _ => 0.0,
+            };
             if !rotation.is_finite() { return Err("Non-finite sprite rotation".into()); }
             let done = value("done") != 0.0;
-            let burn = value("burn") != 0.0;
+            let burn = if definition.burn_mode == 0 {
+                false
+            } else if definition.burn_mode == 1 {
+                true
+            } else {
+                value("burn") != 0.0
+            };
             // Saved offsets join EEL coordinates before the final clip-space clamp.
             let x = ((value("x") * 2.0 - 1.0 + definition.offset[0]).clamp(-1000.0, 1000.0) + 1.0) * 0.5;
             let y = ((value("y") * 2.0 - 1.0 + definition.offset[1]).clamp(-1000.0, 1000.0) + 1.0) * 0.5;
-            // The classic renderer rounds dynamic layers and clamps selectors.
-            let max_layer = if definition.milk2 { 4 } else { 1 };
-            let layer = ((value("layer") + 0.5).trunc() as i32).clamp(0, max_layer);
-            let requested_blend_mode = value("blendmode").trunc() as i32;
-            let blend_mode = sprite_blend_mode(requested_blend_mode);
+            // Layer and blend selectors are saved preset fields in MD3;
+            // assigning similarly named EEL variables does not change them.
+            let layer = definition.layer as usize;
             let alpha = value("a").clamp(0.0, 1.0);
             let repeat = [value("repeatx").clamp(0.01, 100.0), value("repeaty").clamp(0.01, 100.0)];
             let scale = [(value("sx") + definition.size_offset[0]).clamp(-1000.0, 1000.0),
@@ -458,9 +457,9 @@ impl Runtime {
             frames.push(Frame {
                 preset_index: definition.preset_index, milk2: definition.milk2,
                 texture: definition.texture.clone(), time: elapsed, color_key: definition.color_key,
-                blend_mode, layer: layer as usize, burn,
+                blend_mode: definition.blend_mode, layer, burn,
                 color: [value("r").clamp(0.0, 1.0), value("g").clamp(0.0, 1.0),
-                    value("b").clamp(0.0, 1.0), alpha],
+                    value("b").clamp(0.0, 1.0), alpha * definition.alpha],
                 center: [x, y],
                 scale,
                 repeat,
@@ -476,30 +475,38 @@ impl Runtime {
     }
 }
 
-/// MilkDrop 3 has eleven saved sprite blend modes; values clamp to the table.
+/// MilkDrop 3 has eleven saved sprite blend modes; invalid values use mode 0.
 pub fn sprite_blend_mode(requested: i32) -> i32 {
-    requested.clamp(0, SPRITE_BLEND_MODES as i32 - 1)
+    if (0..SPRITE_BLEND_MODES as i32).contains(&requested) { requested } else { 0 }
 }
 
-fn sprite_byte(value: f64) -> u8 {
-    (value.clamp(0.0, 1.0) * 255.0).trunc() as u8
+fn sprite_byte_wrapping(value: f64) -> u8 {
+    if !value.is_finite() { return 0; }
+    (value * 255.0).trunc().rem_euclid(256.0) as u8
 }
 
 fn sprite_alpha_byte(value: f64) -> u8 {
-    sprite_byte(value)
+    sprite_byte_wrapping(value)
 }
 
 /// D3DCOLOR-compatible vertex byte quantization for the saved sprite table.
-/// RGB and alpha saturate to the byte range after EEL values are clamped.
+/// Per-frame RGB channels clamp before packing; alpha is multiplied by the
+/// saved `SpriteAlpha` and wraps exactly as a packed 8-bit D3D color channel.
 pub fn sprite_vertex_color(mode: i32, rgba: [f64; 4]) -> [u8; 4] {
     let mode = sprite_blend_mode(mode);
     let rgb = [rgba[0].clamp(0.0, 1.0), rgba[1].clamp(0.0, 1.0), rgba[2].clamp(0.0, 1.0)];
     let alpha = rgba[3];
     match mode {
-        1 | 2 | 6 | 10 => [sprite_byte(rgb[0] * alpha), sprite_byte(rgb[1] * alpha), sprite_byte(rgb[2] * alpha), 255],
+        1 | 2 => [sprite_byte_wrapping(rgb[0] * alpha), sprite_byte_wrapping(rgb[1] * alpha), sprite_byte_wrapping(rgb[2] * alpha), 255],
         3 => [255; 4],
         7 => [255, 255, 255, sprite_alpha_byte(alpha)],
-        _ => [sprite_byte(rgb[0]), sprite_byte(rgb[1]), sprite_byte(rgb[2]), sprite_alpha_byte(alpha)],
+        8 => {
+            let adjust = |channel: f64| if channel > 0.5 { 1.0 - channel } else { channel };
+            [sprite_byte_wrapping(adjust(rgb[0])), sprite_byte_wrapping(adjust(rgb[1])),
+                sprite_byte_wrapping(adjust(rgb[2])), sprite_alpha_byte(alpha)]
+        }
+        _ => [sprite_byte_wrapping(rgb[0]), sprite_byte_wrapping(rgb[1]),
+            sprite_byte_wrapping(rgb[2]), sprite_alpha_byte(alpha)],
     }
 }
 
@@ -511,34 +518,31 @@ pub fn sprite_blend_pixel(mode: i32, rgba: [f64; 4], texel: [u8; 4], dst: [u8; 3
     let texture = texel.map(|value| f64::from(value) / 255.0);
     let destination = dst.map(|value| f64::from(value) / 255.0);
     let alpha = match mode {
-        4 | 7 | 9 => vertex[3] * texture[3],
+        4 | 7 | 8 => vertex[3] * texture[3],
         _ => vertex[3],
     };
     let saturate = |value: f64| value.clamp(0.0, 1.0);
     let mut stage = [0.0; 3];
     for channel in 0..3 {
-        stage[channel] = if mode == 3 { texture[channel] } else { texture[channel] * vertex[channel] };
-    }
-    // In the cutoff mode, keyed/transparent texels leave the destination
-    // untouched; an opaque source texel clears it to black.
-    if (matches!(mode, 7 | 9) && alpha < 0.004) || (mode == 8 && texture[3] < 0.004) {
-        return destination.map(|channel| channel * 255.0);
+        stage[channel] = match mode {
+            3 => texture[channel],
+            7 => saturate(1.0 - texture[channel]),
+            9 => saturate(texture[channel] + vertex[channel] - 0.5),
+            10 => saturate(2.0 * texture[channel] * vertex[channel]),
+            _ => texture[channel] * vertex[channel],
+        };
     }
     let mut output = [0.0; 3];
     for channel in 0..3 {
-        let source = stage[channel];
         output[channel] = match mode {
-            0 => destination[channel] * (1.0 - alpha) + source * alpha,
-            1 => source,
-            2 => destination[channel] + source,
-            3 => source * source + destination[channel] * (1.0 - source),
-            4 => destination[channel] * (1.0 - alpha) + source * alpha,
-            5 => destination[channel] * source,
-            6 => destination[channel] * (1.0 - source),
-            7 => 1.0 - source,
-            8 => 0.0,
-            9 => destination[channel] * saturate(0.5 + source),
-            10 => destination[channel] + 2.0 * source,
+            0 | 4 | 7 | 8 => destination[channel] * (1.0 - alpha) + stage[channel] * alpha,
+            1 => stage[channel],
+            2 => destination[channel] + stage[channel],
+            3 => stage[channel] * stage[channel] + destination[channel] * (1.0 - stage[channel]),
+            5 => destination[channel] * stage[channel],
+            6 => destination[channel] * (1.0 - stage[channel]),
+            9 => destination[channel] * stage[channel],
+            10 => destination[channel] + stage[channel],
             _ => unreachable!("sprite_blend_mode clamps the index"),
         };
         output[channel] = saturate(output[channel]) * 255.0;
@@ -563,17 +567,21 @@ out vec4 outColor;
 vec4 sprite_texel(ivec2 point, ivec2 size) {
     point = ((point % size) + size) % size;
     vec4 color = texelFetch(spriteImage, point, 0);
-    // The legacy loader compares the low 24 RGB bits, ignores key alpha, and
-    // clears only source alpha before filtering. All-ones disables keying.
+    // MilkDrop keys opaque static texels by their low 24 RGB bits and clears
+    // the whole texel to transparent black before filtering. Animated GIFs do
+    // not use the key. All-ones disables keying.
     if (spriteColorKeyEnabled != 0 &&
-        all(lessThanEqual(abs(color.rgb - spriteColorKey.rgb), vec3(0.5 / 255.0)))) {
-        color.a = 0.0;
+        color.a >= 1.0 - 0.5 / 255.0 &&
+        all(lessThan(abs(color.rgb - spriteColorKey.rgb), vec3(0.5 / 255.0)))) {
+        color = vec4(0.0);
     }
     return color;
 }
 vec4 sprite_sample(vec2 coordinate) {
-    // Apply the key to source texels before linear filtering, as at decode.
-    // Non-keyed texels keep ordinary RGBA interpolation, including hidden RGB.
+    // Non-keyed assets use hardware trilinear filtering when their mip chain
+    // exists. Keyed assets apply the key to source texels before bilinear
+    // filtering; keyed mip generation is handled by the sprite upload path.
+    if (spriteColorKeyEnabled == 0) return texture(spriteImage, coordinate);
     ivec2 size = textureSize(spriteImage, 0);
     vec2 position = coordinate * vec2(size) - vec2(0.5);
     ivec2 origin = ivec2(floor(position));
@@ -589,34 +597,23 @@ void main() {
     // conversion in a shader can round differently across GPU drivers.
     vec4 diffuse = spriteTint;
     vec3 texel = sampleColor.rgb;
-    vec3 stage = diffuse.rgb * texel;
     vec3 dst = background.rgb;
     float alpha = diffuse.a;
-    if (mode == 4) alpha *= sampleColor.a;
+    vec3 stage = diffuse.rgb * texel;
+    if (mode == 3) stage = texel;
+    else if (mode == 7) stage = vec3(1.0) - texel;
+    else if (mode == 9) stage = clamp(texel + diffuse.rgb - vec3(0.5), 0.0, 1.0);
+    else if (mode == 10) stage = clamp(2.0 * diffuse.rgb * texel, 0.0, 1.0);
+    if (mode == 4 || mode == 7 || mode == 8) alpha *= sampleColor.a;
     vec3 result;
-    if (mode == 0 || mode == 4) result = mix(dst, stage, alpha);
+    if (mode == 0 || mode == 4 || mode == 7 || mode == 8) result = mix(dst, stage, alpha);
     else if (mode == 1) result = stage;
     else if (mode == 2) result = dst + stage;
     else if (mode == 3) result = stage * stage + dst * (vec3(1.0) - stage);
     else if (mode == 5) result = dst * stage;
     else if (mode == 6) result = dst * (vec3(1.0) - stage);
-    else if (mode == 7) {
-        vec4 c = sampleColor * diffuse;
-        if (c.a < 0.004) discard;
-        result = vec3(1.0) - c.rgb;
-    }
-    else if (mode == 8) {
-        // Color-keyed texels have alpha cleared before filtering and must not
-        // clear the destination. Opaque source texels select black.
-        if (sampleColor.a < 0.004) discard;
-        result = vec3(0.0);
-    }
-    else if (mode == 9) {
-        vec4 c = sampleColor * diffuse;
-        if (c.a < 0.004) discard;
-        result = dst * clamp(vec3(0.5) + c.rgb, 0.0, 1.0);
-    }
-    else result = dst + 2.0 * stage;
+    else if (mode == 9) result = dst * stage;
+    else result = dst + stage;
     outColor = vec4(clamp(result, 0.0, 1.0), background.a);
 }
 "#;
@@ -629,15 +626,15 @@ mod tests {
     }
 
     #[test]
-    fn saved_speed_appends_one_fps_scaled_rotation_step_after_script_code() {
+    fn saved_rotation_mode_adds_absolute_time_times_speed_after_script_code() {
         let definitions=extract(&block("SpriteRot=1\nSpriteSpeed=1\ncode_1=rot=rot+2;"),true).unwrap().definitions;
         let mut runtime=Runtime::default();
         let parent = BTreeMap::from([("fps".into(), MilkRustValue::Number(60.0))]);
         let first=runtime.render(&definitions,&parent,0.0,0.0).unwrap();
         let second=runtime.render(&definitions,&parent,0.5,0.0).unwrap();
-        assert!((first[0].rotation - (2.0 + 1.0 / 60.0)).abs() < 1.0e-9);
-        assert!((second[0].rotation - (4.0 + 2.0 / 60.0)).abs() < 1.0e-9);
-        assert!(definitions[0].rotation_mode == 1.0); // SpriteRot is retained but inert.
+        assert!((first[0].rotation - 2.0).abs() < 1.0e-9);
+        assert!((second[0].rotation - 4.5).abs() < 1.0e-9);
+        assert_eq!(definitions[0].rotation_mode, 1.0);
     }
     #[test]
     fn rotation_register_can_cross_full_turns_and_retire_the_sprite() {
@@ -651,36 +648,36 @@ mod tests {
     #[test]
     fn saved_blend_and_layer_follow_the_preset_controls() {
         for (records, mode, layer) in [("SpriteBlend=9\nSpriteLayer=2", 9, 2),
-            ("SpriteBlend=-2\nSpriteLayer=0", 0, 0), ("SpriteBlend=99\nSpriteLayer=4", 10, 4)] {
+            ("SpriteBlend=-2\nSpriteLayer=0", 0, 0), ("SpriteBlend=99\nSpriteLayer=4", 0, 4)] {
             let definitions = extract(&block(records), true).unwrap().definitions;
             let frames = Runtime::default().render(&definitions, &BTreeMap::new(), 0.0, 0.0).unwrap();
             assert_eq!(frames[0].blend_mode, mode);
             assert_eq!(frames[0].layer, layer);
         }
         let dynamic_layer = extract(&block("SpriteLayer=1\ncode_1=layer=99;"), true).unwrap().definitions;
-        assert_eq!(Runtime::default().render(&dynamic_layer, &BTreeMap::new(), 0.0, 0.0).unwrap()[0].layer, 4);
+        assert_eq!(Runtime::default().render(&dynamic_layer, &BTreeMap::new(), 0.0, 0.0).unwrap()[0].layer, 1);
     }
 
     #[test]
-    fn duplicate_saved_fields_keep_the_first_value() {
+    fn duplicate_sprite_name_uses_last_value_and_other_fields_use_first() {
         let source = "[SPRITE1_BEGIN]\nSpriteName=sprites/first.png\nSpriteLayer=2\nSpriteAlpha=0.25\nSpriteName=sprites/last.png\nSpriteLayer=4\nSpriteAlpha=0.75\n[SPRITE1_END]\n";
         let definitions = extract(source, true).unwrap().definitions;
-        assert_eq!(definitions[0].texture, "sprites/first.png");
+        assert_eq!(definitions[0].texture, "sprites/last.png");
         assert_eq!(definitions[0].layer, 2);
         assert_eq!(definitions[0].alpha, 0.25);
     }
 
     #[test]
-    fn saved_blend_defaults_to_zero_and_runtime_clamps_to_all_eleven_modes() {
+    fn saved_blend_defaults_to_four_and_invalid_modes_use_zero() {
         let default = extract(&block(""), true).unwrap().definitions;
-        assert_eq!(default[0].blend_mode, 0);
-        assert_eq!(Runtime::default().render(&default, &BTreeMap::new(), 0.0, 0.0).unwrap()[0].blend_mode, 0);
+        assert_eq!(default[0].blend_mode, 4);
+        assert_eq!(Runtime::default().render(&default, &BTreeMap::new(), 0.0, 0.0).unwrap()[0].blend_mode, 4);
         for mode in 0..=10 {
             let definitions = extract(&block(&format!("SpriteBlend={mode}\ncode_1=blendmode={mode};")), true).unwrap().definitions;
             let frame = Runtime::default().render(&definitions, &BTreeMap::new(), 0.0, 0.0).unwrap().remove(0);
             assert_eq!(frame.blend_mode, mode);
         }
-        for (script, expected) in [("blendmode=-9;", 0), ("blendmode=99;", 10)] {
+        for (script, expected) in [("blendmode=-9;", 4), ("blendmode=99;", 4)] {
             let out_of_range = extract(&block(&format!("code_1={script}")), true).unwrap().definitions;
             assert_eq!(Runtime::default().render(&out_of_range, &BTreeMap::new(), 0.0, 0.0).unwrap()[0].blend_mode, expected);
         }
@@ -692,7 +689,7 @@ mod tests {
         assert_eq!(sprite_vertex_color(1, rgba), [127, 127, 127, 255]);
         assert_eq!(sprite_vertex_color(3, rgba), [255; 4]);
         assert_eq!(sprite_vertex_color(7, rgba), [255, 255, 255, 127]);
-        assert_eq!(sprite_vertex_color(8, rgba), [255, 255, 255, 127]);
+        assert_eq!(sprite_vertex_color(8, rgba), [0, 0, 0, 127]);
 
         let rgba = [1.0; 4];
         let texel = [64, 128, 192, 128];
@@ -705,12 +702,13 @@ mod tests {
         assert!(results[4].iter().zip([48.06, 112.06, 176.06]).all(|(a,b)| (a-b).abs()<0.1));
         assert!(results[5].iter().zip([8.03, 48.19, 120.47]).all(|(a,b)| (a-b).abs()<0.1));
         assert!(results[6].iter().zip([23.97, 47.81, 39.53]).all(|(a,b)| (a-b).abs()<0.1));
-        assert_eq!(results[7], [191.0, 127.0, 63.0]);
-        assert_eq!(results[8], [0.0, 0.0, 0.0]);
+        assert!(results[7].iter().zip([111.8, 111.56, 111.31]).all(|(a,b)| (a-b).abs()<0.2));
+        let half_alpha = [32.0, 96.0, 160.0].map(|channel| channel * 127.0 / 255.0);
+        assert!(results[8].iter().zip(half_alpha).all(|(a,b)| (a-b).abs()<1.0e-9));
         assert!(results[9].iter().zip([24.03, 96.0, 160.0]).all(|(a,b)| (a-b).abs()<0.1));
         assert_eq!(results[10], [160.0, 255.0, 255.0]);
         assert_eq!(sprite_blend_mode(-1), 0);
-        assert_eq!(sprite_blend_mode(11), 10);
+        assert_eq!(sprite_blend_mode(11), 0);
     }
 
     #[test]
@@ -776,17 +774,17 @@ mod tests {
     }
 
     #[test]
-    fn saved_registers_seed_init_then_equations_can_override_them() {
+    fn saved_alpha_multiplies_eel_alpha_while_burn_blend_and_layer_use_saved_controls() {
         let blocks = extract(&block(concat!(
             "SpriteAlpha=0.25\nSpriteBurn=0\nSpriteBlend=3\nSpriteLayer=2\n",
             "SpriteRepeatX=4\nSpriteRepeatY=5\n",
             "init_1=a=0.75;burn=1;blendmode=8;layer=3;repeatx=2;repeaty=3;",
         )), true).unwrap();
         let frame = Runtime::default().render(&blocks.definitions, &BTreeMap::new(), 0.0, 0.0).unwrap().remove(0);
-        assert_eq!(frame.color[3], 0.75);
-        assert!(frame.burn);
-        assert_eq!(frame.blend_mode, 8);
-        assert_eq!(frame.layer, 3);
+        assert_eq!(frame.color[3], 0.1875);
+        assert!(!frame.burn);
+        assert_eq!(frame.blend_mode, 3);
+        assert_eq!(frame.layer, 2);
         assert_eq!(frame.repeat, [2.0, 3.0]);
 
         let untouched = extract(&block("SpriteAlpha=0.25\nSpriteBurn=0\nSpriteBlend=3\nSpriteLayer=2\nSpriteRepeatX=4\n"), true).unwrap();

@@ -18,24 +18,22 @@ run is recorded for this checkpoint.
   imported format.
   The corpus denominator retains unreadable and unsupported files.
 - Saved sprites have bounded independent equations/lifetimes, relative texture
-  dependencies, transforms and all eleven MilkDrop 3 blend modes (default mode 0;
-  dynamic selectors clamp to 0–10), final-frame retirement and shared
-  native/WebGL draw markers. Milk2 layers 1–4 enter feedback at the warp, shape,
-  custom-wave, and main-wave/border stages. Layer 0 draws over the final
-  composite; when `burn` is nonzero, it also stamps feedback once on each active
-  frame. Classic `.milk` layers 0–1 use that same overlay/burn path. The final
-  `done && burn` feedback draw uses the classic aspect correction. Exact
-  MilkDrop 3 layer/burn parity remains a reference qualification item.
-  Saved alpha, burn, repeat, layer and blend values seed their EEL registers;
-  equations can override them. SpriteSpeed appends a per-frame `rot += speed/fps`.
-  SpriteRot is inert in the inspected classic loader. Layer selection rounds and
-  clamps dynamically; saved position/size offsets are added before final clamps.
-  Sprite equation blocks execute contiguously through line 255; repeated saved
-  fields keep their first value. Both hosts admit the documented 100-name image
-  cache under the aggregate pixel budget. Sprite color keys follow base-0
-  unsigned integer parsing. Diffuse RGBA channels are byte-packed in shared Rust
-  code before either GL host binds them. WebGL retains frames during image
-  admission.
+  dependencies, transforms and all eleven MilkDrop 3 blend modes (default mode 4;
+  invalid selectors use mode 0), final-frame retirement and shared native/WebGL
+  draw markers. Layers 1–4 enter feedback at the warp, shape, custom-wave, and
+  main-wave/border stages. Burning layer sprites draw twice at their feedback
+  stage; layer 0 draws over the composite and stamps feedback once. The final
+  `done && burn` primary feedback draw uses the 4:3 correction. Saved alpha
+  multiplies clamped EEL `a`; burn semantics follow the saved integer; layer and
+  blend are static selectors. `SpriteRot` modes 1 and 2 add/subtract absolute
+  `time * SpriteSpeed`. `SpriteName` uses its last saved occurrence; other saved
+  fields use their first. Repeated code lines run contiguously through line 255.
+  Both hosts admit the documented 100-name image cache under the aggregate
+  pixel budget. Color keys use the legacy hexadecimal scan. Static keyed
+  images are converted to transparent-black derivatives before mip generation;
+  GIFs bypass color keying and mip generation. These source paths still need
+  reference-pixel and GPU filtering qualification.
+  WebGL retains frames during image admission.
   See [sprite semantics and reference limits](docs/EMBEDDED_SPRITES.md).
 - Classic display controls and full feedback-coordinate transforms reach both
   hosts. All nine classic wave modes, stereo PCM, bounded custom point inputs,
@@ -69,12 +67,14 @@ run is recorded for this checkpoint.
   the profile. User names are isolated from GLSL keywords/intrinsics. Readonly
   initializers use valid GLSL storage, and writes to readonly values fail.
 - Sprite modes 0–10 follow the saved D3D9 texture-stage and blend-factor table;
-  the table default is 0 and dynamic selectors clamp to 0–10. EEL `layer` rounds
-  and clamps to 0–4 in `.milk2` and 0–1 in `.milk`; saved fields initialize persistent registers and equations
-  may replace them. SpriteSpeed is added after each frame's code using fps;
-  SpriteRot is retained but inert in the inspected classic loader. Saved color
-  keys match low-24-bit RGB before filtering and clear alpha; vertex RGB/alpha
-  channels saturate to bytes. Script rotation remains unwrapped.
+  the missing `SpriteBlend` default is 4 and invalid saved selectors use 0.
+  `SpriteLayer` and `SpriteBlend` are static fields, not EEL selectors. Invalid
+  layers are inert. SpriteSpeed uses absolute time only for saved `SpriteRot`
+  modes 1 and 2; saved `SpriteAlpha` multiplies the clamped EEL alpha without a
+  second clamp; saved burn mode controls whether EEL `burn` applies. The keyed
+  static-image key-before-mip derivatives and the GIF-specific no-key/no-mip
+  path are implemented; reference-pixel and physical-renderer qualification
+  remain open.
 - All 24 legacy rotation matrices, constant registers `_c0.._c13`, canonical
   coordinate/roam/mip helpers and matched blur range encoding/decoding are bound
   in native and WebGL hosts. Regression sources are present but unrun.
@@ -88,13 +88,21 @@ run is recorded for this checkpoint.
 - A bounded `.milk2` wrapper parser, round-trip metadata preservation, two
   independent states, all 30 saved-pattern formulas with per-fragment 64x48
   triangle interpolation from a packed 32-bit vertex field, and the documented sprite
-  field/runtime paths for native and WebGL. Sprite layers are ordered within the
-  feedback scene through explicit markers in both GPU renderers. Header state
-  resets per file: missing
-  pattern is empty, progress is 0.5 and direction is 1. Missing random records
-  use the reference midpoint for analytic masks and seeded legacy draws for
-  plasma; omitted slots in a partial random block are zero. A missing pattern
-  fails closed rather than inventing a transition.
+  field/runtime paths for native and WebGL. Both equation scopes run independently;
+  PRESET2 uses a temporary cosine-mixed render scope with shader-dependent boolean
+  snapping, while persistent registers remain per-preset. Custom shape fills,
+  outlines and waves receive the saved linear blend weights, and preset outer/inner
+  borders are suppressed. Sprite layers are ordered within the
+  feedback scene through explicit markers in both GPU renderers. Persistent
+  frame-set runtimes carry omitted header fields between sequential `.milk2`
+  loads with process-start defaults of empty pattern, progress `1.0`, direction
+  `0`, and random values zero. Ordinary single-preset scopes carry valid
+  writes to those shared globals across soft cuts, and the runtime exposes a
+  validated snapshot/restore API for host recreation. Before random initialization, analytic
+  masks use the reference midpoint and plasma uses seeded legacy draws; after
+  initialization, omitted slots inherit prior values. A fresh stateless parse
+  uses process-start defaults. A missing pattern fails closed rather than
+  inventing a transition.
   Formula provenance and the remaining pixel-qualification boundary are in
   [the format notes](docs/MILK2_FORMAT.md).
 - Deterministic archives with integrity indexes and per-file provenance/notices;
@@ -151,9 +159,11 @@ render frames, resolve external texture packs, or establish fidelity.
   native/WebGL driver execution, corpus captures and reference-image comparisons.
   Source acceptance or a nonempty frame is not visual conformance. None of the
   new platform/preset cells is qualified.
-- Reference captures for MilkDrop shader resources and `.milk2` mesh interpolation/compositing,
-  all eleven sprite blend modes/filtering and layer
-  ordering. The typed HLSL
+- Reference captures for MilkDrop shader resources and `.milk2` mesh
+  interpolation/compositing, per-frame variable blending, weighted custom
+  objects, border suppression, all eleven sprite blend modes/filtering and
+  layer ordering. These are source paths pending reference-image comparison.
+  The typed HLSL
   profile now lowers common `Texture1D`/`Texture2D`/`Texture3D` sampling methods and direct
   resource parameters/fields, including the static offset overloads supported
   by GLSL ES 3.00, offset `Load` with defined out-of-range zero results, and

@@ -6,7 +6,8 @@ pub use renderer::{milkrust_renderer, MilkRustRenderer};
 use milkrust_core::{
     parse_milkrust_fragment, parse_milkrust_preset_set, parse_milkrust_sample_csv,
     milkrust_preset_name, milkrust_webgpu_batch_summary_json, serialize_milkrust_fragment,
-    serialize_milkrust_preset_set, validate_milkrust_webgl_import as validate_milkrust_import, MilkRustFrameSetRuntime,
+    serialize_milkrust_preset_set, validate_milkrust_webgl_import as validate_milkrust_import,
+    validate_milkrust_webgl_import_with_state, MilkRustFrameSetRuntime,
     MilkRustIndexedEntry, MilkRustInputState, MilkRustValue,
 };
 use wasm_bindgen::{prelude::*, JsCast};
@@ -162,7 +163,8 @@ impl WasmMilkRustEngine {
         file_name: &str,
         texture_assets_json: &str,
     ) -> Result<String, JsValue> {
-        let title = validate_milkrust_import(source).map_err(|error| JsValue::from_str(&error))?;
+        let title = validate_milkrust_webgl_import_with_state(source, self.runtime.milk2_header_state())
+            .map_err(|error| JsValue::from_str(&error))?;
         let texture_assets = Self::parse_texture_assets(texture_assets_json)?;
         self.source = source.to_string();
         self.title = if title.trim().is_empty() {
@@ -174,7 +176,10 @@ impl WasmMilkRustEngine {
         } else {
             title
         };
+        let header_state = self.runtime.milk2_header_state().clone();
         self.runtime = MilkRustFrameSetRuntime::default();
+        self.runtime.restore_milk2_header_state(header_state)
+            .map_err(|error| JsValue::from_str(&error))?;
         self.pending_frame = None;
         self.renderer.reset();
         *self.texture_assets.borrow_mut() = texture_assets;
@@ -185,7 +190,8 @@ impl WasmMilkRustEngine {
 
     #[wasm_bindgen(js_name = inspectPresetText)]
     pub fn inspect_preset_text(&self, source: &str, file_name: &str) -> Result<String, JsValue> {
-        let title = validate_milkrust_import(source).map_err(|error| JsValue::from_str(&error))?;
+        let title = validate_milkrust_webgl_import_with_state(source, self.runtime.milk2_header_state())
+            .map_err(|error| JsValue::from_str(&error))?;
         Ok(serde_json::json!({
             "title": if title.trim().is_empty() {
                 if file_name.trim().is_empty() { "Imported MilkRust preset" } else { file_name }

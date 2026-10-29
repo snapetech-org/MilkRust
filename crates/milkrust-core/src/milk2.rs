@@ -3,14 +3,118 @@
 //! docs/MILK2_FORMAT.md.
 use std::collections::BTreeMap;
 
+/// MilkDrop keeps saved blend header values between loads. A fresh host starts
+/// with the values initialized by the format implementation.
+#[derive(Clone, Debug, PartialEq)]
+pub struct HeaderState {
+    pub pattern: String,
+    pub progress: f64,
+    pub direction: i32,
+    pub random: [f64; 5],
+    pub randoms_active: bool,
+}
+
+impl Default for HeaderState {
+    fn default() -> Self {
+        Self {
+            pattern: String::new(),
+            progress: 1.0,
+            direction: 0,
+            random: [0.0; 5],
+            randoms_active: false,
+        }
+    }
+}
+
+impl HeaderState {
+    /// Reject externally restored state that could make a later saved wrapper
+    /// ambiguous or invalid. An empty pattern is the process-start default.
+    pub fn validate(&self) -> Result<(), String> {
+        if self.pattern.len() > 80 || (!self.pattern.is_empty() && blend_pattern_code(&self.pattern).is_none()) {
+            return Err("invalid carried milk2 blending_pattern".into());
+        }
+        if !self.progress.is_finite() || !(0.0..=1.0).contains(&self.progress) {
+            return Err("invalid carried milk2 blending_progress".into());
+        }
+        if self.random.iter().any(|value| !value.is_finite() || !(0.0..=1.0).contains(value)) {
+            return Err("invalid carried milk2 random register".into());
+        }
+        Ok(())
+    }
+
+    /// Capture only header globals explicitly written by an ordinary
+    /// single-preset soft cut. Missing or invalid values leave the process
+    /// state unchanged instead of resetting an inherited register.
+    pub fn update_from_scope(&mut self, scope: &std::collections::BTreeMap<String, crate::MilkRustValue>) {
+        if let Some(crate::MilkRustValue::Text(pattern)) = scope.get("blending_pattern") {
+            if pattern.len() <= 80 && (pattern.is_empty() || blend_pattern_code(pattern).is_some()) {
+                self.pattern.clone_from(pattern);
+            }
+        }
+        if let Some(progress) = scope.get("blending_progress").and_then(crate::MilkRustValue::as_number) {
+            if progress.is_finite() && (0.0..=1.0).contains(&progress) {
+                self.progress = progress;
+            }
+        }
+        if let Some(direction) = scope.get("blending_direction").and_then(crate::MilkRustValue::as_number) {
+            if direction.is_finite() && direction.fract() == 0.0
+                && direction >= i32::MIN as f64 && direction <= i32::MAX as f64 {
+                self.direction = direction as i32;
+            }
+        }
+        for index in 0..self.random.len() {
+            let key = format!("random_{}", index + 1);
+            if let Some(value) = scope.get(&key).and_then(crate::MilkRustValue::as_number) {
+                if value.is_finite() && (0.0..=1.0).contains(&value) {
+                    self.random[index] = value;
+                    self.randoms_active = true;
+                }
+            }
+        }
+    }
+
+    /// Resolve absent records against the current host state without changing
+    /// which keys were actually present in the saved file.
+    pub fn resolve(&self, blend: &mut SavedBlend) {
+        if !blend.header.contains_key("blending_pattern") {
+            blend.pattern.clone_from(&self.pattern);
+        }
+        if !blend.header.contains_key("blending_progress") {
+            blend.progress = self.progress;
+        }
+        if !blend.header.contains_key("blending_direction") {
+            blend.direction = self.direction;
+        }
+        for index in 0..blend.random.len() {
+            if blend.random[index].is_none() {
+                blend.resolved_random[index] = self.random[index];
+            }
+        }
+        blend.randoms_active = self.randoms_active || blend.random.iter().any(|value| value.is_some());
+    }
+
+    /// Commit a loaded file's effective values for the next preset load.
+    pub fn update(&mut self, blend: &SavedBlend) {
+        self.pattern.clone_from(&blend.pattern);
+        self.progress = blend.progress;
+        self.direction = blend.direction;
+        self.random = blend.resolved_random;
+        self.randoms_active = blend.randoms_active;
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct SavedBlend {
     pub pattern: String,
     pub progress: f64,
     pub direction: i32,
     pub random: [Option<f64>; 5],
-    /// Per-file values with omitted random registers set to zero for rendering.
+    /// Effective random values used for rendering. A fresh parse starts missing
+    /// slots at zero; a persistent runtime may resolve them from prior state.
     pub resolved_random: [f64; 5],
+    /// Whether saved random state has ever been initialized in this header
+    /// history. The five values themselves may be inherited from prior files.
+    pub randoms_active: bool,
     /// Retain all header records for lossless export of unknown extensions.
     pub header: BTreeMap<String, String>,
     /// Trailing sprite blocks and metadata are retained for lossless export.
@@ -25,15 +129,15 @@ impl SavedBlend {
         blend_pattern_code(&self.pattern)
     }
 
-    /// Return this file's saved random registers; omitted values are zero.
+    /// Return this file's effective saved random registers.
     pub fn random_values(&self) -> [f64; 5] {
         self.resolved_random
     }
 
-    /// The classic renderer treats any saved random register as activating
-    /// the saved random block; omitted slots in a partial block remain zero.
+    /// Whether random registers were initialized by this file or inherited
+    /// from prior header state.
     pub fn has_randoms(&self) -> bool {
-        self.random.iter().any(Option::is_some)
+        self.randoms_active
     }
 
     /// MilkDrop 3.2 adds a display-name record after the two preset blocks.
@@ -289,11 +393,11 @@ pub fn parse(source: &str) -> Result<(SavedBlend, [String; 2]), String> {
         if !value.is_finite() { return Err(format!("non-finite milk2 {key}")); }
         Ok(value)
     };
-    let progress = number("blending_progress", 0.5)?;
+    let progress = number("blending_progress", 1.0)?;
     if !(0.0..=1.0).contains(&progress) { return Err("milk2 progress is outside 0..1".into()); }
     let direction = match header.get("blending_direction") {
         Some(value) => value.parse::<i32>().map_err(|_| "invalid milk2 blending_direction")?,
-        None => 1,
+        None => 0,
     };
     let mut random = [None; 5];
     let mut resolved_random = [0.0; 5];
@@ -306,7 +410,8 @@ pub fn parse(source: &str) -> Result<(SavedBlend, [String; 2]), String> {
             resolved_random[index] = parsed;
         }
     }
-    Ok((SavedBlend { pattern, progress, direction, random, resolved_random, header, trailer }, presets))
+    let randoms_active = random.iter().any(Option::is_some);
+    Ok((SavedBlend { pattern, progress, direction, random, resolved_random, randoms_active, header, trailer }, presets))
 }
 
 #[cfg(test)]
@@ -389,15 +494,15 @@ mod tests {
     }
 
     #[test]
-    fn omitted_header_registers_use_per_file_defaults_without_prior_state() {
+    fn omitted_header_registers_use_process_start_defaults_without_prior_state() {
         let source = PAIR.replace("blending_pattern=Zoom\n", "")
             .replace("blending_progress=0.3\n", "")
             .replace("blending_direction=-1\n", "")
             .replace("random_1=0.123\n", "");
         let (blend, _) = parse(&source).unwrap();
         assert_eq!(blend.pattern, "");
-        assert_eq!(blend.progress, 0.5);
-        assert_eq!(blend.direction, 1);
+        assert_eq!(blend.progress, 1.0);
+        assert_eq!(blend.direction, 0);
         assert_eq!(blend.random_values(), [0.0; 5]);
         assert!(blend.render_requirement().is_some());
     }

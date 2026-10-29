@@ -50,6 +50,12 @@ HLSL. See GAPS.md for exact source limits and qualification boundaries. This is
 a native renderer source implementation, not a qualified native
 MilkDrop-equivalent release.
 
+Loading another preset resets renderer and equation state but retains the
+process-wide `.milk2` header registers, including valid writes made by an
+ordinary single-preset soft cut. The Rust runtime API supports validated
+snapshot/restore when a host must recreate its runtime; destroying the C ABI
+handle starts a fresh header state.
+
 No native crate build, regression run or GPU capture has been executed. Future
 build/test/packaging work must run on compatible private ephemeral JIT runners.
 The explicit workspace lock includes the pinned `gif` 0.14.2 decoder and its
