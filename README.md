@@ -6,6 +6,8 @@ MilkRust is the standalone Rust/WASM visualizer engine extracted from slskR.
 
 This repository is being prepared as the home for:
 
+- `milkrust-hlsl`: bounded typed legacy HLSL compiler, native and browser builds.
+- `milkrust-native`: GL/GLES renderer and C ABI for platform hosts.
 - `milkrust-core`: preset parsing, expression evaluation, runtime frame generation, compatibility reports, geometry, and WebGPU batch builders.
 - `milkrust-pack`: portable preset pack manifests, loading, and validation.
 - `milkrust-renderer-core`: renderer backend contracts and capability types.
@@ -49,7 +51,12 @@ cargo check -p milkrust-wasm --target wasm32-unknown-unknown
 npm run build:wasm
 ```
 
-`npm run build:wasm` requires the `wasm-bindgen` CLI and writes browser package files to `pkg/`.
+`npm run build:wasm` requires wasm-bindgen 0.2.120 and Emscripten 3.1.64, and
+writes the Rust module, HLSL compiler JS/WASM and notices to `pkg/`. Native builds
+require a target C++11 compiler in addition to Rust. These commands run only on
+approved private ephemeral JIT runners under `AGENTS.md`. See
+[the compiler profile](docs/HLSL_COMPATIBILITY.md) for the implemented language
+and resource limits; a build does not establish universal preset compatibility.
 
 ## Apps
 
