@@ -28,23 +28,38 @@ impl SavedBlend {
     /// not disable an otherwise supported uniform Fade blend.
     fn has_only_supported_trailer_metadata(&self) -> bool {
         let mut saw_name = false;
+        let disabled_sprites = self.header.get("sprite").map(String::as_str) == Some("0");
+        let mut sprite_end: Option<String> = None;
         for line in self.trailer.lines() {
             let line = line.trim();
-            if line.is_empty() {
+            let upper = line.to_ascii_uppercase();
+            if let Some(end) = &sprite_end {
+                if &upper == end { sprite_end = None; }
+                else if upper.starts_with("[SPRITE") { return false; }
                 continue;
             }
-            let Some((key, value)) = line.split_once('=') else {
-                return false;
-            };
-            if !key.trim().eq_ignore_ascii_case("NAME")
-                || saw_name
-                || value.trim().len() > 512
-            {
-                return false;
+            if line.is_empty() || line.starts_with("//") || line.starts_with(';') { continue; }
+            if let Some(index) = upper.strip_prefix("[SPRITE").and_then(|v| v.strip_suffix("_BEGIN]")) {
+                // The explicit saved flag disables execution, not preservation.
+                // Do not accept malformed or nested blocks as ordinary metadata.
+                if !disabled_sprites || index.is_empty() || index.len()>6 || !index.bytes().all(|b| b.is_ascii_digit()) { return false; }
+                sprite_end = Some(format!("[SPRITE{index}_END]"));
+                continue;
             }
+            let Some((key, value)) = line.split_once('=') else { return false; };
+            if !key.trim().eq_ignore_ascii_case("NAME") || saw_name || value.trim().len()>512 { return false; }
             saw_name = true;
         }
-        true
+        sprite_end.is_none()
+    }
+
+    fn has_supported_header(&self) -> bool {
+        self.header.iter().all(|(key,value)| match key.as_str() {
+            "blending_pattern" | "blending_progress" | "blending_direction" |
+            "random_1" | "random_2" | "random_3" | "random_4" | "random_5" => true,
+            "sprite" => matches!(value.as_str(), "0" | "1"),
+            _ => false,
+        })
     }
 
     /// Uniform Fade has no spatial mask. Other patterns must not silently turn
@@ -52,17 +67,13 @@ impl SavedBlend {
     pub fn supports_uniform_composite(&self) -> bool {
         self.pattern.eq_ignore_ascii_case("fade")
             && self.has_only_supported_trailer_metadata()
-            && self.header.keys().all(|key| matches!(key.as_str(),
-                "blending_pattern" | "blending_progress" | "blending_direction" |
-                "random_1" | "random_2" | "random_3" | "random_4" | "random_5"))
+            && self.has_supported_header()
     }
 
     pub fn supports_rendered_pattern(&self) -> bool {
         self.pattern_code().is_some()
             && self.has_only_supported_trailer_metadata()
-            && self.header.keys().all(|key| matches!(key.as_str(),
-                "blending_pattern" | "blending_progress" | "blending_direction" |
-                "random_1" | "random_2" | "random_3" | "random_4" | "random_5"))
+            && self.has_supported_header()
     }
 
     pub fn render_requirement(&self) -> Option<String> {
@@ -221,6 +232,7 @@ pub fn has_wrapper(source: &str) -> bool {
 /// Parse ordered, complete blocks without confusing the [preset00] section
 /// inside each block with the envelope itself. No filesystem or code execution.
 pub fn parse(source: &str) -> Result<(SavedBlend, [String; 2]), String> {
+    if source.len()>crate::input_limits::MAX_PRESET_BYTES { return Err("milk2 source exceeds 2 MiB".into()); }
     let normalized = source.trim_start_matches('\u{feff}').replace("\r\n", "\n").replace('\r', "\n");
     let mut state = 0usize;
     let mut header = BTreeMap::new();
@@ -327,6 +339,16 @@ mod tests {
             let source = format!("{PAIR}{trailer}");
             let (blend, _) = parse(&source).unwrap();
             assert!(!blend.supports_uniform_composite());
+        }
+    }
+    #[test]
+    fn explicit_disabled_sprite_blocks_are_preserved_without_execution() {
+        let source=format!("sprite=0\n{PAIR}[SPRITE0_BEGIN]\nSpriteName=art.png\ncode_1=x=1;\n[SPRITE0_END]\nNAME=With disabled sprite\n");
+        let (blend,presets)=parse(&source).unwrap();
+        assert!(blend.supports_uniform_composite());
+        assert_eq!(parse(&blend.serialize(&presets)).unwrap(),(blend,presets));
+        for invalid in [source.replace("sprite=0","sprite=1"),source.replace("[SPRITE0_END]",""),source.replace("code_1=x=1;","[SPRITE1_BEGIN]")] {
+            assert!(!parse(&invalid).unwrap().0.supports_rendered_pattern());
         }
     }
     #[test]
