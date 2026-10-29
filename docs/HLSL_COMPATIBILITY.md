@@ -141,3 +141,15 @@ and CPU equation state survive; feedback history restarts because the old GPU
 contents no longer exist. SDK callers receive a recoverable waiting state and
 a clearing update. The private browser integration source now exercises actual
 `WEBGL_lose_context` restoration and nonblank rendering; it remains unrun.
+
+## User global initializers
+
+The typed compiler now distinguishes the generated host environment from user
+preamble globals through a reserved AST marker. User numeric/struct/array globals
+are writable per-fragment storage, with initializers evaluated after coordinates,
+hue and host registers have been populated. Uninitialized user globals are zeroed,
+including bounded arrays and struct members. This avoids illegal GLSL uniform
+initializers and unbound custom variables. Provable integer constants retain
+constant array-bound semantics; ordinary HLSL local readonly values are not
+incorrectly forced into GLSL compile-time constants. The additional compiler and
+browser regression sources have not been executed.

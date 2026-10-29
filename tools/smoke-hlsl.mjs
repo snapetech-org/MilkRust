@@ -13,6 +13,7 @@ float3 tint(float x) { float3x3 m=float3x3(1,0,0,0,1,0,0,0,1); return mul(m,floa
 shader_body { float values[3]; values[0]=uv.x; values[1]=uv.y; values[2]=0.2; Tint t; t.value=0; for(int i=0;i<N;i++) { t.value += tint(values[i]); } ret=saturate(t.value/3); }` },
   { id: 'shared-register-helpers', shader: 'void shade(){ q1=uv_orig.x; _qa.y=uv_orig.y; hue_shader*=0.9; } shader_body { shade(); ret=float3(_qa.x,q2,rad)*hue_shader; }' },
   { id: 'legacy-entry-varyings', shader: 'float4 main(float4 p:TEXCOORD0,float2 polar:TEXCOORD1,float4 hue:COLOR0):COLOR0 { return float4(p.zw,polar.x,1)*hue; }' },
+  { id: 'global-initializers', shader: 'const int N=2; float weights[N]={0.25,0.75}; float3 tint=float3(uv_orig,0.5); float gain; void update(){gain=weights[0]+weights[1];} shader_body { update(); ret=tint*gain; }' },
   { id: 'entry-semantics', shader: 'float4 main(float2 uv:TEXCOORD0):COLOR0 { return float4(uv,0.25,1); }' },
   { id: 'while-do-switch', shader: 'shader_body { int i=0; float v=0; while(i<2) { v+=0.1; i++; } do { v+=0.1; i--; } while(i>0); switch(i) { case 0: v+=0.1; break; default: v=0; } ret=float3(uv.x,v,uv.y); }' },
   { id: 'noise-volume', shader: 'shader_body { ret=0.5*tex3D(sampler_noisevol_hq,float3(uv,0.3)).rgb+0.5*tex2D(sampler_pw_noise_lq,uv).rgb; }' },

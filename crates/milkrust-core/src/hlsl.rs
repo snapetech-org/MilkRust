@@ -173,6 +173,10 @@ pub(crate) fn compile(source: &str, legacy_feedback: bool) -> Result<String, Str
     }
     preamble.push_str("float3 GetMain(float2 p) { return tex2D(previousFrame, p).rgb; }\nfloat3 GetPixel(float2 p) { return GetMain(p); }\nfloat lum(float3 c) { return dot(c, float3(0.32, 0.49, 0.29)); }\n");
     preamble.push_str("float get_fft(float p) { return fftBins[(int)(clamp(p, 0.0, 1.0)*63.0)]; }\nfloat get_fft_hz(float hz) { return get_fft(hz / max(sampleRate * 0.5, 1.0)); }\nfloat get_waveform(float p) { return waveformBins[(int)(clamp(p,0.0,1.0)*63.0)]; }\n");
+    // Delimits host-owned uniforms from user globals in the typed AST. The
+    // compiler emits user globals as per-fragment storage and initializes them
+    // after the adapter has populated the shared environment.
+    preamble.push_str("static const int milkrust_host_end = 0;\n");
     let entry;
     if explicit_entry {
         // The adapter maps legacy UV pairs, polar coordinates and hue input,
@@ -297,6 +301,16 @@ mod tests {
     #[test]
     fn explicit_legacy_entries_receive_uv_pairs_hue_and_polar_coordinates() {
         assert!(compile("float4 main(float4 p:TEXCOORD0,float2 a:TEXCOORD1,float4 hue:COLOR0):COLOR0 { return float4(p.zw,a.x,1)*hue; }",false).is_ok());
+    }
+    #[test]
+    fn initializes_user_globals_after_fragment_environment() {
+        let source = "const int COUNT=2; float weights[COUNT]={0.25,0.75}; float3 tint=float3(uv_orig,0.5); float gain; void update(){gain=weights[0]+weights[1];} shader_body { update(); ret=tint*gain; }";
+        let result = compile(source, false).unwrap();
+        assert!(!result.contains("uniform vec3 tint"));
+        assert!(!result.contains("uniform float gain"));
+        assert!(result.contains("const int COUNT"));
+        assert!(result.contains("weights = float[]"));
+        assert!(result.contains("gain = float(0)"));
     }
     #[test]
     fn compiles_typed_helpers_arrays_matrices_and_loops() {

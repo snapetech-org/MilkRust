@@ -26,7 +26,8 @@ GPU capture or device run was performed for this source-only continuation.
   in native and WebGL hosts. Regression sources are present but unrun.
 - Shared writable shader globals, coherent packed/scalar q aliases, original UV
   and animated corner hue inputs, explicit legacy entry semantics and actual
-  named-texture dimensions are wired through both renderer hosts.
+  named-texture dimensions are wired through both renderer hosts. User preamble
+  globals initialize after that environment, with bounded array/struct defaults.
 - Three blur levels, deterministic original 2D/3D noise, mipmaps and per-binding
   filtering/wrapping; q registers, frame uniforms, texture sizes and random/roam
   vectors. Missing resources and compiler/driver errors do not become a placeholder.

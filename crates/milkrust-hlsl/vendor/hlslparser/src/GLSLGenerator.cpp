@@ -138,6 +138,8 @@ GLSLGenerator::GLSLGenerator() :
 bool GLSLGenerator::Generate(HLSLTree* tree, Target target, Version version, const char* entryName, const Options& options)
 {
 
+    m_milkdropGlobals = false;
+    m_globalInitializers.clear();
     m_tree      = tree;
     m_entryName = entryName;
     m_target    = target;
@@ -1007,6 +1009,16 @@ void GLSLGenerator::OutputStatements(int indent, HLSLStatement* statement, const
         if (statement->nodeType == HLSLNodeType_Declaration)
         {
             HLSLDeclaration* declaration = static_cast<HLSLDeclaration*>(statement);
+            // MilkRust supplies this reserved marker after its host bindings.
+            // User globals have no external constant-buffer provider: preserve
+            // their HLSL initializers/default zero in writable fragment storage.
+            if (indent == 0 && String_Equal(declaration->name, "milkrust_host_end")) {
+                m_milkdropGlobals = true;
+                statement = statement->nextStatement;
+                continue;
+            }
+            const bool deferred = indent == 0 && m_milkdropGlobals &&
+                (declaration->type.flags & HLSLTypeFlag_Const) == 0;
 
             // GLSL doesn't seem have texture uniforms, so just ignore them.
             if (declaration->type.baseType != HLSLBaseType_Texture)
@@ -1015,11 +1027,12 @@ void GLSLGenerator::OutputStatements(int indent, HLSLStatement* statement, const
                 if (indent == 0)
                 {
                     // At the top level, we need the "uniform" keyword.
-                    if ((declaration->type.flags & (HLSLTypeFlag_Static | HLSLTypeFlag_Const)) == 0)
+                    if (!deferred && (declaration->type.flags & (HLSLTypeFlag_Static | HLSLTypeFlag_Const)) == 0)
                         m_writer.Write("uniform ");
                 }
-                OutputDeclaration(declaration);
+                OutputDeclaration(declaration, deferred);
                 m_writer.EndLine(";");
+                if (deferred) m_globalInitializers.push_back(declaration);
             }
         }
         else if (statement->nodeType == HLSLNodeType_Struct)
@@ -1703,6 +1716,22 @@ void GLSLGenerator::OutputEntryCaller(HLSLFunction* entryFunction)
 
     m_writer.WriteLine(0, "void main() {");
     m_writer.WriteLine(1, "milkrust_loop_budget = 16384;");
+    for (auto* first : m_globalInitializers) {
+        for (auto* declaration = first; declaration; declaration = declaration->nextDeclaration) {
+            CheckBudget();
+            m_writer.BeginLine(1);
+            m_writer.Write("%s = ", GetSafeIdentifierName(declaration->name));
+            if (declaration->assignment) {
+                if (declaration->type.array) {
+                    m_writer.Write("%s[]( ", GetTypeName(declaration->type));
+                    OutputExpressionList(declaration->assignment);
+                    m_writer.Write(" )");
+                } else OutputExpression(declaration->assignment, &declaration->type);
+            } else OutputDefaultValue(declaration->type);
+            m_writer.EndLine(";");
+        }
+    }
+
 
     // Create local variables for each of the parameters we'll need to pass
     // into the entry point function.
@@ -1810,10 +1839,21 @@ void GLSLGenerator::OutputEntryCaller(HLSLFunction* entryFunction)
     m_writer.WriteLine(0, "}");
 }
 
-void GLSLGenerator::OutputDeclaration(HLSLDeclaration* declaration)
+void GLSLGenerator::OutputDeclaration(HLSLDeclaration* declaration, bool skipInitializer)
 {
     DepthGuard milkrustDepth;
-	OutputDeclarationType( declaration->type );
+    HLSLType declaredType = declaration->type;
+    // Preserve provable integer constants used as array bounds. HLSL also
+    // permits local const values initialized from uniforms; GLSL ES const does
+    // not, so do not blindly add the GLSL qualifier to every readonly value.
+    bool constantIntegers = declaredType.baseType == HLSLBaseType_Int &&
+        (declaredType.flags & HLSLTypeFlag_Const) && !declaredType.array && !skipInitializer;
+    for (auto* item=declaration; constantIntegers && item; item=item->nextDeclaration) {
+        int value=0;
+        constantIntegers = item->assignment && m_tree->GetExpressionValue(item->assignment, value);
+    }
+    if (constantIntegers) declaredType.flags |= HLSLTypeFlag_Static;
+    OutputDeclarationType(declaredType);
 
 	HLSLDeclaration* lastDecl = nullptr;
 	while( declaration )
@@ -1823,10 +1863,14 @@ void GLSLGenerator::OutputDeclaration(HLSLDeclaration* declaration)
 
 		OutputDeclarationBody( declaration->type, GetSafeIdentifierName( declaration->name ) );
 
-		if( declaration->assignment != NULL )
+		if( !skipInitializer && declaration->assignment != NULL )
 		{
 			m_writer.Write( " = " );
-			if( declaration->type.array )
+            if (constantIntegers) {
+                int value=0; m_tree->GetExpressionValue(declaration->assignment, value);
+                m_writer.Write("%d", value);
+            }
+            else if( declaration->type.array )
 			{
 				m_writer.Write( "%s[]( ", GetTypeName( declaration->type ) );
 				OutputExpressionList( declaration->assignment );
@@ -1841,6 +1885,31 @@ void GLSLGenerator::OutputDeclaration(HLSLDeclaration* declaration)
 		lastDecl = declaration;
 		declaration = declaration->nextDeclaration;
 	}
+}
+
+void GLSLGenerator::OutputDefaultValue(const HLSLType& type)
+{
+    DepthGuard milkrustDepth;
+    if (type.array) {
+        int count = 0;
+        if (!type.arraySize || !m_tree->GetExpressionValue(type.arraySize, count) || count < 1 || count > 4096) {
+            Error("Invalid global array bound"); return;
+        }
+        HLSLType element = type; element.array = false; element.arraySize = NULL;
+        m_writer.Write("%s[](", GetTypeName(element));
+        for (int i=0; i<count; ++i) {
+            CheckBudget(); if (i) m_writer.Write(", "); OutputDefaultValue(element);
+        }
+        m_writer.Write(")");
+    } else if (type.baseType == HLSLBaseType_UserDefined) {
+        auto* structure = FindStruct(m_tree->GetRoot(), type.typeName);
+        if (!structure) { Error("Unknown global structure"); return; }
+        m_writer.Write("%s(", type.typeName);
+        for (auto* field=structure->field; field; field=field->nextField) {
+            CheckBudget(); OutputDefaultValue(field->type); if (field->nextField) m_writer.Write(", ");
+        }
+        m_writer.Write(")");
+    } else m_writer.Write("%s(0)", GetTypeName(type));
 }
 
 void GLSLGenerator::OutputDeclaration(const HLSLType& type, const char* name)

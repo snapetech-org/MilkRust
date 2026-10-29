@@ -18,6 +18,7 @@
     "Trailing whitespace normalization",
     "Assertions return bounded errors through the C ABI",
     "Checked constant arithmetic and bounded array declarations",
-    "Exception-safe temporary formatted-string ownership"
+    "Exception-safe temporary formatted-string ownership",
+    "MilkDrop user globals initialize per fragment after host bindings; preserve const declaration bounds"
   ]
 }

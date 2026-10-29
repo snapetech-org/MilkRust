@@ -12,6 +12,7 @@
 
 #include "CodeWriter.h"
 #include "HLSLTree.h"
+#include <vector>
 
 namespace M4
 {
@@ -82,7 +83,8 @@ private:
     void OutputAttribute(const HLSLType& type, const char* semantic, AttributeModifier modifier);
     void OutputAttributes(HLSLFunction* entryFunction);
     void OutputEntryCaller(HLSLFunction* entryFunction);
-    void OutputDeclaration(HLSLDeclaration* declaration);
+    void OutputDeclaration(HLSLDeclaration* declaration, bool skipInitializer = false);
+    void OutputDefaultValue(const HLSLType& type);
 	void OutputDeclarationType( const HLSLType& type );
 	void OutputDeclarationBody( const HLSLType& type, const char* name );
     void OutputDeclaration(const HLSLType& type, const char* name);
@@ -123,6 +125,8 @@ private:
     static const char*  s_reservedWord[s_numReservedWords];
 
     CodeWriter          m_writer;
+    bool m_milkdropGlobals = false;
+    std::vector<HLSLDeclaration*> m_globalInitializers;
 
     HLSLTree*           m_tree;
     const char*         m_entryName;
