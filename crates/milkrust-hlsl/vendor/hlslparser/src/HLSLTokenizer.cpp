@@ -3,6 +3,10 @@
 #include "Engine.h"
 
 #include "HLSLTokenizer.h"
+#include <cerrno>
+#include <cmath>
+#include <cstdint>
+#include <limits>
 
 #include <ctype.h>
 #include <stdio.h>
@@ -101,7 +105,7 @@ static bool GetIsSymbol(char c)
     case '[': case ']':
     case '{': case '}':
     case '-': case '+':
-    case '*': case '/':
+    case '*': case '/': case '%':
     case '?':
     case '!':
     case ',':
@@ -155,6 +159,16 @@ void HLSLTokenizer::Next()
     }
 
     const char* start = m_buffer;
+
+    // Longest operators first; the caller supplies a NUL-terminated buffer.
+    if (m_bufferEnd - m_buffer >= 3 && strncmp(m_buffer, "<<=", 3) == 0) { m_token = HLSLToken_LeftShiftEqual; m_buffer += 3; return; }
+    if (m_bufferEnd - m_buffer >= 3 && strncmp(m_buffer, ">>=", 3) == 0) { m_token = HLSLToken_RightShiftEqual; m_buffer += 3; return; }
+    if (m_bufferEnd - m_buffer >= 2 && strncmp(m_buffer, "<<", 2) == 0) { m_token = HLSLToken_LeftShift; m_buffer += 2; return; }
+    if (m_bufferEnd - m_buffer >= 2 && strncmp(m_buffer, ">>", 2) == 0) { m_token = HLSLToken_RightShift; m_buffer += 2; return; }
+    if (m_bufferEnd - m_buffer >= 2 && strncmp(m_buffer, "%=", 2) == 0) { m_token = HLSLToken_ModEqual; m_buffer += 2; return; }
+    if (m_bufferEnd - m_buffer >= 2 && strncmp(m_buffer, "&=", 2) == 0) { m_token = HLSLToken_BitAndEqual; m_buffer += 2; return; }
+    if (m_bufferEnd - m_buffer >= 2 && strncmp(m_buffer, "|=", 2) == 0) { m_token = HLSLToken_BitOrEqual; m_buffer += 2; return; }
+    if (m_bufferEnd - m_buffer >= 2 && strncmp(m_buffer, "^=", 2) == 0) { m_token = HLSLToken_BitXorEqual; m_buffer += 2; return; }
 
     // +=, -=, *=, /=, ==, <=, >=
     if (m_buffer[0] == '+' && m_buffer[1] == '=')
@@ -246,6 +260,9 @@ void HLSLTokenizer::Next()
     }
 
     size_t length = m_buffer - start;
+    if (length >= s_maxIdentifier) {
+        Error("HLSL identifier exceeds 255 bytes"); m_token = HLSLToken_EndOfStream; return;
+    }
     memcpy(m_identifier, start, length);
     m_identifier[length] = 0;
 
@@ -358,50 +375,36 @@ bool HLSLTokenizer::ScanNumber()
         return false;
     }
 
-    // Parse hex literals.
-    if (m_bufferEnd - m_buffer > 2 && m_buffer[0] == '0' && m_buffer[1] == 'x')
-    {
-        char*   hEnd = NULL;
-        int     iValue = strtol(m_buffer+2, &hEnd, 16);
-        if (GetIsNumberSeparator(hEnd[0]))
-        {
-            m_buffer = hEnd;
-            m_token  = HLSLToken_IntLiteral;
-            m_iValue = iValue;
+    const bool hex = m_bufferEnd - m_buffer > 2 && m_buffer[0] == '0' && (m_buffer[1] == 'x' || m_buffer[1] == 'X');
+    char* integerEnd = NULL;
+    errno = 0;
+    const unsigned long long integer = strtoull(m_buffer, &integerEnd, hex ? 16 : 10);
+    const bool overflow = errno == ERANGE || integer > std::numeric_limits<std::uint32_t>::max();
+    if (integerEnd > m_buffer && (integerEnd[0] == 'u' || integerEnd[0] == 'U' || (integerEnd[0] != '.' && GetIsNumberSeparator(integerEnd[0])))) {
+        const bool unsignedSuffix = integerEnd[0] == 'u' || integerEnd[0] == 'U';
+        if (unsignedSuffix) ++integerEnd;
+        if (GetIsNumberSeparator(integerEnd[0])) {
+            if (overflow) { Error("Integer literal exceeds 32 bits"); m_token = HLSLToken_EndOfStream; return true; }
+            m_buffer = integerEnd;
+            m_token = unsignedSuffix || integer > std::numeric_limits<int>::max() ? HLSLToken_UintLiteral : HLSLToken_IntLiteral;
+            const std::uint32_t bits = static_cast<std::uint32_t>(integer);
+            static_assert(sizeof(bits) == sizeof(m_iValue), "HLSL integers require 32 bits");
+            memcpy(&m_iValue, &bits, sizeof(bits));
             return true;
         }
     }
-
-    char* fEnd = NULL;
-    double fValue = String_ToDouble(m_buffer, &fEnd);
-
-    if (fEnd == m_buffer)
-    {
-        return false;
-    }
-
-    char*  iEnd = NULL;
-    int    iValue = String_ToInteger(m_buffer, &iEnd);
-
-    // If the character after the number is an f then the f is treated as part
-    // of the number (to handle 1.0f syntax).
-	if( ( fEnd[ 0 ] == 'f' || fEnd[ 0 ] == 'h' ) && fEnd < m_bufferEnd )
-	{
-		++fEnd;
-	}
-
-	if( fEnd > iEnd && GetIsNumberSeparator( fEnd[ 0 ] ) )
-	{
-		m_buffer = fEnd;
-		m_token = fEnd[ 0 ] == 'f' ? HLSLToken_FloatLiteral : HLSLToken_HalfLiteral;
-        m_fValue = static_cast<float>(fValue);
-        return true;
-    }
-    else if (iEnd > m_buffer && GetIsNumberSeparator(iEnd[0]))
-    {
-        m_buffer = iEnd;
-        m_token  = HLSLToken_IntLiteral;
-        m_iValue = iValue;
+    char* floatEnd = NULL;
+    const double value = String_ToDouble(m_buffer, &floatEnd);
+    if (floatEnd == m_buffer || hex) return false;
+    const char suffix = floatEnd[0];
+    if (suffix == 'f' || suffix == 'F' || suffix == 'h' || suffix == 'H') ++floatEnd;
+    if (GetIsNumberSeparator(floatEnd[0])) {
+        m_buffer = floatEnd;
+        m_token = suffix == 'h' || suffix == 'H' ? HLSLToken_HalfLiteral : HLSLToken_FloatLiteral;
+        if (!std::isfinite(value) || std::abs(value) > std::numeric_limits<float>::max()) {
+            Error("Floating literal exceeds finite float range"); m_token = HLSLToken_EndOfStream; return true;
+        }
+        m_fValue = static_cast<float>(value);
         return true;
     }
 
@@ -602,6 +605,15 @@ void HLSLTokenizer::GetTokenName(int token, char buffer[s_maxIdentifier])
     {
         switch (token)
         {
+        case HLSLToken_LeftShiftEqual: strcpy(buffer, "<<="); break;
+        case HLSLToken_RightShiftEqual: strcpy(buffer, ">>="); break;
+        case HLSLToken_LeftShift: strcpy(buffer, "<<"); break;
+        case HLSLToken_RightShift: strcpy(buffer, ">>"); break;
+        case HLSLToken_ModEqual: strcpy(buffer, "%="); break;
+        case HLSLToken_BitAndEqual: strcpy(buffer, "&="); break;
+        case HLSLToken_BitOrEqual: strcpy(buffer, "|="); break;
+        case HLSLToken_BitXorEqual: strcpy(buffer, "^="); break;
+        case HLSLToken_UintLiteral: strcpy(buffer, "uint"); break;
         case HLSLToken_PlusPlus:
             strcpy(buffer, "++");
             break;

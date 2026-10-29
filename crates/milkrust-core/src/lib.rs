@@ -2379,7 +2379,7 @@ pub fn create_milkrust_shape_vertices(shape: &MilkRustIndexedEntry) -> Vec<f64> 
     }
     let sides = milkrust_entry_number(shape, &["sides", "numsides"], 4.0)
         .floor()
-        .clamp(3.0, 100.0) as usize;
+        .clamp(3.0, 500.0) as usize;
     let radius = milkrust_entry_number(shape, &["rad", "radius"], 0.1).clamp(-1.0e6, 1.0e6);
     let center_x = milkrust_entry_number(shape, &["x"], 0.5) * 2.0 - 1.0;
     let center_y = 1.0 - milkrust_entry_number(shape, &["y"], 0.5) * 2.0;

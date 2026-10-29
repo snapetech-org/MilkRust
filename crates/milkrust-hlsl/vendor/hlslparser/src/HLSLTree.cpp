@@ -408,6 +408,15 @@ bool HLSLTree::GetExpressionValue(HLSLExpression * expression, int & value)
                 if (value2 == 0) throw std::range_error("HLSL integer division by zero");
                 value = CheckedConstant(std::int64_t(value1) / value2);
                 return true;
+            case HLSLBinaryOp_Mod:
+                if (value2 == 0) throw std::range_error("HLSL integer remainder by zero");
+                value = int(std::int64_t(value1) % value2); return true;
+            case HLSLBinaryOp_LeftShift:
+            case HLSLBinaryOp_RightShift:
+                if (value2 < 0 || value2 > 31) throw std::range_error("HLSL constant shift is out of range");
+                if (binaryExpression->binaryOp == HLSLBinaryOp_LeftShift) value = CheckedConstant(std::int64_t(value1) * (std::int64_t(1) << value2));
+                else value = int(value1 >= 0 ? std::int64_t(value1) / (std::int64_t(1) << value2) : -1 - ((-1 - std::int64_t(value1)) / (std::int64_t(1) << value2)));
+                return true;
             case HLSLBinaryOp_Less:
                 value = value1 < value2;
                 return true;

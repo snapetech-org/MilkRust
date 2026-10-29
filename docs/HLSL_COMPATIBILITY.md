@@ -182,3 +182,25 @@ closes these specific emitter gaps; it is not a claim of all HLSL models or
 reference conformance. Rules were checked against Microsoft's
 [per-component math documentation](https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl/dx-graphics-hlsl-per-component-math)
 and [conversion specification](https://microsoft.github.io/hlsl-specs/specs/4-Conv.html).
+
+## Legacy operators and intrinsics checkpoint
+
+Remainder, shifts and their compound forms now reach the parser/emitter with
+unsigned decimal/hex literals and checked constant operations. Cast precedence
+and nested conditionals are explicit. The lexer rejects oversized identifiers
+before copying, rejects overflowing numeric literals, and prints finite floats
+with round-trip precision and a fixed decimal locale; small shader constants
+are no longer rounded to zero by six-decimal formatting.
+
+Legacy intrinsic lowering includes reciprocal/reciprocal-square-root,
+multiply-add, any/all, ties-to-even round, truncation, logarithm-base-ten,
+finite checks, bit reinterpretation, and scalar/vector/matrix component math.
+`modf`, `frexp` and `sincos` declare their output parameters correctly. `frexp`
+uses an ES 3.0-compatible exponent/mantissa split, including a subnormal
+normalization path. User-defined overloads remain separate from intrinsics.
+
+The numerical `intrinsics.hlsl` browser control and native compiler cases are
+committed but unrun. Driver handling of subnormals remains target-dependent;
+these implementations do not turn the source-only checkpoint into executed
+conformance evidence. Microsoft's intrinsic index and individual function
+contracts are the semantic references, not another renderer's source code.

@@ -23,6 +23,9 @@
     "Shared numeric promotion/truncation rules and corrected rectangular dimensions",
     "HLSL row-major constructors, matrix splats, component multiplication, selection reads/writes and mul dot semantics",
     "Function-local temporaries for matrix/converting out and inout arguments with single-evaluation indices",
-    "Typed vector comparison, logical and conditional lowering; correct unary bitwise complement"
+    "Typed vector comparison, logical and conditional lowering; correct unary bitwise complement",
+    "Remainder, shifts and compound bit operators; unsigned literals and cast/conditional precedence",
+    "Legacy math, matrix component intrinsics, typed output parameters and IEEE-754 reinterpretation",
+    "Bounded identifiers/numeric literals and locale-independent round-trip float serialization"
   ]
 }

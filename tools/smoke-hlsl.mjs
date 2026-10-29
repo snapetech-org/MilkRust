@@ -7,6 +7,7 @@ import { chromium } from '@playwright/test';
 
 const root = resolve('pkg');
 const cases = [
+  { id: 'intrinsic-contract', shader: await readFile('crates/milkrust-hlsl/tests/fixtures/intrinsics.hlsl', 'utf8'), expected: [191,64,128] },
   { id: 'numeric-contract', shader: await readFile('crates/milkrust-hlsl/tests/fixtures/numeric.hlsl', 'utf8'), expected: [64,128,191] },
   { id: 'typed-loop-matrix', shader: `#define N 3
 struct Tint { float3 value; };

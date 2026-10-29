@@ -492,6 +492,7 @@ void GLSLGenerator::OutputExpressionList(HLSLExpression* expression, HLSLArgumen
 }
 
 #include "GLSLNumeric.inl"
+#include "GLSLIntrinsics.inl"
 
 void GLSLGenerator::OutputExpression(HLSLExpression* expression, const HLSLType* dstType)
 {
@@ -547,7 +548,7 @@ void GLSLGenerator::OutputExpression(HLSLExpression* expression, const HLSLType*
             m_writer.Write("%d", literalExpression->iValue);
             break;
         case HLSLBaseType_Uint:
-            m_writer.Write("%uu", literalExpression->iValue);
+            m_writer.Write("%uu", static_cast<unsigned int>(literalExpression->iValue));
 	    break;
 	case HLSLBaseType_Bool:
             m_writer.Write("%s", literalExpression->bValue ? "true" : "false");
@@ -602,7 +603,10 @@ void GLSLGenerator::OutputExpression(HLSLExpression* expression, const HLSLType*
         if (IsAssignOp(binaryExpression->binaryOp)) {
             const char* operation = binaryExpression->binaryOp == HLSLBinaryOp_Assign ? "=" :
                 binaryExpression->binaryOp == HLSLBinaryOp_AddAssign ? "+" : binaryExpression->binaryOp == HLSLBinaryOp_SubAssign ? "-" :
-                binaryExpression->binaryOp == HLSLBinaryOp_MulAssign ? "*" : "/";
+                binaryExpression->binaryOp == HLSLBinaryOp_MulAssign ? "*" : binaryExpression->binaryOp == HLSLBinaryOp_DivAssign ? "/" :
+                binaryExpression->binaryOp == HLSLBinaryOp_ModAssign ? "%" : binaryExpression->binaryOp == HLSLBinaryOp_BitAndAssign ? "&" :
+                binaryExpression->binaryOp == HLSLBinaryOp_BitOrAssign ? "|" : binaryExpression->binaryOp == HLSLBinaryOp_BitXorAssign ? "^" :
+                binaryExpression->binaryOp == HLSLBinaryOp_LeftShiftAssign ? "<<" : ">>";
             if (OutputMatrixSelection(binaryExpression->expression1, binaryExpression->expression2, operation)) return;
         }
         if (IsMatrixType(binaryExpression->expressionType.baseType) &&
@@ -613,6 +617,25 @@ void GLSLGenerator::OutputExpression(HLSLExpression* expression, const HLSLType*
                 "inout " + type + " a, " + type + " b", "a = matrixCompMult(a,b); return a;") : "matrixCompMult";
             m_writer.Write("%s(", name.c_str());
             OutputExpression(binaryExpression->expression1, assign ? NULL : &binaryExpression->expressionType);
+            m_writer.Write(", "); OutputExpression(binaryExpression->expression2, &binaryExpression->expressionType); m_writer.Write(")"); return;
+        }
+        if ((binaryExpression->binaryOp == HLSLBinaryOp_Mod || binaryExpression->binaryOp == HLSLBinaryOp_ModAssign) &&
+            (ScalarBaseType[binaryExpression->expressionType.baseType] == HLSLBaseType_Float || ScalarBaseType[binaryExpression->expressionType.baseType] == HLSLBaseType_Half)) {
+            const bool assign = binaryExpression->binaryOp == HLSLBinaryOp_ModAssign;
+            const std::string type = GetTypeName(binaryExpression->expressionType);
+            std::string value = "a-b*trunc(a/b)";
+            if (IsMatrixType(binaryExpression->expressionType.baseType)) {
+                value = type + "(";
+                for (int c = 0; c < NumericWidth(binaryExpression->expressionType.baseType); ++c) {
+                    if (c) value += ",";
+                    const std::string column = "[" + std::to_string(c) + "]";
+                    value += "a" + column + "-b" + column + "*trunc(a" + column + "/b" + column + ")";
+                }
+                value += ")";
+            }
+            const auto name = NumericHelper("remainder:" + type + (assign ? "assign" : ""), type,
+                (assign ? "inout " : "") + type + " a," + type + " b", assign ? "a=" + value + ";return a;" : "return " + value + ";");
+            m_writer.Write("%s(", name.c_str()); OutputExpression(binaryExpression->expression1, assign ? NULL : &binaryExpression->expressionType);
             m_writer.Write(", "); OutputExpression(binaryExpression->expression2, &binaryExpression->expressionType); m_writer.Write(")"); return;
         }
         HLSLType commonType(CommonNumericType(binaryExpression->expression1->expressionType.baseType, binaryExpression->expression2->expressionType.baseType));
@@ -667,6 +690,15 @@ void GLSLGenerator::OutputExpression(HLSLExpression* expression, const HLSLType*
 			case HLSLBinaryOp_GreaterEqual: op = " >= "; dstType1 = dstType2 = &commonType; break;
 			case HLSLBinaryOp_Equal:        op = " == "; dstType1 = dstType2 = &commonType; break;
 			case HLSLBinaryOp_NotEqual:     op = " != "; dstType1 = dstType2 = &commonType; break;
+            case HLSLBinaryOp_Mod: op = " % "; dstType1 = dstType2 = &binaryExpression->expressionType; break;
+            case HLSLBinaryOp_LeftShift: op = " << "; dstType1 = dstType2 = &binaryExpression->expressionType; break;
+            case HLSLBinaryOp_RightShift: op = " >> "; dstType1 = dstType2 = &binaryExpression->expressionType; break;
+            case HLSLBinaryOp_ModAssign: op = " %= "; dstType2 = &binaryExpression->expressionType; break;
+            case HLSLBinaryOp_BitAndAssign: op = " &= "; dstType2 = &binaryExpression->expressionType; break;
+            case HLSLBinaryOp_BitOrAssign: op = " |= "; dstType2 = &binaryExpression->expressionType; break;
+            case HLSLBinaryOp_BitXorAssign: op = " ^= "; dstType2 = &binaryExpression->expressionType; break;
+            case HLSLBinaryOp_LeftShiftAssign: op = " <<= "; dstType2 = &binaryExpression->expressionType; break;
+            case HLSLBinaryOp_RightShiftAssign: op = " >>= "; dstType2 = &binaryExpression->expressionType; break;
 			case HLSLBinaryOp_Assign:       op = " = ";  dstType2 = &binaryExpression->expressionType; break;
 			case HLSLBinaryOp_AddAssign:    op = " += "; dstType2 = &binaryExpression->expressionType; break;
 			case HLSLBinaryOp_SubAssign:    op = " -= "; dstType2 = &binaryExpression->expressionType; break;
@@ -748,6 +780,11 @@ void GLSLGenerator::OutputExpression(HLSLExpression* expression, const HLSLType*
         // Handle intrinsic funtions that are different between HLSL and GLSL.
         bool handled = false;
         if (OutputCallWithCopyOut(functionCall)) return;
+        if (!functionCall->function->intrinsic) {
+            m_writer.Write("%s(", GetSafeIdentifierName(functionCall->function->name));
+            OutputExpressionList(functionCall->argument, functionCall->function->argument); m_writer.Write(")"); return;
+        }
+        if (OutputLegacyIntrinsic(functionCall)) return;
         const char* functionName = functionCall->function->name;
 
         if (String_Equal(functionName, "mul"))

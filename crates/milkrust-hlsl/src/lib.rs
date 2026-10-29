@@ -75,6 +75,26 @@ mod tests {
     }
 
     #[test]
+    fn legacy_intrinsic_contract_compiles() {
+        compile(include_str!("../tests/fixtures/intrinsics.hlsl"), "main")
+            .expect("legacy intrinsic control must reach GLSL generation");
+    }
+
+    #[test]
+    fn token_and_numeric_limits_return_errors() {
+        let identifier = "a".repeat(300);
+        for body in [format!("float {identifier}=1;"), "float v=1e100;".into(),
+            "uint v=0x100000000u;".into(), "int v=4294967296;".into()] {
+            let source = format!("float4 main(float2 uv:TEXCOORD0):COLOR0 {{ {body} return 1; }}");
+            assert!(compile(&source, "main").is_err());
+        }
+        for bound in ["3%0", "1<<32", "1<<-1"] {
+            let source = format!("float4 main(float2 uv:TEXCOORD0):COLOR0 {{ float data[{bound}]; return 1; }}");
+            assert!(compile(&source, "main").is_err());
+        }
+    }
+
+    #[test]
     fn invalid_component_selections_are_rejected() {
         for statement in [
             "float2 v=0; float x=v.z;",

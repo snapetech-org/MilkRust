@@ -1,5 +1,10 @@
 
 #include "Engine.h"
+#include <sstream>
+#include <iomanip>
+#include <locale>
+#include <limits>
+#include <cmath>
 
 #include <stdio.h>  // vsnprintf
 #include <string.h> // strcmp, strcasecmp
@@ -72,7 +77,13 @@ int String_Printf(char * buffer, int size, const char * format, ...) {
 }
 
 int String_FormatFloat(char * buffer, int size, float value) {
-    return String_Printf(buffer, size, "%f", value);
+    if (!std::isfinite(value)) throw std::range_error("Non-finite HLSL literal");
+    std::ostringstream stream;
+    stream.imbue(std::locale::classic());
+    stream << std::setprecision(std::numeric_limits<float>::max_digits10) << value;
+    std::string literal = stream.str();
+    if (literal.find_first_of(".eE") == std::string::npos) literal += ".0";
+    return String_Printf(buffer, size, "%s", literal.c_str());
 }
 
 bool String_Equal(const char * a, const char * b) {
@@ -92,7 +103,29 @@ bool String_EqualNoCase(const char * a, const char * b) {
 }
 
 double String_ToDouble(const char * str, char ** endptr) {
-	return strtod(str, endptr);
+    const char* end = str;
+    if (*end == '+' || *end == '-') ++end;
+    bool digits = false;
+    while (*end >= '0' && *end <= '9') { digits = true; ++end; }
+    if (*end == '.') {
+        ++end;
+        while (*end >= '0' && *end <= '9') { digits = true; ++end; }
+    }
+    if (!digits) { *endptr = const_cast<char*>(str); return 0.0; }
+    if (*end == 'e' || *end == 'E') {
+        const char* exponent = end + 1;
+        if (*exponent == '+' || *exponent == '-') ++exponent;
+        const char* firstDigit = exponent;
+        while (*exponent >= '0' && *exponent <= '9') ++exponent;
+        if (exponent != firstDigit) end = exponent;
+    }
+    if (end - str > 1023) throw std::length_error("HLSL numeric literal limit");
+    std::istringstream stream(std::string(str, end));
+    stream.imbue(std::locale::classic());
+    double value = 0;
+    if (!(stream >> value)) throw std::range_error("Invalid HLSL floating literal");
+    *endptr = const_cast<char*>(end);
+    return value;
 }
 
 int String_ToInteger(const char * str, char ** endptr) {

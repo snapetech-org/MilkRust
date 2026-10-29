@@ -33,6 +33,10 @@ GPU capture or device run was performed for this source-only continuation.
   structures, arrays, matrices, control flow and legacy sampling are implemented
   behind bounded preprocessing/compiler boundaries. See
   [the exact profile and limits](docs/HLSL_COMPATIBILITY.md).
+- Typed numeric lowering covers HLSL matrix orientation/splats/component math,
+  rectangular linear algebra, writable selections, converting function outputs,
+  vector logic and legacy intrinsics. Bounded numeric/identifier parsing and
+  round-trip float output have authored numerical controls; execution is unrun.
 - All 24 legacy rotation matrices, constant registers `_c0.._c13`, canonical
   coordinate/roam/mip helpers and matched blur range encoding/decoding are bound
   in native and WebGL hosts. Regression sources are present but unrun.

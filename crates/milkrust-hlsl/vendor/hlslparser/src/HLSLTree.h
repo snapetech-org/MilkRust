@@ -205,11 +205,21 @@ enum HLSLBinaryOp
     HLSLBinaryOp_BitAnd,
     HLSLBinaryOp_BitOr,
     HLSLBinaryOp_BitXor,
+    HLSLBinaryOp_Mod,
+    HLSLBinaryOp_LeftShift,
+    HLSLBinaryOp_RightShift,
     HLSLBinaryOp_Assign,
     HLSLBinaryOp_AddAssign,
     HLSLBinaryOp_SubAssign,
     HLSLBinaryOp_MulAssign,
     HLSLBinaryOp_DivAssign,
+    HLSLBinaryOp_ModAssign,
+    HLSLBinaryOp_BitAndAssign,
+    HLSLBinaryOp_BitOrAssign,
+    HLSLBinaryOp_BitXorAssign,
+    HLSLBinaryOp_LeftShiftAssign,
+    HLSLBinaryOp_RightShiftAssign,
+
 };
 
 inline bool IsCompareOp( HLSLBinaryOp op )
@@ -238,11 +248,7 @@ inline bool IsLogicOp( HLSLBinaryOp op )
 
 inline bool IsAssignOp( HLSLBinaryOp op )
 {
-    return op == HLSLBinaryOp_Assign ||
-        op == HLSLBinaryOp_AddAssign ||
-        op == HLSLBinaryOp_SubAssign ||
-        op == HLSLBinaryOp_MulAssign ||
-        op == HLSLBinaryOp_DivAssign;
+    return op >= HLSLBinaryOp_Assign && op <= HLSLBinaryOp_RightShiftAssign;
 }
 
 
@@ -492,6 +498,7 @@ struct HLSLFunction : public HLSLStatement
         argument        = NULL;
         numArguments    = 0;
         numOutputArguments = 0;
+        intrinsic = false;
         forward         = NULL;
     }
     const char*         name;
@@ -499,7 +506,8 @@ struct HLSLFunction : public HLSLStatement
     const char*         semantic;
     const char*         sv_semantic;
     int                 numArguments;
-    int                 numOutputArguments;     // Includes out and inout arguments.
+    int                 numOutputArguments;
+    bool                intrinsic;
     HLSLArgument*       argument;
     HLSLStatement*      statement;
     HLSLFunction*       forward; // Which HLSLFunction this one forward-declares

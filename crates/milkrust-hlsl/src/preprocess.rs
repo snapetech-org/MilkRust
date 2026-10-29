@@ -34,7 +34,8 @@ pub fn tokens(source: &str) -> Result<Vec<String>, String> {
             i += 1;
         } else {
             i += 1;
-            if i < bytes.len() && ["##", "&&", "||", "<<", ">>", "<=", ">=", "==", "!=", "++", "--", "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^="].contains(&&source[start..i + 1]) { i += 1; }
+            if i + 1 < bytes.len() && ["<<=", ">>="].contains(&&source[start..i + 2]) { i += 2; }
+            else if i < bytes.len() && ["##", "&&", "||", "<<", ">>", "<=", ">=", "==", "!=", "++", "--", "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^="].contains(&&source[start..i + 1]) { i += 1; }
         }
         if i - start > 1023 { return Err("HLSL token length limit exceeded".into()); }
         out.push(source[start..i].to_string());
@@ -302,6 +303,10 @@ pub fn preprocess(source: &str) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn compound_shifts_keep_their_token_identity() {
+        assert_eq!(tokens("x<<=2;y>>=1;").unwrap(), ["x", "<<=", "2", ";", "y", ">>=", "1", ";"]);
+    }
     #[test]
     fn macros_conditions_and_paste() {
         assert_eq!(preprocess("#define Q(n) q ## n\n#define SCALE(x) ((x)*2)\n#if defined(Q) && (4 << 1) == 8\nret = SCALE(Q(1));\n#else\n#error inactive\n#endif").unwrap(), "ret = ( ( q1 ) * 2 ) ;");

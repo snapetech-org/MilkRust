@@ -106,6 +106,7 @@ bool GLSLGenerator::OutputMatrixSelection(HLSLExpression* expression, HLSLExpres
         if (strcmp(operation, "=") != 0) body += type + " oldValue = " + read + "; ";
         body += type + " nextValue = ";
         if (strcmp(operation, "=") == 0) body += "v; ";
+        else if (strcmp(operation, "%") == 0) body += "oldValue - v * trunc(oldValue / v); ";
         else body += "oldValue " + std::string(operation) + " " + (value ? "v" : type + "(1)") + "; ";
         for (int n = 0; n < count; ++n) {
             if (selection.index) body += "if (j == " + std::to_string(n) + ") ";

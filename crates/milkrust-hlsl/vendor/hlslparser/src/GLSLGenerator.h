@@ -77,6 +77,7 @@ private:
     bool OutputMatrixSelection(HLSLExpression* expression, HLSLExpression* value = NULL, const char* operation = NULL, bool postfix = false);
     void OutputMatrixConstructor(HLSLConstructorExpression* expression);
     bool OutputCallWithCopyOut(HLSLFunctionCall* expression);
+    bool OutputLegacyIntrinsic(HLSLFunctionCall* expression);
     HLSLIdentifierExpression* LocalTemporary(const HLSLType& type);
     HLSLExpression* FreezeLvalue(HLSLExpression* expression);
     void InsertLocalTemporaries(size_t offset);

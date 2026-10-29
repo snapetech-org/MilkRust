@@ -10,7 +10,7 @@ to the enclosing preset. Runtime fields are not serialized into exported source.
 Errors propagate through the checked frame budget. Canonical boolean values take
 precedence over their saved aliases, so setting a flag to zero can disable it.
 
-Shapes use up to 1024 instances with `instance`, at most 100 sides, top-down EEL
+Shapes use up to 1024 instances with `instance`, at most 500 sides, top-down EEL
 centers, the classic quarter-pi angular offset and aspect-correct geometry/UVs.
 Their two colors/alphas form a radial gradient on both solid and textured fills.
 Thick outlines use portable offset strokes. The scene has an explicit command

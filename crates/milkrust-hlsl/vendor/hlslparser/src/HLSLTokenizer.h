@@ -103,10 +103,20 @@ enum HLSLToken
     HLSLToken_AndAnd,       // &&
     HLSLToken_BarBar,       // ||
 
+    HLSLToken_LeftShift,
+    HLSLToken_RightShift,
+    HLSLToken_ModEqual,
+    HLSLToken_BitAndEqual,
+    HLSLToken_BitOrEqual,
+    HLSLToken_BitXorEqual,
+    HLSLToken_LeftShiftEqual,
+    HLSLToken_RightShiftEqual,
+
     // Other token types.
     HLSLToken_FloatLiteral,
 	HLSLToken_HalfLiteral,
     HLSLToken_IntLiteral,
+    HLSLToken_UintLiteral,
     HLSLToken_Identifier,
 
     HLSLToken_EndOfStream,
