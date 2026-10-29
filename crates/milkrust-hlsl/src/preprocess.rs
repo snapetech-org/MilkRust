@@ -5,16 +5,23 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 const MAX_TOKENS: usize = 65536;
 const MAX_EXPANSIONS: usize = 16384;
 #[derive(Clone)]
-struct Macro { parameters: Option<Vec<String>>, body: Vec<String> }
+struct SourceToken { text: String, space_before: bool }
+#[derive(Clone)]
+struct Macro { parameters: Option<Vec<String>>, body: Vec<SourceToken> }
 #[derive(Clone, Copy)]
 struct Branch { parent: bool, taken: bool, active: bool, saw_else: bool }
 
 pub fn tokens(source: &str) -> Result<Vec<String>, String> {
+    Ok(source_tokens(source)?.into_iter().map(|token| token.text).collect())
+}
+
+fn source_tokens(source: &str) -> Result<Vec<SourceToken>, String> {
     let bytes = source.as_bytes();
     let mut out = Vec::new();
     let mut i = 0;
+    let mut space_before = false;
     while i < bytes.len() {
-        if bytes[i].is_ascii_whitespace() { i += 1; continue; }
+        if bytes[i].is_ascii_whitespace() { space_before = true; i += 1; continue; }
         if !bytes[i].is_ascii() || bytes[i] == 0 { return Err("Non-ASCII HLSL token".into()); }
         let start = i;
         if bytes[i].is_ascii_alphabetic() || bytes[i] == b'_' {
@@ -40,7 +47,8 @@ pub fn tokens(source: &str) -> Result<Vec<String>, String> {
                     .iter().any(|op| pair == op.as_slice())) { i += 1; }
         }
         if i - start > 1023 { return Err("HLSL token length limit exceeded".into()); }
-        out.push(source[start..i].to_string());
+        out.push(SourceToken { text: source[start..i].to_string(), space_before });
+        space_before = false;
         if out.len() > MAX_TOKENS { return Err("HLSL token limit exceeded".into()); }
     }
     Ok(out)
@@ -85,26 +93,39 @@ fn identifier(s: &str) -> bool {
 // together with the remaining input. A global disabled set loses the boundary
 // between an object-like alias and a following function invocation.
 #[derive(Clone)]
-struct ExpansionToken { text: String, hidden: [u64; 8], depth: u8 }
+struct ExpansionToken { text: String, space_before: bool, hidden: [u64; 8], depth: u8 }
 impl ExpansionToken {
-    fn plain(text: String) -> Self { Self { text, hidden: [0; 8], depth: 0 } }
+    fn plain(text: String) -> Self { Self::with_space(text, false) }
+    fn with_space(text: String, space_before: bool) -> Self {
+        Self { text, space_before, hidden: [0; 8], depth: 0 }
+    }
     fn suppress(&mut self, hidden: &[u64; 8], depth: u8) {
         for (value, added) in self.hidden.iter_mut().zip(hidden) { *value |= added; }
         self.depth = self.depth.max(depth);
     }
 }
 
+fn token_cost(token: &ExpansionToken) -> usize { token.text.len().saturating_add(1) }
+
 fn expand_stream(input: Vec<ExpansionToken>, macros: &BTreeMap<String, Macro>,
     ids: &BTreeMap<&str, usize>, nesting: u8, budget: &mut usize) -> Result<Vec<ExpansionToken>, String> {
     if nesting > 64 { return Err("Macro expansion depth exceeded".into()); }
+    let mut queued_bytes = input.iter().map(token_cost).sum::<usize>();
+    if queued_bytes > super::MAX_SOURCE { return Err("Preprocessor output byte limit exceeded".into()); }
     let mut queue: VecDeque<_> = input.into();
     let mut out = Vec::new();
+    let mut output_bytes = 0usize;
     while let Some(token) = queue.pop_front() {
+        queued_bytes = queued_bytes.saturating_sub(token_cost(&token));
         let Some((&id, definition)) = ids.get(token.text.as_str()).zip(macros.get(&token.text)) else {
+            output_bytes = output_bytes.saturating_add(token_cost(&token));
+            if output_bytes.saturating_add(queued_bytes) > super::MAX_SOURCE { return Err("Preprocessor output byte limit exceeded".into()); }
             out.push(token); continue;
         };
         if token.hidden[id / 64] & (1u64 << (id % 64)) != 0 ||
             (definition.parameters.is_some() && queue.front().map(|t| t.text.as_str()) != Some("(")) {
+            output_bytes = output_bytes.saturating_add(token_cost(&token));
+            if output_bytes.saturating_add(queued_bytes) > super::MAX_SOURCE { return Err("Preprocessor output byte limit exceeded".into()); }
             out.push(token); continue;
         }
         let depth = token.depth.max(nesting).checked_add(1).ok_or("Macro expansion depth exceeded")?;
@@ -140,19 +161,49 @@ fn expand_stream(input: Vec<ExpansionToken>, macros: &BTreeMap<String, Macro>,
         hidden[id / 64] |= 1u64 << (id % 64);
         let mut expanded_arguments: Vec<Option<Vec<ExpansionToken>>> = vec![None; arguments.len()];
         let mut replacement = Vec::new();
-        for (j, body_token) in definition.body.iter().enumerate() {
-            if body_token == "#" { return Err("Stringifying shader macros is unsupported".into()); }
-            let parameter = definition.parameters.as_ref().and_then(|p| p.iter().position(|p| p == body_token));
+        let mut replacement_bytes = 0usize;
+        let mut j = 0;
+        while j < definition.body.len() {
+            let body_token = &definition.body[j];
+            if body_token.text == "#" {
+                let Some(next) = definition.body.get(j + 1) else { return Err("Stringification requires a macro parameter".into()); };
+                let Some(index) = definition.parameters.as_ref().and_then(|p| p.iter().position(|p| p == &next.text)) else {
+                    return Err("Stringification requires a macro parameter".into());
+                };
+                if j > 0 && definition.body[j - 1].text == "##" ||
+                    definition.body.get(j + 2).map(|token| token.text.as_str()) == Some("##") {
+                    return Err("Stringification cannot be combined with token pasting".into());
+                }
+                let value = stringify_argument(&arguments[index])?;
+                replacement_bytes = replacement_bytes.saturating_add(value.len().saturating_add(1));
+                if replacement_bytes > super::MAX_SOURCE { return Err("Macro replacement byte limit exceeded".into()); }
+                replacement.push(ExpansionToken::with_space(value, body_token.space_before));
+                j += 2;
+                continue;
+            }
+            let parameter = definition.parameters.as_ref().and_then(|p| p.iter().position(|p| p == &body_token.text));
             if let Some(index) = parameter {
-                let paste = j > 0 && definition.body[j - 1] == "##" || definition.body.get(j + 1).map(String::as_str) == Some("##");
+                let paste = j > 0 && definition.body[j - 1].text == "##" || definition.body.get(j + 1).map(|token| token.text.as_str()) == Some("##");
                 if !paste && expanded_arguments[index].is_none() {
                     expanded_arguments[index] = Some(expand_stream(arguments[index].clone(), macros, ids, nesting + 1, budget)?);
                 }
                 let values = if paste { &arguments[index] } else { expanded_arguments[index].as_ref().expect("expanded argument") };
-                if paste && values.is_empty() { replacement.push(ExpansionToken::plain(String::new())); }
-                else { replacement.extend(values.iter().cloned()); }
-            } else { replacement.push(ExpansionToken::plain(body_token.clone())); }
+                if paste && values.is_empty() { replacement.push(ExpansionToken::with_space(String::new(), body_token.space_before)); }
+                else {
+                    let added_bytes = values.iter().map(token_cost).sum::<usize>();
+                    replacement_bytes = replacement_bytes.saturating_add(added_bytes);
+                    if replacement_bytes > super::MAX_SOURCE { return Err("Macro replacement byte limit exceeded".into()); }
+                    let start = replacement.len();
+                    replacement.extend(values.iter().cloned());
+                    if replacement.len() > start { replacement[start].space_before = body_token.space_before; }
+                }
+            } else {
+                replacement_bytes = replacement_bytes.saturating_add(body_token.text.len().saturating_add(1));
+                if replacement_bytes > super::MAX_SOURCE { return Err("Macro replacement byte limit exceeded".into()); }
+                replacement.push(ExpansionToken::with_space(body_token.text.clone(), body_token.space_before));
+            }
             if replacement.len() > MAX_TOKENS { return Err("Macro replacement token limit exceeded".into()); }
+            j += 1;
         }
         let mut pasted: Vec<ExpansionToken> = Vec::new();
         let mut replacement = replacement.into_iter();
@@ -169,9 +220,30 @@ fn expand_stream(input: Vec<ExpansionToken>, macros: &BTreeMap<String, Macro>,
         }
         pasted.retain(|t| !t.text.is_empty()); // Empty pasted arguments are placemarkers.
         if out.len() + queue.len() + pasted.len() > MAX_TOKENS { return Err("Macro output limit exceeded".into()); }
+        let pasted_bytes = pasted.iter().map(token_cost).sum::<usize>();
+        if output_bytes.saturating_add(queued_bytes).saturating_add(pasted_bytes) > super::MAX_SOURCE {
+            return Err("Preprocessor output byte limit exceeded".into());
+        }
+        queued_bytes = queued_bytes.saturating_add(pasted_bytes);
         for mut next in pasted.into_iter().rev() { next.suppress(&hidden, depth); queue.push_front(next); }
     }
     Ok(out)
+}
+
+fn stringify_argument(argument: &[ExpansionToken]) -> Result<String, String> {
+    let mut literal = String::new();
+    literal.push('"');
+    for (index, token) in argument.iter().enumerate() {
+        if index > 0 && token.space_before { literal.push(' '); }
+        for character in token.text.chars() {
+            if matches!(character, '\\' | '"') { literal.push('\\'); }
+            literal.push(character);
+            if literal.len() > super::MAX_SOURCE { return Err("Stringified macro argument exceeds the output byte limit".into()); }
+        }
+    }
+    literal.push('"');
+    if literal.len() > super::MAX_SOURCE { return Err("Stringified macro argument exceeds the output byte limit".into()); }
+    Ok(literal)
 }
 
 fn expand(input: &[String], macros: &BTreeMap<String, Macro>, disabled: &mut BTreeSet<String>,
@@ -180,7 +252,7 @@ fn expand(input: &[String], macros: &BTreeMap<String, Macro>, disabled: &mut BTr
     let ids: BTreeMap<&str, usize> = macros.keys().enumerate().map(|(i, name)| (name.as_str(), i)).collect();
     let mut hidden = [0u64; 8];
     for name in disabled.iter() { if let Some(&id) = ids.get(name.as_str()) { hidden[id / 64] |= 1u64 << (id % 64); } }
-    let input = input.iter().map(|text| ExpansionToken { text: text.clone(), hidden, depth: depth as u8 }).collect();
+    let input = input.iter().map(|text| ExpansionToken { text: text.clone(), space_before: false, hidden, depth: depth as u8 }).collect();
     Ok(expand_stream(input, macros, &ids, depth as u8, budget)?.into_iter().map(|t| t.text).collect())
 }
 
@@ -271,19 +343,24 @@ pub fn preprocess(source: &str) -> Result<String, String> {
     let mut macros: BTreeMap<String, Macro> = BTreeMap::new();
     let mut branches: Vec<Branch> = Vec::new();
     let mut result = Vec::new();
-    let mut pending = Vec::new();
+    let mut result_bytes = 0usize;
+    let mut pending: Vec<ExpansionToken> = Vec::new();
     let mut budget = 0;
     for (line_number, line) in clean.lines().enumerate() {
         let line = line.trim();
         let active = branches.last().map_or(true, |b| b.active);
         if let Some(directive) = line.strip_prefix('#') {
-            result.extend(expand(&pending, &macros, &mut BTreeSet::new(), 0, &mut budget)?);
-            pending.clear();
+            let ids: BTreeMap<&str, usize> = macros.keys().enumerate().map(|(i, name)| (name.as_str(), i)).collect();
+            let expanded = expand_stream(std::mem::take(&mut pending), &macros, &ids, 0, &mut budget)?;
+            result_bytes = result_bytes.saturating_add(expanded.iter().map(token_cost).sum::<usize>());
+            if result_bytes > super::MAX_SOURCE { return Err("Preprocessor output byte limit exceeded".into()); }
+            result.extend(expanded.into_iter().map(|token| token.text));
             let directive = directive.trim_start();
             let end = directive.find(char::is_whitespace).unwrap_or(directive.len());
             let (name, argument) = directive.split_at(end);
             let argument = argument.trim_start();
-            let t = tokens(argument)?;
+            let spaced = source_tokens(argument)?;
+            let t: Vec<String> = spaced.iter().map(|token| token.text.clone()).collect();
             match name {
                 "if" | "ifdef" | "ifndef" => {
                     if branches.len() >= 64 { return Err("Preprocessor conditional nesting exceeded".into()); }
@@ -323,10 +400,16 @@ pub fn preprocess(source: &str) -> Result<String, String> {
                         start += 1; Some(p)
                     } else { None };
                     if macros.len() >= 512 && !macros.contains_key(&macro_name) { return Err("Macro count limit exceeded".into()); }
-                    macros.insert(macro_name, Macro { parameters, body: t[start..].to_vec() });
+                    macros.insert(macro_name, Macro { parameters, body: spaced[start..].to_vec() });
                 }
                 "undef" => { if t.len() != 1 { return Err("Invalid #undef".into()); } macros.remove(&t[0]); }
-                "error" => return Err(format!("Shader #error on line {}: {}", line_number + 1, argument)),
+                "error" => {
+                    let ids: BTreeMap<&str, usize> = macros.keys().enumerate().map(|(i, name)| (name.as_str(), i)).collect();
+                    let input = spaced.into_iter().map(|token| ExpansionToken::with_space(token.text, token.space_before)).collect();
+                    let expanded = expand_stream(input, &macros, &ids, 0, &mut budget)?;
+                    let message = expanded.into_iter().map(|token| token.text).collect::<Vec<_>>().join(" ");
+                    return Err(format!("Shader #error on line {}: {}", line_number + 1, message));
+                }
                 "line" => {}, // Source cannot alter file access or the bounded diagnostic sink.
                 "pragma" if t.as_slice() == ["once"] ||
                     (t.len() == 4 && t[0] == "pack_matrix" && t[1] == "(" && t[3] == ")" && matches!(t[2].as_str(), "row_major" | "column_major")) => {
@@ -336,11 +419,21 @@ pub fn preprocess(source: &str) -> Result<String, String> {
                 "" => {},
                 _ => return Err(format!("Unsupported shader directive #{name}")),
             }
-        } else if active { pending.extend(tokens(line)?); }
+        } else if active {
+            let line_tokens = source_tokens(line)?;
+            let follows_pending = !pending.is_empty();
+            for (index, token) in line_tokens.into_iter().enumerate() {
+                pending.push(ExpansionToken::with_space(token.text, token.space_before || (index == 0 && follows_pending)));
+            }
+        }
         if result.len() + pending.len() > MAX_TOKENS { return Err("Preprocessor output token limit exceeded".into()); }
     }
     if !branches.is_empty() { return Err("Unterminated shader conditional".into()); }
-    result.extend(expand(&pending, &macros, &mut BTreeSet::new(), 0, &mut budget)?);
+    let ids: BTreeMap<&str, usize> = macros.keys().enumerate().map(|(i, name)| (name.as_str(), i)).collect();
+    let expanded = expand_stream(pending, &macros, &ids, 0, &mut budget)?;
+    result_bytes = result_bytes.saturating_add(expanded.iter().map(token_cost).sum::<usize>());
+    if result_bytes > super::MAX_SOURCE { return Err("Preprocessor output byte limit exceeded".into()); }
+    result.extend(expanded.into_iter().map(|token| token.text));
     if result.len() > MAX_TOKENS { return Err("Preprocessor output token limit exceeded".into()); }
     let result = result.join(" ");
     if result.len() > super::MAX_SOURCE { return Err("Preprocessor output byte limit exceeded".into()); }

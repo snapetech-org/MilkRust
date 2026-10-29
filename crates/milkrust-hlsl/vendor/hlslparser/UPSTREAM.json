@@ -34,6 +34,7 @@
     "Indexed matrix scalar swizzles and Boolean scalar replication",
     "Readonly initializers lowered to per-fragment storage when GLSL constant rules require it",
     "Legacy flattened aggregate initialization, inferred arrays, scalar splats and aggregate casts with bounded single-evaluation temporaries",
-    "Readonly destination validation for assignments, increments and function output parameters"
+    "Readonly destination validation for assignments, increments and function output parameters",
+    "Function-macro stringification with preserved token whitespace, escaped literals, and bounded expansion output"
   ]
 }

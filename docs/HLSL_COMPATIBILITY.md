@@ -44,9 +44,19 @@ per-thread cache avoids repeat native compilation. GPU loop execution shares a
 16,384-iteration counter per fragment and discards fragments exceeding it.
 These limits do not sandbox a graphics driver or certify arbitrary GPU code.
 
-Unknown semantics, unsupported resource kinds, macro stringification, include
-files, unsupported shader models and remaining emitter gaps fail rather than
-becoming a fallback scene. This is a legacy pixel-shader profile, not all modern
+## Macro stringification
+
+Function-like macros can stringify a parameter with `#`. The preprocessor keeps
+token-boundary whitespace through macro argument capture, trims the argument's
+outer whitespace, collapses internal whitespace runs to one space, and escapes
+quotes and backslashes in the resulting string token. Stringification cannot be
+combined with `##`; malformed uses fail. `#error` arguments receive ordinary
+macro expansion before the bounded diagnostic is returned. Token expansion and
+stringified output share the existing depth, token and 256 KiB byte limits.
+
+Unknown semantics, unsupported resource kinds, include files, unsupported
+shader models and remaining emitter gaps fail rather than becoming a fallback
+scene. This is a legacy pixel-shader profile, not all modern
 DirectX HLSL. The WGSL path does not inherit the new compiler. Exact reference
 parity for noise, blur, uniforms and `.milk2` patterns remains unqualified.
 

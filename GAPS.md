@@ -86,8 +86,8 @@ GPU capture or device run was performed for this source-only continuation.
   visual conformance. None of the new platform/preset cells is qualified.
 - Exact MilkDrop HLSL environment and noise/blur/reference semantics, remaining
   legacy emitter gaps and shader-model coverage. Known source limits include
-  integer/Boolean and one-row/one-column matrices, arrays of arrays, macro
-  stringification, resource-bearing structs and the separate WGSL translator.
+  integer/Boolean and one-row/one-column matrices, arrays of arrays,
+  resource-bearing structs and the separate WGSL translator.
   Modern DirectX resources are
   outside the legacy pixel-shader profile; the separate WGSL path remains limited.
 - Reference-equivalent `.milk2` masks and remaining sprite-field/layer semantics. The
