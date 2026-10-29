@@ -67,6 +67,7 @@ try {
     cases.push({ id: 'legacy-tga-dimensions', shader: 'shader_body { ret=tex2D(sampler_pc_art,uv).rgb * (texsize_art.x/2); }', textures: {art: legacyTexture} });
     const rows = [];
     const spriteRows = [];
+    const spriteAlphaRows = [];
     try {
       for (const test of cases) {
         engine.loadPresetText(preset(test.shader), test.id + '.milk', JSON.stringify(test.textures || {}));
@@ -124,6 +125,37 @@ try {
         if(expected(mode).some((value,i)=>Math.abs(value-pixel[i])>3)) throw new Error(`Sprite mode ${mode}: ${pixel}`);
         spriteRows.push({mode,center:Array.from(pixel),status:'pass'});
       }
+      // Legacy alpha sources, byte-packed vertex colors, and the opaque
+      // ARGB key are checked separately from the full-opacity mode controls.
+      const rgbaSprite = (rgba) => {
+        const image = new Uint8Array(22);
+        image[2]=2; image[12]=1; image[14]=1; image[16]=32; image[17]=40;
+        image.set([rgba[2],rgba[1],rgba[0],rgba[3]],18);
+        return 'data:image/x-tga;base64,' + btoa(String.fromCharCode(...image));
+      };
+      const tint = [0.83,0.59,0.27], opacity=0.37;
+      const packed = tint.map(v=>Math.floor(v*255)/255);
+      const packedAlpha = Math.floor(opacity*255)/255;
+      const packedPremultiplied = tint.map(v=>Math.floor(v*opacity*255)/255);
+      for (const alpha of [0,64,255]) for (const keyed of [false,true]) for (let mode=0;mode<=4;mode++) {
+        const key = keyed ? '0x4080C0' : '0xFF00FF';
+        const isKey = keyed && alpha===255;
+        const texel = isKey ? [0,0,0] : sourceColor;
+        const textureAlpha = isKey ? 0 : alpha/255;
+        const wanted = texel.map((v,i)=> {
+          const src=v*packed[i], premul=v*packedPremultiplied[i], dst=background[i];
+          const blend=mode===4 ? textureAlpha*packedAlpha : packedAlpha;
+          return Math.min(1,Math.max(0,[src*blend+dst*(1-blend),premul,dst+premul,v*v+dst*(1-v),src*blend+dst*(1-blend)][mode]))*255;
+        });
+        const records = `\n[SPRITE0_BEGIN]\nSpriteName=rgba.tga\nSpriteBlend=${mode}\nSpriteBurn=0\nSpriteColorKey=${key}\nSpriteR=${tint[0]}\nSpriteG=${tint[1]}\nSpriteB=${tint[2]}\nSpriteAlpha=${opacity}\n[SPRITE0_END]\n`;
+        engine.loadPresetText(preset('shader_body { ret=float3(0.1,0.2,0.3); }')+records, 'sprite-alpha.milk', JSON.stringify({'rgba.tga':rgbaSprite([64,128,192,alpha])}));
+        for(let frame=0;frame<3;frame++) engine.render(frame/30,0,0,0,'','',0,0.5,0.5,0,0);
+        if(JSON.parse(engine.renderStatusJson()).state!=='preview') throw new Error('Sprite alpha control failed');
+        const pixel=new Uint8Array(4);
+        gl.readPixels(canvas.width/2,canvas.height/2,1,1,gl.RGBA,gl.UNSIGNED_BYTE,pixel);
+        if(wanted.some((v,i)=>Math.abs(v-pixel[i])>3)) throw new Error(`Sprite alpha mode=${mode} alpha=${alpha} keyed=${keyed}: ${pixel}`);
+        spriteAlphaRows.push({mode,alpha,keyed,center:Array.from(pixel),status:'pass'});
+      }
       const once = '\n[SPRITE0_BEGIN]\nSpriteName=art.tga\nSpriteBurn=0\ncode_1=done=1;\n[SPRITE0_END]\n';
       engine.loadPresetText(preset('shader_body { ret=0; }')+once, 'one-frame-sprite.milk', JSON.stringify({'art.tga':spriteTexture}));
       engine.render(0,0,0,0,'','',0,0.5,0.5,0,0); // texture admission holds this frame
@@ -159,10 +191,11 @@ try {
         if (!rejected) throw new Error('Invalid shader import was accepted');
       }
     } finally { engine.free(); }
-    return { schemaVersion: 1, profile: 'milkrust-hlslparser-es300-v1', rows, spriteRows, rejected: invalid.length, contextRecovery: 'pass', shapeOrderAndGradient: 'pass', fidelity: 'not-assessed', physicalDevice: false };
+    return { schemaVersion: 1, profile: 'milkrust-hlslparser-es300-v1', rows, spriteRows, spriteAlphaRows, rejected: invalid.length, contextRecovery: 'pass', shapeOrderAndGradient: 'pass', fidelity: 'not-assessed', physicalDevice: false };
   }, { cases, invalid });
   assert.equal(report.rows.length, cases.length + 1);
   assert.equal(report.spriteRows.length, 11);
+  assert.equal(report.spriteAlphaRows.length, 30);
   if (process.env.RUNNER_TEMP) await writeFile(resolve(process.env.RUNNER_TEMP, 'milkrust-hlsl-browser.json'), JSON.stringify(report, null, 2) + '\n');
   console.log(JSON.stringify(report));
 } finally {

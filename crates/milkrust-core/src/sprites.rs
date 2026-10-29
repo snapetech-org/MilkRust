@@ -218,15 +218,16 @@ impl Runtime {
                 instance.initialized = true;
             }
             instance.scope = evaluate_milkrust_equations(&definition.code, &instance.scope)?;
-            validate_mode(&instance.scope)?;
             let value = |key: &str| instance.scope.get(key).and_then(MilkRustValue::as_number).unwrap_or(0.0);
-            for key in ["x", "y", "sx", "sy", "rot", "speed", "repeatx", "repeaty", "r", "g", "b", "a", "burn", "done", "flipx", "flipy"] {
+            for key in ["x", "y", "sx", "sy", "rot", "speed", "repeatx", "repeaty", "r", "g", "b", "a", "burn", "done", "flipx", "flipy", "blendmode", "layer"] {
                 if !value(key).is_finite() { return Err(format!("Non-finite sprite variable: {key}")); }
             }
-            let rotation = (value("rot") + value("speed").clamp(-1000.0, 1000.0) / fps).rem_euclid(std::f64::consts::TAU);
+            // Preserve the script's accumulated angle. Wrapping the persistent
+            // register breaks conditions such as done=above(rot,2*$pi).
+            let rotation = value("rot") + value("speed").clamp(-1000.0, 1000.0) / fps;
             frames.push(Frame {
                 texture: definition.texture.clone(), color_key: definition.color_key,
-                blend_mode: value("blendmode") as i32, layer: value("layer") as usize, burn: value("burn") != 0.0,
+                blend_mode: value("blendmode").clamp(0.0, 10.0) as i32, layer: (value("layer") + 0.5).floor().clamp(0.0, 4.0) as usize, burn: value("burn") != 0.0,
                 color: [value("r").clamp(0.0, 1.0), value("g").clamp(0.0, 1.0), value("b").clamp(0.0, 1.0), value("a").clamp(0.0, 1.0)],
                 center: [value("x").clamp(-500.0, 500.0) + definition.offset[0] * 0.5,
                     value("y").clamp(-500.0, 500.0) + definition.offset[1] * 0.5],
@@ -261,12 +262,15 @@ out vec4 outColor;
 vec4 sprite_texel(ivec2 point, ivec2 size) {
     point = ((point % size) + size) % size;
     vec4 color = texelFetch(spriteImage, point, 0);
-    if (all(lessThanEqual(abs(color.rgb - spriteColorKey), vec3(0.5 / 255.0)))) color.a = 0.0;
+    // D3DX uses an opaque ARGB key and replaces the whole matching texel
+    // with transparent black. A partially transparent matching RGB is not a key.
+    if (color.a >= 1.0 - 0.5 / 255.0 &&
+        all(lessThanEqual(abs(color.rgb - spriteColorKey), vec3(0.5 / 255.0)))) color = vec4(0.0);
     return color;
 }
 vec4 sprite_sample(vec2 coordinate) {
     // Apply the key to source texels before linear filtering, as at decode.
-    // Keep ordinary RGBA interpolation, including the source's hidden RGB.
+    // Non-keyed texels keep ordinary RGBA interpolation, including hidden RGB.
     ivec2 size = textureSize(spriteImage, 0);
     vec2 position = coordinate * vec2(size) - vec2(0.5);
     ivec2 origin = ivec2(floor(position));
@@ -278,24 +282,30 @@ void main() {
     vec4 sampleColor = sprite_sample(uv);
     vec4 background = texture(spriteBackground, gl_FragCoord.xy / spriteResolution);
     vec3 raw = sampleColor.rgb;
-    if (sampleColor.a <= 0.0) discard;
-    vec3 src = raw * spriteTint.rgb;
+    // The five classic modes have distinct alpha sources. In modes 0..3
+    // texture alpha is ignored, including non-keyed transparent texels.
+    if (spriteBlend >= 5 && sampleColor.a <= 0.0) discard;
+    // Legacy vertex colors are packed to bytes by truncation. Modes using
+    // opacity in RGB multiply BEFORE packing (not after separate quantization).
+    vec4 tint = floor(clamp(spriteTint, 0.0, 1.0) * 255.0) / 255.0;
+    vec3 premultiplied = raw * floor(clamp(spriteTint.rgb * spriteTint.a, 0.0, 1.0) * 255.0) / 255.0;
+    vec3 src = raw * tint.rgb;
     vec3 dst = background.rgb;
-    float alpha = sampleColor.a * spriteTint.a;
+    float alpha = sampleColor.a * tint.a;
     vec3 result;
-    if (spriteBlend == 1) result = src * spriteTint.a;
-    else if (spriteBlend == 2) result = dst + src * spriteTint.a;
+    if (spriteBlend == 1) result = premultiplied;
+    else if (spriteBlend == 2) result = dst + premultiplied;
     else if (spriteBlend == 3) result = raw * raw + dst * (vec3(1.0) - raw);
     else if (spriteBlend == 4) {
         result = mix(dst, src, alpha);
     }
     else if (spriteBlend == 5) result = dst * src;
-    else if (spriteBlend == 6) result = dst * (vec3(1.0) - src * spriteTint.a);
+    else if (spriteBlend == 6) result = dst * (vec3(1.0) - premultiplied);
     else if (spriteBlend == 7) result = vec3(1.0) - src;
     else if (spriteBlend == 8) result = vec3(0.0);
     else if (spriteBlend == 9) result = dst * min(vec3(1.0), vec3(0.5) + src);
-    else if (spriteBlend == 10) result = dst + 2.0 * src * spriteTint.a;
-    else result = mix(dst, src, alpha);
+    else if (spriteBlend == 10) result = dst + 2.0 * premultiplied;
+    else result = mix(dst, src, tint.a);
     outColor = vec4(clamp(result, 0.0, 1.0), background.a);
 }
 "#;
@@ -316,6 +326,26 @@ mod tests {
         assert!((first[0].rotation-1.0/60.0).abs()<1.0e-9);
         assert!((second[0].rotation-1.0/60.0-0.5).abs()<1.0e-9);
     }
+    #[test]
+    fn rotation_register_can_cross_full_turns_and_retire_the_sprite() {
+        let definitions = extract(&block("code_1=rot=rot+4;done=above(rot,7);"), true).unwrap().definitions;
+        let mut runtime = Runtime::default();
+        assert_eq!(runtime.render(&definitions, &BTreeMap::new(), 0.0, 0.0).unwrap()[0].rotation, 4.0);
+        assert_eq!(runtime.render(&definitions, &BTreeMap::new(), 1.0/60.0, 0.0).unwrap()[0].rotation, 8.0);
+        assert!(runtime.render(&definitions, &BTreeMap::new(), 2.0/60.0, 0.0).unwrap().is_empty());
+    }
+
+    #[test]
+    fn scripted_mode_and_layer_use_legacy_integer_conversion_and_clamping() {
+        for (code, mode, layer) in [("blendmode=9.8;layer=2.7;", 9, 3),
+            ("blendmode=-2;layer=-1;", 0, 0), ("blendmode=99;layer=99;", 10, 4)] {
+            let definitions = extract(&block(&format!("code_1={code}")), true).unwrap().definitions;
+            let frames = Runtime::default().render(&definitions, &BTreeMap::new(), 0.0, 0.0).unwrap();
+            assert_eq!(frames[0].blend_mode, mode);
+            assert_eq!(frames[0].layer, layer);
+        }
+    }
+
     #[test]
     fn blocks_do_not_leak_into_preset_equations_and_last_index_wins() {
         let source = format!("name=Host\n{}{}zoom=1\n", block("init_1=x=0;"), block("init_1=x=1;"));
@@ -384,10 +414,10 @@ mod tests {
             assert_eq!(frames[0].blend_mode, mode);
             assert_eq!(frames[0].layer, 4);
         }
-        let source = format!("name=Bad\n{}", block("code_1=blendmode=99;"));
+        let source = format!("name=Bad\n{}", block("code_1=unknown_sprite_function();"));
         let mut runtime = crate::MilkRustFrameSetRuntime::default();
         assert!(runtime.render_source(&source, 0.0, 0.0, 0.0, 0.0).entries.is_empty());
-        assert!(runtime.render_error().unwrap().contains("blendmode"));
+        assert!(runtime.render_error().is_some());
         let valid = format!("name=Good\n{}", block(""));
         assert_eq!(runtime.render_source(&valid, 1.0, 0.0, 0.0, 0.0).sprites.len(), 1);
         assert!(runtime.render_error().is_none());
