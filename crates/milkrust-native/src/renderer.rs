@@ -565,7 +565,8 @@ impl Renderer {
         let program = &self.sprite_program;
         program.bind(); program.integer("spriteImage", 0); program.integer("spriteBackground", 1);
         program.vector2("spriteResolution", self.width as f32, self.height as f32);
-        program.vector4("spriteTint", sprite.color[0] as f32, sprite.color[1] as f32, sprite.color[2] as f32, sprite.color[3] as f32);
+        let tint = sprite.vertex_color();
+        program.vector4("spriteTint", tint[0], tint[1], tint[2], tint[3]);
         let color_key = sprite.color_key_rgba();
         program.vector4("spriteColorKey", color_key[0], color_key[1], color_key[2], color_key[3]);
         program.integer("spriteBlend", sprite.blend_mode);

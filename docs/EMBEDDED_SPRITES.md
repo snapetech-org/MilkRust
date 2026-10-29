@@ -31,13 +31,13 @@ Saved image offsets and scale offsets remain separate from script `x/y/sx/sy`,
 so a script assignment does not erase them. Signed scales mirror the quad and
 nonzero `flipx`/`flipy` values reverse the corresponding UV axis. Image aspect,
 rotation, display aspect and repeated UVs are shared Rust geometry. Saved
-`SpriteRot=1` adds elapsed seconds times
+`SpriteRot=1` adds absolute host time times
 `SpriteSpeed`; `SpriteRot=2` subtracts it, and other values leave EEL `rot`
 alone. Script rotation remains persistent and unwrapped. `SpriteRepeatX/Y`
 multiply the EEL repeat registers, and saved position/size offsets remain
 independent from EEL. `SpriteBurn=0` disables feedback burn, `1` always burns,
-and other values follow EEL `burn`; when the field is absent, EEL `burn`
-controls feedback and starts at one.
+and other values follow EEL `burn`; an absent field defaults to `1`, so it
+always burns unless a non-default static mode selects the EEL register.
 Invalid layers skip both sprite code and drawing. The EEL `blendmode` register
 starts from `SpriteBlend` (default 4), is read each frame and truncated to an
 integer. Values outside 0–10 select mode 0.
@@ -72,10 +72,13 @@ eleven modes follow MilkDrop 3's `DrawUserSprites` table:
 | 9 Darken | saturate(texture + diffuse − 0.5) / diffuse alpha | zero, source color |
 | 10 Vivid | saturate(2 × texture × diffuse) / diffuse alpha | one, one |
 
-Modes 1 and 2 premultiply diffuse RGB by alpha before byte conversion. Mode 3
-uses texture RGB as both the source color and the blend factor, with white
-diffuse color. Mode 7 also uses white diffuse RGB; mode 8 folds each diffuse
-channel around 0.5 before multiplying by texture. Modes 0, 5, 6, 9 and 10
+Diffuse vertex color is quantized on the CPU to the exact byte that the legacy
+D3D vertex path stores; both GL hosts pass the same normalized byte values to
+the shared shader, avoiding backend-specific float-to-byte rounding. Modes 1
+and 2 premultiply diffuse RGB by alpha before byte conversion. Mode 3 uses
+texture RGB as both the source color and the blend factor, with white diffuse
+color. Mode 7 also uses white diffuse RGB; mode 8 folds each diffuse channel
+around 0.5 before multiplying by texture. Modes 0, 5, 6, 9 and 10
 ignore image alpha. Color keys match opaque source
 texels (ARGB, not RGB alone) before the shared
 manual bilinear sample and replace the whole matching texel with transparent

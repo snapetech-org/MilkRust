@@ -61,7 +61,8 @@ impl SpritePass {
         gl.uniform1i(uniform("spriteImage").as_ref(), 0);
         gl.uniform1i(uniform("spriteBackground").as_ref(), 1);
         gl.uniform2f(uniform("spriteResolution").as_ref(), size.0 as f32, size.1 as f32);
-        gl.uniform4f(uniform("spriteTint").as_ref(), sprite.color[0] as f32, sprite.color[1] as f32, sprite.color[2] as f32, sprite.color[3] as f32);
+        let tint = sprite.vertex_color();
+        gl.uniform4f(uniform("spriteTint").as_ref(), tint[0], tint[1], tint[2], tint[3]);
         let color_key = sprite.color_key_rgba();
         gl.uniform4f(uniform("spriteColorKey").as_ref(), color_key[0], color_key[1], color_key[2], color_key[3]);
         gl.uniform1i(uniform("spriteBlend").as_ref(), sprite.blend_mode);

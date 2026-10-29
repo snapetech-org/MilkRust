@@ -48,6 +48,10 @@ GPU capture or device run was performed for this source-only continuation.
   now cover arrays within structs, matrix/vector selections and arithmetic within
   the profile. User names are isolated from GLSL keywords/intrinsics. Readonly
   initializers use valid GLSL storage, and writes to readonly values fail.
+- Saved sprite controls use the compatibility defaults and ordering: missing
+  `SpriteBurn` means always burn, non-default `SpriteRot` uses absolute host
+  time, and saved position/scale/repeat/alpha clamps precede their modifiers.
+  Native and WebGL receive the same CPU-quantized D3D vertex bytes.
 - Sprite modes 0–10 follow the saved D3D9 texture-stage and blend-factor table;
   the table default is 4 and out-of-range frame selectors map to 0. Modes 0, 5,
   6, 9 and 10 ignore image alpha; 4, 7 and 8 use it. Full ARGB color keys clear

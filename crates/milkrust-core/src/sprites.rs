@@ -47,7 +47,7 @@ pub struct Definition {
     pub layer: i32,
     pub blend_mode: i32,
     pub alpha: f64,
-    pub burn_mode: i32,
+    pub burn_mode: f64,
     pub rotation_mode: f64,
     pub rotation_speed: f64,
     pub offset: [f64; 2],
@@ -181,7 +181,7 @@ fn definition(index: u32, preset_index: usize, records: &BTreeMap<String, String
     // outside 0..=10 falls back to mode 0 in the renderer.
     let mut blend_mode = 4i32;
     let mut alpha = 1.0;
-    let mut burn_mode = 2i32;
+    let mut burn_mode = 1.0;
     let mut rotation_mode = 0.0;
     let mut rotation_speed = 0.0;
     let mut repeat_multiplier = [1.0; 2];
@@ -211,7 +211,8 @@ fn definition(index: u32, preset_index: usize, records: &BTreeMap<String, String
             continue;
         }
         if matches!(key.as_str(), "spriteburn" | "burnmode") {
-            burn_mode = value.parse::<i32>().map_err(|_| "Invalid sprite burn mode")?;
+            burn_mode = value.parse::<f64>().ok().filter(|v| v.is_finite() && v.abs() <= 1.0e9)
+                .ok_or("Invalid sprite burn mode")?;
             continue;
         }
         if key == "spritealpha" {
@@ -281,6 +282,13 @@ impl Frame {
          ((self.color_key >> 8) & 255) as f32 / 255.0,
          (self.color_key & 255) as f32 / 255.0,
          ((self.color_key >> 24) & 255) as f32 / 255.0]
+    }
+
+    /// Exact packed diffuse color supplied to the legacy D3D sprite vertex.
+    /// Quantizing here avoids driver-dependent float rounding at the byte edge.
+    pub fn vertex_color(&self) -> [f32; 4] {
+        sprite_vertex_color(self.blend_mode, self.color)
+            .map(|channel| f32::from(channel) / 255.0)
     }
 
     /// Image aspect is applied before rotation; screen aspect after rotation.
@@ -372,16 +380,14 @@ impl Runtime {
             }
             // SpriteRot is an outer mode: 1/2 add/subtract elapsed time times
             // SpriteSpeed. EEL `rot` remains an independent persistent value.
-            let spin = elapsed * definition.rotation_speed;
+            let spin = time * definition.rotation_speed;
             let rotation = value("rot") + if definition.rotation_mode == 1.0 { spin }
                 else if definition.rotation_mode == 2.0 { -spin } else { 0.0 };
             if !rotation.is_finite() { return Err("Non-finite sprite rotation".into()); }
             let done = value("done") != 0.0;
-            let burn = match definition.burn_mode {
-                0 => false,
-                1 => true,
-                _ => value("burn") != 0.0,
-            };
+            let burn = if definition.burn_mode == 0.0 { false }
+                else if definition.burn_mode == 1.0 { true }
+                else { value("burn") != 0.0 };
             let x = ((value("x") * 2.0 - 1.0).clamp(-1000.0, 1000.0) + definition.offset[0] + 1.0) * 0.5;
             let y = ((value("y") * 2.0 - 1.0).clamp(-1000.0, 1000.0) + definition.offset[1] + 1.0) * 0.5;
             // MilkDrop truncates the EEL value; values outside the complete
@@ -392,7 +398,7 @@ impl Runtime {
                 preset_index: definition.preset_index,
                 texture: definition.texture.clone(), time: elapsed, color_key: definition.color_key,
                 blend_mode, layer: definition.layer as usize, burn,
-                // RGB is saturated by the D3DCOLOR-compatible shader packer;
+                // RGB is clamped before CPU-side D3DCOLOR byte packing;
                 // script alpha is clamped before SpriteAlpha multiplies it,
                 // then left unclamped for the legacy low-byte conversion.
                 color: [value("r").clamp(0.0, 1.0), value("g").clamp(0.0, 1.0), value("b").clamp(0.0, 1.0), value("a").clamp(0.0, 1.0) * definition.alpha],
@@ -420,8 +426,11 @@ pub fn sprite_blend_mode(requested: i32) -> i32 {
     if (0..SPRITE_BLEND_MODES as i32).contains(&requested) { requested } else { 0 }
 }
 
-fn sprite_byte(value: f64) -> u8 {
-    (value * 255.0).trunc().rem_euclid(256.0) as u8
+fn sprite_byte(value: f32) -> u8 {
+    // D3D receives a 32-bit float channel, truncates to a signed integer, then
+    // keeps the low byte. Rust's float-to-int cast has the same saturation
+    // boundary as the legacy conversion; the integer-to-u8 cast keeps 8 bits.
+    (value * 255.0) as i32 as u8
 }
 
 /// D3DCOLOR-compatible vertex byte quantization for the saved sprite table.
@@ -429,17 +438,21 @@ fn sprite_byte(value: f64) -> u8 {
 /// wraps after `SpriteAlpha` multiplication.
 pub fn sprite_vertex_color(mode: i32, rgba: [f64; 4]) -> [u8; 4] {
     let mode = sprite_blend_mode(mode);
-    let rgb = [rgba[0].clamp(0.0, 1.0), rgba[1].clamp(0.0, 1.0), rgba[2].clamp(0.0, 1.0)];
-    let alpha = rgba[3];
+    let channels = rgba.map(|value| value as f32);
+    let rgb = [channels[0].clamp(0.0, 1.0), channels[1].clamp(0.0, 1.0), channels[2].clamp(0.0, 1.0)];
+    let alpha = channels[3];
     match mode {
-        1 | 2 => [sprite_byte(rgb[0] * alpha), sprite_byte(rgb[1] * alpha), sprite_byte(rgb[2] * alpha), 255],
+        1 | 2 => [sprite_byte(rgb[0] * alpha), sprite_byte(rgb[1] * alpha),
+            sprite_byte(rgb[2] * alpha), 255],
         3 => [255; 4],
         7 => [255, 255, 255, sprite_byte(alpha)],
         8 => {
-            let fold = |value: f64| if value > 0.5 { 1.0 - value } else { value };
-            [sprite_byte(fold(rgb[0])), sprite_byte(fold(rgb[1])), sprite_byte(fold(rgb[2])), sprite_byte(alpha)]
+            let fold = |value: f32| if value > 0.5 { 1.0 - value } else { value };
+            [sprite_byte(fold(rgb[0])), sprite_byte(fold(rgb[1])),
+                sprite_byte(fold(rgb[2])), sprite_byte(alpha)]
         }
-        _ => [sprite_byte(rgb[0]), sprite_byte(rgb[1]), sprite_byte(rgb[2]), sprite_byte(alpha)],
+        _ => [sprite_byte(rgb[0]), sprite_byte(rgb[1]),
+            sprite_byte(rgb[2]), sprite_byte(alpha)],
     }
 }
 
@@ -509,33 +522,12 @@ vec4 sprite_sample(vec2 coordinate) {
     return mix(mix(sprite_texel(origin,size), sprite_texel(origin+ivec2(1,0),size), weight.x),
         mix(sprite_texel(origin+ivec2(0,1),size), sprite_texel(origin+ivec2(1,1),size), weight.x), weight.y);
 }
-float sprite_byte(float value) {
-    // D3DCOLOR converts by truncation and stores the low eight bits. Alpha is
-    // intentionally allowed to wrap when SpriteAlpha takes it outside 0..1.
-    return mod(trunc(value * 255.0), 256.0) / 255.0;
-}
-vec4 sprite_diffuse(int mode) {
-    vec3 rgb = clamp(spriteTint.rgb, 0.0, 1.0);
-    float alpha = spriteTint.a;
-    if (mode == 1 || mode == 2) {
-        return vec4(sprite_byte(rgb.r * alpha), sprite_byte(rgb.g * alpha),
-            sprite_byte(rgb.b * alpha), 1.0);
-    }
-    if (mode == 3) return vec4(1.0);
-    if (mode == 7) return vec4(1.0, 1.0, 1.0, sprite_byte(alpha));
-    if (mode == 8) {
-        rgb = vec3(rgb.r > 0.5 ? 1.0 - rgb.r : rgb.r,
-            rgb.g > 0.5 ? 1.0 - rgb.g : rgb.g,
-            rgb.b > 0.5 ? 1.0 - rgb.b : rgb.b);
-        return vec4(sprite_byte(rgb.r), sprite_byte(rgb.g), sprite_byte(rgb.b), sprite_byte(alpha));
-    }
-    return vec4(sprite_byte(rgb.r), sprite_byte(rgb.g), sprite_byte(rgb.b), sprite_byte(alpha));
-}
+
 void main() {
     vec4 sampleColor = sprite_sample(uv);
     vec4 background = texture(spriteBackground, gl_FragCoord.xy / spriteResolution);
     int mode = spriteBlend < 0 || spriteBlend > 10 ? 0 : spriteBlend;
-    vec4 diffuse = sprite_diffuse(mode);
+    vec4 diffuse = spriteTint;
     vec3 texel = sampleColor.rgb;
     vec3 stage = diffuse.rgb * texel;
     vec3 dst = background.rgb;
