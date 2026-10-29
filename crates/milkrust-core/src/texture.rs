@@ -182,7 +182,10 @@ pub fn inspect(format: Format, bytes: &[u8]) -> Result<(u32, u32), String> {
             while offset < bytes.len() {
                 let length=be(offset,4)? as usize;
                 let end=offset.checked_add(12).and_then(|v| v.checked_add(length)).filter(|end| *end<=bytes.len()).ok_or("Truncated PNG chunk")?;
-                if bytes.get(offset+4..offset+8)==Some(b"acTL") { return Err("Animated PNG is not an admitted static texture".into()); }
+                let kind = bytes.get(offset + 4..offset + 8);
+                if kind == Some(b"acTL") || kind == Some(b"fcTL") || kind == Some(b"fdAT") {
+                    return Err("Animated PNG is not an admitted static texture".into());
+                }
                 offset=end;
             }
             (be(16,4)?,be(20,4)?)

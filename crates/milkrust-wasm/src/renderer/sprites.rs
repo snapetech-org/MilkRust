@@ -35,7 +35,13 @@ impl SpritePass {
         Ok(Self { gl, program, buffer, sampler, snapshot, dimensions: (0, 0) })
     }
 
-    pub fn draw(&mut self, sprite: &milkrust_core::sprites::Frame, image: &WebGlTexture, image_size: (u32, u32)) -> Result<(), JsValue> {
+    pub fn draw(
+        &mut self,
+        sprite: &milkrust_core::sprites::Frame,
+        image: &WebGlTexture,
+        image_size: (u32, u32),
+        restore_final_burn_geometry: bool,
+    ) -> Result<(), JsValue> {
         let gl = &self.gl;
         let size = (gl.drawing_buffer_width().max(1), gl.drawing_buffer_height().max(1));
         gl.active_texture(Gl::TEXTURE1);
@@ -65,8 +71,13 @@ impl SpritePass {
         gl.uniform4f(uniform("spriteTint").as_ref(), tint[0], tint[1], tint[2], tint[3]);
         let color_key = sprite.color_key_rgba();
         gl.uniform4f(uniform("spriteColorKey").as_ref(), color_key[0], color_key[1], color_key[2], color_key[3]);
+        gl.uniform1i(uniform("spriteColorKeyEnabled").as_ref(), if sprite.color_key_enabled() { 1 } else { 0 });
         gl.uniform1i(uniform("spriteBlend").as_ref(), sprite.blend_mode);
-        let (positions, uvs) = sprite.geometry(image_size, (size.0 as u32, size.1 as u32));
+        let (positions, uvs) = sprite.geometry_for_target(
+            image_size,
+            (size.0 as u32, size.1 as u32),
+            restore_final_burn_geometry,
+        );
         let mut vertices = Vec::with_capacity(16);
         for (position, uv) in positions.chunks_exact(2).zip(uvs.chunks_exact(2)) {
             vertices.extend_from_slice(&[position[0] as f32, position[1] as f32, uv[0] as f32, uv[1] as f32]);

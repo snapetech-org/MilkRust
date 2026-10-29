@@ -3,29 +3,13 @@
 //! docs/MILK2_FORMAT.md.
 use std::collections::BTreeMap;
 
-/// Saved header registers carried between MilkDrop 3 double-preset loads.
-/// The initial process state is intentionally distinct from a normal Fade.
-#[derive(Clone, Debug, PartialEq)]
-pub struct BlendHeaderState {
-    pub pattern: String,
-    pub progress: f64,
-    pub direction: i32,
-    pub random: [f64; 5],
-}
-
-impl Default for BlendHeaderState {
-    fn default() -> Self {
-        Self { pattern: String::new(), progress: 1.0, direction: 0, random: [0.0; 5] }
-    }
-}
-
 #[derive(Clone, Debug, PartialEq)]
 pub struct SavedBlend {
     pub pattern: String,
     pub progress: f64,
     pub direction: i32,
     pub random: [Option<f64>; 5],
-    /// Resolved values after applying the preceding MilkDrop 3 header state.
+    /// Per-file values with omitted random registers set to zero for rendering.
     pub resolved_random: [f64; 5],
     /// Retain all header records for lossless export of unknown extensions.
     pub header: BTreeMap<String, String>,
@@ -41,22 +25,22 @@ impl SavedBlend {
         blend_pattern_code(&self.pattern)
     }
 
-    /// Return the resolved random registers, including values inherited from
-    /// a preceding double-preset header.
+    /// Return this file's saved random registers; omitted values are zero.
     pub fn random_values(&self) -> [f64; 5] {
         self.resolved_random
     }
 
-    pub fn header_state(&self) -> BlendHeaderState {
-        BlendHeaderState { pattern: self.pattern.clone(), progress: self.progress,
-            direction: self.direction, random: self.resolved_random }
+    /// The classic renderer treats any saved random register as activating
+    /// the saved random block; omitted slots in a partial block remain zero.
+    pub fn has_randoms(&self) -> bool {
+        self.random.iter().any(Option::is_some)
     }
 
     /// MilkDrop 3.2 adds a display-name record after the two preset blocks.
     /// It is metadata, not an executable sprite/shader extension, so it must
-    /// not disable an otherwise supported uniform Fade blend.
+    /// not disable an otherwise supported uniform Zoom blend.
     fn has_only_supported_trailer_metadata(&self) -> bool {
-        let enabled = self.header.get("sprite").map(String::as_str) == Some("1");
+        let enabled = self.header.get("sprite").is_none_or(|value| value != "0");
         let Ok(blocks) = crate::sprites::extract(&self.trailer, enabled) else { return false; };
         let mut saw_name = false;
         for line in blocks.body.lines() {
@@ -86,10 +70,10 @@ impl SavedBlend {
         })
     }
 
-    /// Uniform Fade has no spatial mask. Other patterns must not silently turn
+    /// Uniform Zoom has no spatial mask. Other patterns must not silently turn
     /// into an ordinary temporal cross-fade.
     pub fn supports_uniform_composite(&self) -> bool {
-        self.pattern.eq_ignore_ascii_case("fade")
+        self.pattern.eq_ignore_ascii_case("zoom")
             && self.has_only_supported_trailer_metadata()
             && self.has_supported_header()
     }
@@ -132,13 +116,12 @@ impl SavedBlend {
 /// Stable IDs shared by the WebGL and native GLES/GL renderers.
 pub fn blend_pattern_code(pattern: &str) -> Option<i32> {
     Some(match pattern.trim().to_ascii_lowercase().as_str() {
-        "fade" => 0,
         "zoom" => 1,
         "side" => 2,
         "plasma" => 3,
         "plasma2" => 4,
         "plasma3" => 5,
-        "cercle" | "circle" => 6,
+        "cercle" => 6,
         "square" => 7,
         "snail" => 8,
         "snail2" => 9,
@@ -175,14 +158,37 @@ pub struct TransitionMaskKey {
     pub progress: u32,
     pub direction: i32,
     pub random: [u32; 5],
+    pub has_randoms: bool,
+    pub field_seed: u32,
     pub width: u32,
     pub height: u32,
 }
 
 impl TransitionMaskKey {
-    pub fn new(pattern: i32, progress: f32, direction: i32, random: [f32; 5], width: u32, height: u32) -> Self {
-        Self { pattern, progress: progress.to_bits(), direction, random: random.map(f32::to_bits), width, height }
+    pub fn new(pattern: i32, progress: f32, direction: i32, random: [f32; 5], has_randoms: bool,
+        pattern_name: &str, width: u32, height: u32) -> Self {
+        let field_seed = milk2_field_seed(pattern_name, random, has_randoms);
+        Self { pattern, progress: progress.to_bits(), direction, random: random.map(f32::to_bits), has_randoms,
+            field_seed, width, height }
     }
+}
+
+fn milk2_field_seed(pattern: &str, random: [f32; 5], has_randoms: bool) -> u32 {
+    let mut hash = 2_166_136_261u32;
+    // The compatible loader seeds from the stored header spelling, so casing
+    // is significant for the procedural no-random plasma field.
+    for byte in pattern.bytes() {
+        hash = (hash ^ u32::from(byte)).wrapping_mul(16_777_619);
+    }
+    if has_randoms {
+        for value in random {
+            let quantized = (value * 100_000.0 + 0.5) as u32;
+            for byte in quantized.to_le_bytes() {
+                hash = (hash ^ u32::from(byte)).wrapping_mul(16_777_619);
+            }
+        }
+    }
+    if hash == 0 { 1 } else { hash }
 }
 
 /// Dimensions of MilkDrop 3's saved blend mesh, including its boundary vertices.
@@ -234,22 +240,7 @@ pub fn has_wrapper(source: &str) -> bool {
 /// Parse ordered, complete blocks without confusing the [preset00] section
 /// inside each block with the envelope itself. No filesystem or code execution.
 pub fn parse(source: &str) -> Result<(SavedBlend, [String; 2]), String> {
-    parse_with_previous(source, &BlendHeaderState::default())
-}
-
-/// Parse a double-preset file while preserving MilkDrop 3's process-wide
-/// saved header registers when a file omits one or more records.
-pub fn parse_with_previous(
-    source: &str,
-    previous: &BlendHeaderState,
-) -> Result<(SavedBlend, [String; 2]), String> {
     if source.len()>crate::input_limits::MAX_PRESET_BYTES { return Err("milk2 source exceeds 2 MiB".into()); }
-    if previous.pattern.len() > 80
-        || !previous.progress.is_finite()
-        || !(0.0..=1.0).contains(&previous.progress)
-        || previous.random.iter().any(|value| !value.is_finite() || !(0.0..=1.0).contains(value)) {
-        return Err("invalid preceding milk2 header state".into());
-    }
     let normalized = source.trim_start_matches('\u{feff}').replace("\r\n", "\n").replace('\r', "\n");
     let mut state = 0usize;
     let mut header = BTreeMap::new();
@@ -288,11 +279,7 @@ pub fn parse_with_previous(
     if state != 4 || presets.iter().any(|s| s.trim().is_empty()) {
         return Err("milk2 requires two nonempty, complete preset blocks".into());
     }
-    let pattern = match header.get("blending_pattern") {
-        Some(value) if value.is_empty() => return Err("invalid milk2 blending pattern".into()),
-        Some(value) => value.clone(),
-        None => previous.pattern.clone(),
-    };
+    let pattern = header.get("blending_pattern").cloned().unwrap_or_default();
     if pattern.len() > 80 { return Err("invalid milk2 blending pattern".into()); }
     let number = |key: &str, default: f64| -> Result<f64, String> {
         let value = match header.get(key) {
@@ -302,14 +289,14 @@ pub fn parse_with_previous(
         if !value.is_finite() { return Err(format!("non-finite milk2 {key}")); }
         Ok(value)
     };
-    let progress = number("blending_progress", previous.progress)?;
+    let progress = number("blending_progress", 0.5)?;
     if !(0.0..=1.0).contains(&progress) { return Err("milk2 progress is outside 0..1".into()); }
     let direction = match header.get("blending_direction") {
         Some(value) => value.parse::<i32>().map_err(|_| "invalid milk2 blending_direction")?,
-        None => previous.direction,
+        None => 1,
     };
     let mut random = [None; 5];
-    let mut resolved_random = previous.random;
+    let mut resolved_random = [0.0; 5];
     for (index, value) in random.iter_mut().enumerate() {
         let key = format!("random_{}", index + 1);
         if header.contains_key(&key) {
@@ -325,7 +312,7 @@ pub fn parse_with_previous(
 #[cfg(test)]
 mod tests {
     use super::*;
-    const PAIR: &str = "blending_pattern=Fade\nblending_progress=0.3\nblending_direction=-1\nrandom_1=0.123\n[PRESET1_BEGIN]\nMILKDROP_PRESET_VERSION=201\n[preset00]\nname=First\nzoom=1\n[PRESET1_END]\n[PRESET2_BEGIN]\n[preset00]\nname=Second\nzoom=1.1\n[PRESET2_END]\n";
+    const PAIR: &str = "blending_pattern=Zoom\nblending_progress=0.3\nblending_direction=-1\nrandom_1=0.123\n[PRESET1_BEGIN]\nMILKDROP_PRESET_VERSION=201\n[preset00]\nname=First\nzoom=1\n[PRESET1_END]\n[PRESET2_BEGIN]\n[preset00]\nname=Second\nzoom=1.1\n[PRESET2_END]\n";
     #[test]
     fn saves_both_inner_sections_and_randoms() {
         let (blend, presets) = parse(PAIR).unwrap();
@@ -352,14 +339,14 @@ mod tests {
     }
     #[test]
     fn unknown_patterns_and_extensions_survive_but_do_not_claim_render_support() {
-        let source = PAIR.replace("Fade", "Plasma") + "[SPRITE1_BEGIN]\nimg=x.png\n[SPRITE1_END]\n";
+        let source = PAIR.replace("Zoom", "NotAPattern") + "[SPRITE1_BEGIN]\nimg=x.png\n[SPRITE1_END]\n";
         let (blend, presets) = parse(&source).unwrap();
         assert!(!blend.supports_uniform_composite());
         assert!(blend.serialize(&presets).contains("img=x.png"));
     }
 
     #[test]
-    fn milkdrop_32_display_name_does_not_disable_fade_and_round_trips() {
+    fn milkdrop_32_display_name_does_not_disable_zoom_and_round_trips() {
         let source = format!("{}NAME=Original author title\n", PAIR);
         let (blend, presets) = parse(&source).unwrap();
         assert!(blend.supports_uniform_composite());
@@ -396,8 +383,28 @@ mod tests {
     fn malformed_blocks_and_nonfinite_metadata_fail() {
         for source in [PAIR.replace("[PRESET1_END]", ""), PAIR.replace("[PRESET2_BEGIN]", "[PRESET1_BEGIN]"),
             PAIR.replace("progress=0.3", "progress=NaN"), PAIR.replace("progress=0.3", "progress=1.01"),
-            PAIR.replace("direction=-1", "direction=not-an-integer"), PAIR.replace("pattern=Fade", "pattern=Fade\nblending_pattern=Zoom")] {
+            PAIR.replace("direction=-1", "direction=not-an-integer"), PAIR.replace("blending_pattern=Zoom", "blending_pattern=Zoom\nblending_pattern=Plasma")] {
             assert!(parse(&source).is_err());
         }
+    }
+
+    #[test]
+    fn omitted_header_registers_use_per_file_defaults_without_prior_state() {
+        let source = PAIR.replace("blending_pattern=Zoom\n", "")
+            .replace("blending_progress=0.3\n", "")
+            .replace("blending_direction=-1\n", "")
+            .replace("random_1=0.123\n", "");
+        let (blend, _) = parse(&source).unwrap();
+        assert_eq!(blend.pattern, "");
+        assert_eq!(blend.progress, 0.5);
+        assert_eq!(blend.direction, 1);
+        assert_eq!(blend.random_values(), [0.0; 5]);
+        assert!(blend.render_requirement().is_some());
+    }
+
+    #[test]
+    fn only_the_canonical_saved_patterns_are_admitted() {
+        assert_eq!(blend_pattern_code("Zoom"), Some(1));
+        assert_eq!(blend_pattern_code("Fade"), None);
     }
 }

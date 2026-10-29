@@ -276,7 +276,7 @@ but unrun. Fixed arrays have one dimension; array aliases preserve their extent,
 and arrays inside structure fields remain supported. A second dimension,
 including one appended to an array typedef, is rejected because [ESSL 3.00
 forbids arrays of arrays](https://registry.khronos.org/OpenGL/specs/es/3.0/GLSL_ES_Specification_3.00.pdf).
-Common `Texture2D<T>` and `Texture3D<T>` declarations with `float`, `half`,
+Common `Texture1D<T>`, `Texture2D<T>` and `Texture3D<T>` declarations with `float`, `half`,
 `min16float`, `min10float`, or their 1–4 component vector forms lower to the
 renderer's legacy RGBA sampler bindings. Sampling and `Load` results keep the
 declared component width. Minimum-precision scalar, vector and matrix aliases
@@ -295,8 +295,10 @@ supported; fields bind as `sampler_<object>_<field>` unless their name already
 begins with `sampler_`. Declared `SamplerState` names and direct declared
 `SamplerState` fields are accepted as method arguments, while filtering and wrapping still come from
 MilkDrop sampler prefixes. Sampler-state expressions and custom state
-definitions remain unsupported. `Texture1D`,
-cube/array/multisample resources, custom sampler-state definitions, resource
+definitions remain unsupported. `Texture1D` sampling lowers to a 2D lookup at
+the center of the bound image row; use a one-row asset when the original shader
+expects true 1D storage. Texture cube/array/multisample resources, custom
+sampler-state definitions, resource
 arrays, initialized resource instances, nested resource-bearing structs, and
 resource-bearing struct parameters remain outside the profile. The separate
 WGSL path remains limited; within its floating scalar/vector expression subset,

@@ -278,11 +278,11 @@ impl MilkRustWebGlRendererSet {
             }
         }
         self.gl.bind_framebuffer(web_sys::WebGl2RenderingContext::FRAMEBUFFER, None);
-        for sprite in frame_set.sprites.iter().filter(|sprite| sprite.layer == 0) {
+        for sprite in frame_set.sprites.iter().filter(|sprite| !sprite.milk2 || sprite.layer == 0) {
             let renderer = renderers.get(sprite.preset_index)
                 .ok_or_else(|| JsValue::from_str("Sprite owner has no active preset renderer"))?;
-            // Layer zero alone has a separate draw over the combined composite.
-            renderer.draw_sprite(sprite)?;
+            // Milk2 layers 1–4 entered feedback at their ordered scene stage.
+            renderer.draw_sprite(sprite, true)?;
         }
         Ok(true)
     }
@@ -516,18 +516,18 @@ impl MilkRustWebGlRenderer {
                 MilkRustDrawCommand::SpriteLayer(sprite_layer) => {
                     ordered_sprite_layers = true;
                     for sprite in sprites.iter().filter(|sprite| sprite.preset_index == entry.index
-                        && sprite.layer == usize::from(sprite_layer)) {
-                        self.draw_sprite(sprite)?;
-                        if sprite.burn { self.draw_sprite(sprite)?; }
+                        && sprite.milk2 && sprite.layer == usize::from(sprite_layer)) {
+                        self.draw_sprite(sprite, false)?;
+                        if sprite.final_burn { self.draw_sprite(sprite, true)?; }
                     }
                 }
             }
         }
         if !ordered_sprite_layers {
-            // Preserve legacy FrameSet producers that have no phase markers.
-            for sprite in sprites.iter().filter(|sprite| sprite.preset_index == entry.index && sprite.layer > 0) {
-                self.draw_sprite(sprite)?;
-                if sprite.burn { self.draw_sprite(sprite)?; }
+            // Preserve older FrameSet producers without scene-layer markers.
+            for sprite in sprites.iter().filter(|sprite| sprite.preset_index == entry.index && sprite.milk2 && sprite.layer > 0) {
+                self.draw_sprite(sprite, false)?;
+                if sprite.final_burn { self.draw_sprite(sprite, true)?; }
             }
         }
         self.shader_resources.borrow_mut().build(frame, &targets.targets[write_index].texture);
@@ -568,7 +568,11 @@ impl MilkRustWebGlRenderer {
             self.gl.disable(web_sys::WebGl2RenderingContext::BLEND);
         }
         self.gl.bind_framebuffer(web_sys::WebGl2RenderingContext::FRAMEBUFFER, Some(&targets.targets[write_index].framebuffer));
-        for sprite in sprites.iter().filter(|sprite| sprite.preset_index == entry.index && sprite.burn && sprite.layer == 0) { self.draw_sprite(sprite)?; }
+        for sprite in sprites.iter().filter(|sprite| sprite.preset_index == entry.index
+            && sprite.burn && (!sprite.milk2 || sprite.layer == 0)) {
+            self.draw_sprite(sprite, false)?;
+            if sprite.milk2 && sprite.final_burn { self.draw_sprite(sprite, true)?; }
+        }
         self.gl.bind_framebuffer(web_sys::WebGl2RenderingContext::FRAMEBUFFER, None);
         targets.read_index = write_index;
         if self.gl.get_error() != web_sys::WebGl2RenderingContext::NO_ERROR {
@@ -681,7 +685,7 @@ impl MilkRustWebGlRenderer {
             return Ok(());
         };
         let key = milk2::TransitionMaskKey::new(pattern, entry.blend_alpha as f32, entry.blend_direction,
-            entry.blend_random.map(|value| value as f32), width, height);
+            entry.blend_random.map(|value| value as f32), entry.blend_has_randoms, &entry.blend_pattern, width, height);
         if self.transition_mask.borrow().as_ref().is_some_and(|(cached, _)| *cached == key) { return Ok(()); }
         let vertices = milk2::generate_transition_vertex_field(key).map_err(|error| JsValue::from_str(&error))?;
         let (mask_width, mask_height) = (milk2::TRANSITION_GRID_WIDTH, milk2::TRANSITION_GRID_HEIGHT);
@@ -1132,7 +1136,7 @@ impl MilkRustWebGlRenderer {
         self.gl.use_program(Some(&self.program));
     }
 
-    fn draw_sprite(&self, sprite: &milkrust_core::sprites::Frame) -> Result<(), JsValue> {
+    fn draw_sprite(&self, sprite: &milkrust_core::sprites::Frame, restore_final_burn_geometry: bool) -> Result<(), JsValue> {
         let texture = self.named_texture_for_at(&sprite.texture, sprite.time)?.ok_or_else(|| JsValue::from_str("Sprite image is still loading"))?;
         let dimensions = {
             let textures = self.named_textures.borrow();
@@ -1142,7 +1146,7 @@ impl MilkRustWebGlRenderer {
         };
         let mut pass = self.sprite_pass.borrow_mut();
         if pass.is_none() { *pass = Some(sprites::SpritePass::new(self.gl.clone())?); }
-        pass.as_mut().unwrap().draw(sprite, &texture, dimensions)
+        pass.as_mut().unwrap().draw(sprite, &texture, dimensions, restore_final_burn_geometry)
     }
 
     fn prepare_textures(&self, frame: &MilkRustFrame) -> Result<bool, JsValue> {

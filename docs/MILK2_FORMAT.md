@@ -10,15 +10,22 @@ Header records include `blending_pattern`, `blending_progress`,
 unknown header records and trailing embedded extensions through serialization,
 while refusing to render unimplemented extensions. MilkDrop 3.2's trailing
 `NAME=` display metadata is bounded, preserved, and does not by itself disable
-the supported uniform Fade path. Duplicate names, oversized names, and any
+the supported uniform Zoom path. Duplicate names, oversized names, and any
 other executable trailer content remains gated. Progress is a frozen blend position; it
 does not advance as a transition timer. Each preset retains its own
 equation/register state and feedback targets.
 
-An omitted progress defaults to `0.5` and an omitted direction defaults to
-`1`. Direction is a signed integer in the saved header; only `-1` reverses the
-four direction-sensitive patterns, while other integer values preserve the
-normal orientation. A non-integer or out-of-range direction is rejected.
+Each `.milk2` file supplies an independent saved-blend state. Missing pattern
+is empty and fails closed; missing progress defaults to `0.5`, direction to
+`1`, and each omitted random register to `0`. Loading a new file never inherits
+the preceding file's header values. Serialization preserves whether each
+optional header record was present. Direction is a signed integer in the saved
+header; only `-1` reverses the four direction-sensitive patterns, while other
+integer values preserve the normal orientation. A non-integer direction is
+rejected. When the header has no random records at all, analytic patterns use
+the reference renderer's midpoint random inputs (`0.5`); plasma uses its
+deterministically seeded legacy random sequence. In a partial random block,
+omitted registers remain zero.
 
 `milk2.rs` is an independent bounded parser of the documented wrapper. The
 saved-blend and sprite behavior is implemented from the compatible MIT
@@ -39,23 +46,23 @@ cross-fade. Saved sprite blocks execute on native GL/GLES and WebGL; see
 [EMBEDDED_SPRITES.md](EMBEDDED_SPRITES.md).
 
 Bounded `NAME=` metadata and well-formed trailing sprite blocks disabled by
-`sprite=0` or an omitted sprite flag are preserved without execution. A trailing
-sprite executes only with `sprite=1`. Unknown flag values, unmatched/nested
+`sprite=0` are preserved without execution. Trailing sprites execute by
+default, including when the `sprite` flag is omitted. Unknown flag values, unmatched/nested
 blocks and unrelated trailer records remain gated. The wrapper enforces the same
 2 MiB source budget when called independently of the preset importer.
 
-Within an active sprite block, repeated saved fields use their first value,
-except repeated `SpriteName` records, which use the last value. Repeated sprite
-block indices still use the last complete block.
+Within an active sprite block, repeated saved fields use their first value.
+Repeated sprite block indices still use the last complete block.
 
-The mask arithmetic includes the `-1` direction rule for the four
-direction-aware patterns and the non-square `horizontal` mesh behavior. Saved
+The mask arithmetic includes the no-random fallback, `-1` direction rule for
+the four direction-aware patterns and the non-square `horizontal` mesh
+behavior. Saved
 sprite handling includes per-owner scopes, flip UVs, saved offsets/repeats,
-rotation modes, byte-wrapped alpha, layer and burn ordering, and all eleven
-saved blend modes with the MD3 default of 4 and invalid dynamic values mapped to
-mode 0. Saved blend header values carry across double-preset loads; a new
-runtime starts with no pattern, progress 1, direction 0 and zero random values.
-A missing first-load pattern fails closed instead of being treated as Fade.
+fps-scaled `SpriteSpeed`, EEL-seeded alpha/repeat/burn/layer/blend controls,
+dynamic layer selection, and all eleven saved blend modes with default 0 and
+dynamic selectors clamped to 0–10. `SpriteRot` is retained but inert in the
+inspected classic loader. A missing pattern fails closed rather than selecting
+an invented transition.
 These are source-level implementations. GPU triangle interpolation,
 compositing, sprite filtering and draw order still need reference captures to
 qualify pixel behavior on each renderer. The Canvas and WGSL paths explicitly

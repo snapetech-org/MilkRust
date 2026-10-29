@@ -302,7 +302,8 @@ impl Renderer {
         let mask_key = frames.entries.get(1).and_then(|entry| {
             let pattern = milk2::blend_pattern_code(&entry.blend_pattern)?;
             (pattern != 0).then(|| milk2::TransitionMaskKey::new(pattern, entry.blend_alpha as f32,
-                entry.blend_direction, entry.blend_random.map(|value| value as f32), width, height))
+                entry.blend_direction, entry.blend_random.map(|value| value as f32), entry.blend_has_randoms,
+                &entry.blend_pattern, width, height))
         });
         if let Some(key) = mask_key {
             if self.transition_mask.as_ref().is_none_or(|(cached, _)| *cached != key) {
@@ -550,7 +551,7 @@ impl Renderer {
         Ok(())
     }
 
-    fn draw_sprite(&self, sprite: &milkrust_core::sprites::Frame) -> Result<(), String> {
+    fn draw_sprite(&self, sprite: &milkrust_core::sprites::Frame, restore_final_burn_geometry: bool) -> Result<(), String> {
         let image = self.named_texture_asset_at(&sprite.texture, sprite.time)?;
         let background = self.sprite_snapshot.as_ref().ok_or("Missing sprite snapshot")?;
         // Copy from the currently bound render target; sampling the live target
@@ -569,8 +570,13 @@ impl Renderer {
         program.vector4("spriteTint", tint[0], tint[1], tint[2], tint[3]);
         let color_key = sprite.color_key_rgba();
         program.vector4("spriteColorKey", color_key[0], color_key[1], color_key[2], color_key[3]);
+        program.integer("spriteColorKeyEnabled", if sprite.color_key_enabled() { 1 } else { 0 });
         program.integer("spriteBlend", sprite.blend_mode);
-        let (positions, uvs) = sprite.geometry((image.width, image.height), (self.width, self.height));
+        let (positions, uvs) = sprite.geometry_for_target(
+            (image.width, image.height),
+            (self.width, self.height),
+            restore_final_burn_geometry,
+        );
         self.draw(0x0006, &interleave(&positions, &uvs, &[], [1.0; 4])?)?;
         unsafe { (self.gl.bind_sampler)(0, 0); }
         Ok(())
@@ -609,18 +615,18 @@ impl Renderer {
                     MilkRustDrawCommand::SpriteLayer(sprite_layer) => {
                         ordered_sprite_layers = true;
                         for sprite in frames.sprites.iter().filter(|sprite| sprite.preset_index == index
-                            && sprite.layer == usize::from(sprite_layer)) {
-                            self.draw_sprite(sprite)?;
-                            if sprite.burn { self.draw_sprite(sprite)?; }
+                            && sprite.milk2 && sprite.layer == usize::from(sprite_layer)) {
+                            self.draw_sprite(sprite, false)?;
+                            if sprite.final_burn { self.draw_sprite(sprite, true)?; }
                         }
                     }
                 }
             }
             if !ordered_sprite_layers {
-                // Preserve legacy FrameSet producers that have no layer markers.
-                for sprite in frames.sprites.iter().filter(|sprite| sprite.preset_index == index && sprite.layer > 0) {
-                    self.draw_sprite(sprite)?;
-                    if sprite.burn { self.draw_sprite(sprite)?; }
+                // Preserve older FrameSet producers without scene-layer markers.
+                for sprite in frames.sprites.iter().filter(|sprite| sprite.preset_index == index && sprite.milk2 && sprite.layer > 0) {
+                    self.draw_sprite(sprite, false)?;
+                    if sprite.final_burn { self.draw_sprite(sprite, true)?; }
                 }
             }
             self.build_resources(frame, layer, layer.targets[write].texture.id)?;
@@ -642,17 +648,23 @@ impl Renderer {
             composite.float("classicDisplay", 1.0);
             if !frame.shader_stages.composite.required { unsafe { (self.gl.bind_sampler)(0, 0); } }
             self.draw(0x0004, &quad())?;
-            // Back-layer burns become history for the next frame, after the
-            // current composite has sampled it. Equations still ran only once.
+            // Milk2 layer 0 and classic layers burn once per active frame.
+            // A finished Milk2 sprite gets its separate final stamp after the
+            // primary draw; classic sprites already burn once on this frame.
             unsafe { (self.gl.bind_framebuffer)(FRAMEBUFFER, layer.targets[write].id); }
-            for sprite in frames.sprites.iter().filter(|sprite| sprite.preset_index == index && sprite.burn && sprite.layer == 0) {
-                self.draw_sprite(sprite)?;
+            for sprite in frames.sprites.iter().filter(|sprite| sprite.preset_index == index
+                && sprite.burn && (!sprite.milk2 || sprite.layer == 0)) {
+                self.draw_sprite(sprite, false)?;
+                if sprite.milk2 && sprite.final_burn { self.draw_sprite(sprite, true)?; }
             }
             self.layers[index].read = write;
         }
         unsafe { (self.gl.bind_framebuffer)(FRAMEBUFFER, output); }
-        // Layer zero alone gets a separate draw over the combined composite.
-        for sprite in frames.sprites.iter().filter(|sprite| sprite.layer == 0) { self.draw_sprite(sprite)?; }
+        // Classic sprites and Milk2 layer 0 overlay the composite. Milk2 layers
+        // 1–4 already entered the feedback image at their ordered scene stage.
+        for sprite in frames.sprites.iter().filter(|sprite| !sprite.milk2 || sprite.layer == 0) {
+            self.draw_sprite(sprite, true)?;
+        }
         unsafe {
             (self.gl.disable)(BLEND); (self.gl.active_texture)(TEXTURE0);
             if (self.gl.get_error)() != 0 { return Err("OpenGL failed while rendering a preset pass".into()); }

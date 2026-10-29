@@ -3,46 +3,53 @@
 The `.milk`/`.milk2` importer now separates `[SPRITEn_BEGIN]`/`[SPRITEn_END]`
 records from preset equations. It retains the original records for export and
 selects the last definition of an index. Within a block, the first occurrence
-of each saved field wins except that the last `SpriteName` wins. Ordinary
-`.milk` files execute blocks
-by default; a trailing `.milk2` sprite block executes only when its envelope
-contains `sprite=1`. `sprite=0` and an omitted flag preserve trailing blocks
-without executing them or admitting their image dependencies.
+of each saved field wins, including `SpriteName`. `.milk` and `.milk2` sprite
+blocks execute by default; only `sprite=0` disables them. Disabled blocks are
+preserved without executing code or admitting image dependencies.
 Unknown active fields, mismatched/nested blocks, non-finite values and external
 asset paths fail explicitly. Disabled records are preserved without executing
 code or admitting image dependencies. Limits are the 16 preset sprite slots
-(indices 1–16) and 64 saved records, 1024 numbered equation lines and the existing
-source, expression-work and texture budgets. MilkDrop3's external sprite image
+(indices 1–16) and 64 saved records, 255 numbered equation lines and the existing
+source, expression-work and texture budgets. Numbered equations execute
+contiguously from line 1 and stop at the first missing or empty record, through
+line 255. MilkDrop3's external sprite image
 cache can hold 100 assets; native and WebGL hosts admit that same 100-name
 limit, subject to the aggregate 32 Mi decoded-pixel budget. That cache capacity
 is separate from the 16 slots a preset can address.
 `SpriteColorKey` follows base-0 unsigned integer syntax: `0x` values are
 hexadecimal, other leading-zero values are octal, and values without a prefix
-are decimal before the alpha byte is forced opaque.
+are decimal. The value is retained; the inspected loader matches the low 24
+RGB bits and uses `0xFFFFFFFF` as its no-key sentinel.
 
 Each sprite has its own persistent scope. `init_N` executes once, `code_N` in
-numeric order each frame, with elapsed sprite time, frame, fps, audio bands and
-saved blend progress. `done` retires after one final drawable/burnable frame.
+contiguous numeric order each frame, with elapsed sprite time, a sprite-local
+frame counter, the owning preset's fps and audio bands, and saved blend
+progress. `SpriteAlpha`, `SpriteBurn`, `SpriteBlend`, `SpriteLayer`, and
+`SpriteRepeatX/Y` seed their matching EEL registers before `init_N`; equations
+can replace those values. `SpriteSpeed` appends `rot=rot+speed/fps` after the
+per-frame equations. `SpriteRot` is retained as saved metadata but has no
+effect in the inspected classic loader. `done` retires the sprite after its
+final drawable frame. When `burn` is nonzero, the classic renderer draws the
+sprite into feedback on each active frame and then draws it over the display.
+On a final `done && burn` frame, the primary feedback draw uses MilkDrop's 4:3
+aspect correction; the display copy restores normal screen geometry.
 The checked runtime reports errors and resets partially evaluated state. A new
 preset resets sprite lifetimes. WebGL retains the evaluated frame while textures
 load, preventing short-lived sprites from expiring before their first draw.
 
 Saved image offsets and scale offsets remain separate from script `x/y/sx/sy`,
-so a script assignment does not erase them. Signed scales mirror the quad and
-nonzero `flipx`/`flipy` values reverse the corresponding UV axis. Image aspect,
-rotation, display aspect and repeated UVs are shared Rust geometry. Saved
-`SpriteRot=1` adds absolute host time times
-`SpriteSpeed`; `SpriteRot=2` subtracts it, and other values leave EEL `rot`
-alone. Script rotation remains persistent and unwrapped. `SpriteRepeatX/Y`
-multiply the EEL repeat registers, and saved position/size offsets remain
-independent from EEL. `SpriteBurn=0` disables feedback burn, `1` always burns,
-and other values follow EEL `burn`; an absent field defaults to `1`, so it
-always burns unless a non-default static mode selects the EEL register.
-Invalid layers skip both sprite code and drawing. The EEL `blendmode` register
-starts from `SpriteBlend` (default 4), is read each frame and truncated to an
-integer. Values outside 0–10 select mode 0.
-`SpriteAlpha` multiplies script alpha before legacy 8-bit packing without
-clamping the multiplied alpha, including byte wrap outside 0–1.
+so a script assignment does not erase them. Position offsets join EEL
+coordinates before the final clip-space clamp; size offsets join the EEL scales
+before the final scale clamp. Signed scales mirror the quad and nonzero
+`flipx`/`flipy` values reverse the corresponding UV axis. Image aspect,
+rotation, display aspect and repeated UVs are shared Rust geometry. `repeatx`
+and `repeaty` clamp to 0.01–100 after equations. EEL `burn` defaults to the
+saved `SpriteBurn` value (1 when omitted), and equations can change it.
+`layer` starts from `SpriteLayer` and rounds then clamps to 0–4 for `.milk2`
+and 0–1 for classic `.milk` each frame.
+`blendmode` starts from `SpriteBlend` (default 0), is truncated and clamped to
+0–10 each frame. EEL `a` starts from `SpriteAlpha` (default 1), can be changed
+by equations, and is clamped to 0–1 before 8-bit color packing.
 
 GIF sprite assets are decoded into a bounded full-canvas RGBA sequence before
 upload. The shared decoder applies frame offsets and disposal operations,
@@ -56,7 +63,9 @@ play. Other animated raster formats remain outside the admitted texture profile.
 
 Both GPU hosts use the same fragment source, sampling a distinct destination
 snapshot for each sprite. They never sample the current draw attachment. The
-eleven modes follow MilkDrop 3's `DrawUserSprites` table:
+eleven modes follow MilkDrop 3's `DrawUserSprites` table. Diffuse RGBA bytes are
+computed in shared Rust code before either GL host binds them, avoiding
+driver-dependent shader rounding at byte boundaries:
 
 | Mode | Stage color / alpha | RGB blend factors |
 | --- | --- | --- |
@@ -67,39 +76,38 @@ eleven modes follow MilkDrop 3's `DrawUserSprites` table:
 | 4 Color key | diffuse × texture / diffuse alpha × texture alpha | source alpha, inverse source alpha |
 | 5 Multiplicative | diffuse × texture / diffuse alpha | destination color, zero |
 | 6 Subtractive | diffuse × texture / diffuse alpha | zero, inverse source color |
-| 7 Invert | 1 − texture / diffuse alpha × texture alpha | source alpha, inverse source alpha |
-| 8 Cut-off | folded diffuse × texture / diffuse alpha × texture alpha | source alpha, inverse source alpha |
-| 9 Darken | saturate(texture + diffuse − 0.5) / diffuse alpha | zero, source color |
-| 10 Vivid | saturate(2 × texture × diffuse) / diffuse alpha | one, one |
+| 7 Invert | 1 − (diffuse × texture) / discard when combined alpha < 0.004 | one, zero |
+| 8 Cut-off | zero / discard when source alpha < 0.004 | zero, zero |
+| 9 Darken | saturate(0.5 + diffuse × texture) / discard when combined alpha < 0.004 | zero, source color |
+| 10 Vivid | diffuse × texture, drawn twice | one, one |
 
-Diffuse vertex color is quantized on the CPU to the exact byte that the legacy
-D3D vertex path stores; both GL hosts pass the same normalized byte values to
-the shared shader, avoiding backend-specific float-to-byte rounding. Modes 1
-and 2 premultiply diffuse RGB by alpha before byte conversion. Mode 3 uses
-texture RGB as both the source color and the blend factor, with white diffuse
-color. Mode 7 also uses white diffuse RGB; mode 8 folds each diffuse channel
-around 0.5 before multiplying by texture. Modes 0, 5, 6, 9 and 10
-ignore image alpha. Color keys match opaque source
-texels (ARGB, not RGB alone) before the shared
-manual bilinear sample and replace the whole matching texel with transparent
-black. Other texels retain their RGBA values. The saved RGB key is promoted to
-opaque ARGB, matching MilkDrop's `0xff000000 | ck` texture-loader argument. This
-follows D3DX texture-loading semantics; it corrects the earlier alpha-only key
-replacement. Out-of-range per-frame blend IDs select mode 0.
+Modes 1, 2, 6 and 10 premultiply diffuse RGB by alpha before byte conversion. Mode 3
+uses texture RGB as both the source color and the blend factor, with white
+diffuse color. Mode 7 uses the diffuse tint and discards fully transparent
+samples. Mode 8 clears the destination for nontransparent texels and leaves
+keyed or transparent texels unchanged. Mode 9 uses the diffuse tint and
+discards fully transparent samples. Modes 0, 5, 6 and 10 do
+not use image alpha for blending. Color keys match opaque source
+texels by their low 24 RGB bits before the shared manual bilinear sample. The
+matching texel's alpha is cleared while its RGB is retained. `0xFFFFFFFF`
+disables keying; an omitted key is zero. Out-of-range per-frame blend IDs clamp
+to mode 0 or 10.
 Alpha/filter raster parity
 remains unqualified.
 
-Burning layer 1 is inserted after warp/blur and before shapes, layer 2
-after shapes, layer 3 after custom waves, and layer 4 after the main wave and
-borders. Shared scene-command markers keep the native and WebGL insertion
-points aligned. These sprites enter their owner's feedback before its composite
-shader. Burning layer 0 stamps feedback after that owner's composite, becoming
-visible through the next frame's history. Layers 1–4 are shown through
-their owner's composite and receive no separate screen overlay. A burning sprite
-on those layers is drawn twice into feedback at its stage; a non-burning one is
-drawn once. Only layer 0 receives a separate post-composite screen draw, and a
-burning layer-0 sprite also stamps feedback once. A trailing `.milk2` sprite
-block belongs to PRESET2. Double presets do not execute sprite equations twice.
+Milk2 layers 1–4 use shared scene-command markers in native and WebGL: after
+warp/blur and before shapes, after shapes, after custom waves, and after the
+main wave and borders. Their primary draw enters the owner's current feedback
+stage each frame. On a final `done && burn` frame, MilkDrop draws an additional
+feedback stamp with the uncorrected geometry. Layer 0 draws over the final
+composite; a nonzero `burn` register also stamps feedback once on each active
+frame, with the same additional final stamp. Classic `.milk` layers 0–1 use the
+overlay/burn path; their final primary feedback draw gets the 4:3 correction,
+and the display copy restores normal geometry.
+Milk2 layers 1–4 are visible through the composite and are not drawn again as a
+display overlay. This is the implemented source behavior; exact MilkDrop 3
+layer/burn parity remains open until reference captures are compared. A trailing `.milk2` sprite block
+belongs to PRESET2. Double presets do not execute sprite equations twice.
 Canvas and the generic cross-renderer import gate reject this feature; the
 separate WGSL renderer has no saved-sprite pipeline.
 
@@ -124,11 +132,10 @@ must not be reported as exact rendering.
 
 The classic alpha-state and 8-bit vertex-color rules were checked against
 MilkDrop3's published `code/vis_milk2/milkdropfs.cpp` (`DrawUserSprites`) at
-`6b39088f789441e18cc1665519ee7ffe439cece5`. Its `texmgr.cpp` supplies an opaque
-ARGB key to `D3DXCreateTextureFromFileEx`, whose
-[documented behavior](https://learn.microsoft.com/en-us/windows/win32/direct3d9/d3dxcreatetexturefromfileex)
-replaces matching pixels with transparent black and includes alpha in the
-match. The browser source checks all eleven modes and 66 combinations of sprite
+`6b39088f789441e18cc1665519ee7ffe439cece5`. That snapshot does not include the
+saved sprite-block loader; sprite color-key handling follows the inspected
+WIC loader path, which compares RGB and clears alpha before filtering. The
+browser source checks all eleven modes and 66 combinations of sprite
 blend mode, transparent/partial/opaque image alpha and matching/nonmatching color keys.
 Core source checks unwrapped rotation lifetime and scripted numeric selectors.
 These are authored controls, not executed results or MD3 captures.

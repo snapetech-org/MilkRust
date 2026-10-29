@@ -125,6 +125,7 @@ pub struct MilkRustCompositeFrame {
     pub blend_pattern: String,
     pub blend_direction: i32,
     pub blend_random: [f64; 5],
+    pub blend_has_randoms: bool,
     pub composite_mode: String,
     pub frame: MilkRustFrame,
     pub index: usize,
@@ -995,6 +996,7 @@ pub fn milkrust_frame_set_from_source_with_audio_and_input(
                 blend_random: parsed.saved_blend.as_ref()
                     .filter(|_| index == 1)
                     .map_or([0.0; 5], milk2::SavedBlend::random_values),
+                blend_has_randoms: index == 1 && parsed.saved_blend.as_ref().is_some_and(milk2::SavedBlend::has_randoms),
                 composite_mode: milkrust_composite_mode(preset_document, index).to_string(),
                 frame: build_milkrust_frame_from_scope(
                     preset_document,
@@ -1238,7 +1240,6 @@ pub struct MilkRustFrameSetRuntime {
      scopes: Vec<BTreeMap<String, MilkRustValue>>,
      source: String,
      cached_preset_set: Option<MilkRustPresetSet>,
-     saved_blend_state: milk2::BlendHeaderState,
      shader_stages: Vec<MilkRustShaderStages>,
  }
 
@@ -1338,7 +1339,7 @@ impl MilkRustFrameSetRuntime {
             return Err(error);
         }
         if self.source != source || self.preset_documents.is_empty() {
-            let parsed = parse_milkrust_preset_set_with_blend_state(source, false, &self.saved_blend_state);
+            let parsed = parse_milkrust_preset_set(source, false);
             let error = parsed.presets.iter().flat_map(|p| p.parse_errors.iter()).next().cloned()
                 .or_else(|| parsed.saved_blend.as_ref().and_then(milk2::SavedBlend::render_requirement));
             if let Some(error) = error { self.last_error = Some(error.clone()); return Err(error); }
@@ -1374,45 +1375,42 @@ impl MilkRustFrameSetRuntime {
         spectrum: &[f64],
         input: MilkRustInputState,
     ) -> MilkRustFrameSet {
-if self.source != source || self.preset_documents.is_empty() {
-             let parsed = parse_milkrust_preset_set_with_blend_state(
-                 source,
-                 source.to_ascii_lowercase().contains("[preset01]"),
-                 &self.saved_blend_state,
-             );
-             self.saved_blend_state = parsed.saved_blend.as_ref()
-                 .map_or_else(milk2::BlendHeaderState::default, milk2::SavedBlend::header_state);
-             self.previous_time = None;
-             self.sprite_runtime = sprites::Runtime::default();
-             self.cached_preset_set = Some(parsed.clone());
-             self.shader_stages = parsed.presets.iter().map(milkrust_shader_stages).collect();
-             self.initialized = vec![false; parsed.presets.len()];
-             self.scopes = parsed
-                 .presets
-                 .iter()
-                 .map(|preset| create_milkrust_scope(preset, time_seconds, bass, mid, treble))
-                 .collect();
-             self.preset_documents = parsed.presets;
-             self.source = source.to_string();
-         }
+        if self.source != source || self.preset_documents.is_empty() {
+            let parsed = parse_milkrust_preset_set(
+                source,
+                source.to_ascii_lowercase().contains("[preset01]"),
+            );
+            self.previous_time = None;
+            self.sprite_runtime = sprites::Runtime::default();
+            self.cached_preset_set = Some(parsed.clone());
+            self.shader_stages = parsed.presets.iter().map(milkrust_shader_stages).collect();
+            self.initialized = vec![false; parsed.presets.len()];
+            self.scopes = parsed
+                .presets
+                .iter()
+                .map(|preset| create_milkrust_scope(preset, time_seconds, bass, mid, treble))
+                .collect();
+            self.preset_documents = parsed.presets;
+            self.source = source.to_string();
+        }
 
-         let fps = self.previous_time.filter(|previous| time_seconds > *previous)
-             .map_or(60.0, |previous| (1.0 / (time_seconds - previous)).clamp(1.0, 1000.0));
-         self.previous_time = Some(time_seconds);
-         let stereo = self.stereo_audio.take();
-         let preset_set = self.cached_preset_set.as_ref().unwrap();
-         let title = milkrust_preset_set_title(preset_set);
-         let transition_mode = milkrust_transition_mode(preset_set);
-         let transition_seconds = milkrust_transition_seconds(preset_set);
-         let mut entries = Vec::with_capacity(self.preset_documents.len());
+        let fps = self.previous_time.filter(|previous| time_seconds > *previous)
+            .map_or(60.0, |previous| (1.0 / (time_seconds - previous)).clamp(1.0, 1000.0));
+        self.previous_time = Some(time_seconds);
+        let stereo = self.stereo_audio.take();
+        let preset_set = self.cached_preset_set.as_ref().unwrap();
+        let title = milkrust_preset_set_title(preset_set);
+        let transition_mode = milkrust_transition_mode(preset_set);
+        let transition_seconds = milkrust_transition_seconds(preset_set);
+        let mut entries = Vec::with_capacity(self.preset_documents.len());
 
-         for index in 0..self.preset_documents.len() {
-             let preset_document = &mut self.preset_documents[index];
-             let scope = &mut self.scopes[index];
-             let translated_shader_source = translated_milkrust_shader_source(preset_document);
-             let shader_texture_samplers = milkrust_shader_texture_samplers(preset_document);
-             let next_frame = milkrust_scope_number(scope, "frame", 0.0) + 1.0;
-             update_milkrust_scope_audio(
+        for index in 0..self.preset_documents.len() {
+            let preset_document = &mut self.preset_documents[index];
+            let scope = &mut self.scopes[index];
+            let translated_shader_source = translated_milkrust_shader_source(preset_document);
+            let shader_texture_samplers = milkrust_shader_texture_samplers(preset_document);
+            let next_frame = milkrust_scope_number(scope, "frame", 0.0) + 1.0;
+            update_milkrust_scope_audio(
                  scope,
                  time_seconds,
                  next_frame,
@@ -1486,6 +1484,7 @@ if self.source != source || self.preset_documents.is_empty() {
                 blend_random: preset_set.saved_blend.as_ref()
                     .filter(|_| index == 1)
                     .map_or([0.0; 5], milk2::SavedBlend::random_values),
+                blend_has_randoms: index == 1 && preset_set.saved_blend.as_ref().is_some_and(milk2::SavedBlend::has_randoms),
                 composite_mode: composite_mode.to_string(),
                 frame,
                 index,
@@ -1922,18 +1921,6 @@ fn parse_milkrust_preset_text(text: &str, index: usize) -> MilkRustPresetDocumen
 }
 
 pub fn parse_milkrust_preset_set(source: &str, force_milk2: bool) -> MilkRustPresetSet {
-    parse_milkrust_preset_set_with_blend_state(
-        source,
-        force_milk2,
-        &milk2::BlendHeaderState::default(),
-    )
-}
-
-fn parse_milkrust_preset_set_with_blend_state(
-    source: &str,
-    force_milk2: bool,
-    previous_blend_state: &milk2::BlendHeaderState,
-) -> MilkRustPresetSet {
     if let Err(error) = validate_preset_source(source) {
         let format = if force_milk2 { "milk2" } else { "milk" }.to_string();
         let mut preset = MilkRustPresetDocument::new("", 0);
@@ -1952,7 +1939,7 @@ fn parse_milkrust_preset_set_with_blend_state(
     };
     let source = blocks.body.as_str();
     let (chunks, saved_blend) = if milk2::has_wrapper(source) {
-        match milk2::parse_with_previous(source, previous_blend_state) {
+        match milk2::parse(source) {
             Ok((blend, chunks)) => (chunks.to_vec(), Some(blend)),
             Err(error) => {
                 let mut preset = MilkRustPresetDocument::new("", 0);
@@ -1968,6 +1955,10 @@ fn parse_milkrust_preset_set_with_blend_state(
         "milk"
     }
     .to_string();
+    let mut embedded_sprites = blocks.definitions;
+    for sprite in &mut embedded_sprites {
+        sprite.milk2 = format == "milk2";
+    }
     let presets = chunks
         .iter()
         .enumerate()
@@ -1977,7 +1968,7 @@ fn parse_milkrust_preset_set_with_blend_state(
             preset
         })
         .collect::<Vec<_>>();
-    MilkRustPresetSet { embedded_sprites: blocks.definitions, embedded_sprite_source: blocks.source, format, presets, saved_blend }
+    MilkRustPresetSet { embedded_sprites, embedded_sprite_source: blocks.source, format, presets, saved_blend }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -2940,6 +2931,7 @@ pub struct MilkRustWebGpuCompositeBatch {
     pub blend_pattern: String,
     pub blend_direction: i32,
     pub blend_random: [f64; 5],
+    pub blend_has_randoms: bool,
     pub composite_mode: String,
     pub filled_first_vertex: usize,
     pub filled_vertex_count: usize,
@@ -3109,6 +3101,7 @@ pub fn create_milkrust_webgpu_frame_set_batches(
                 blend_pattern: entry.blend_pattern.clone(),
                 blend_direction: entry.blend_direction,
                 blend_random: entry.blend_random,
+                blend_has_randoms: entry.blend_has_randoms,
                 composite_mode: entry.composite_mode.clone(),
                 filled_first_vertex,
                 filled_vertex_count,
@@ -3184,6 +3177,7 @@ pub fn milkrust_webgpu_batch_summary_json(
                 "blendPattern": batch.blend_pattern,
                 "blendDirection": batch.blend_direction,
                 "blendRandom": batch.blend_random,
+                "blendHasRandoms": batch.blend_has_randoms,
                 "compositeMode": batch.composite_mode,
                 "filledFirstVertex": batch.filled_first_vertex,
                 "filledVertexCount": batch.filled_vertex_count,
@@ -3209,6 +3203,7 @@ pub fn milkrust_webgpu_batch_summary_json(
                 "blendPattern": entry.blend_pattern,
                 "blendDirection": entry.blend_direction,
                 "blendRandom": entry.blend_random,
+                "blendHasRandoms": entry.blend_has_randoms,
                 "compositeMode": entry.composite_mode,
                 "index": entry.index,
                 "linePrimitives": entry.frame.primitives.iter().filter(|primitive| matches!(primitive.mode, MilkRustPrimitiveMode::LineStrip | MilkRustPrimitiveMode::Lines)).count(),
@@ -7794,12 +7789,12 @@ comp_shader_2=ret = vec3(shifted, energy * bass_att);
 
     #[test]
     fn stateless_saved_pair_uses_envelope_progress_and_refuses_unknown_masks() {
-        let source = "blending_pattern=Fade\nblending_progress=0.2\n[PRESET1_BEGIN]\n[preset00]\nzoom=1\n[PRESET1_END]\n[PRESET2_BEGIN]\n[preset00]\nzoom=1\n[PRESET2_END]";
+        let source = "blending_pattern=Zoom\nblending_progress=0.2\n[PRESET1_BEGIN]\n[preset00]\nzoom=1\n[PRESET1_END]\n[PRESET2_BEGIN]\n[preset00]\nzoom=1\n[PRESET2_END]";
         let frames = milkrust_frame_set_from_source(source, 0.0, 0.0, 0.0, 0.0);
         assert_eq!(frames.entries.len(), 2);
         assert_eq!(frames.entries[0].blend_alpha, 1.0);
         assert_eq!(frames.entries[1].blend_alpha, 0.2);
-        assert!(milkrust_frame_set_from_source(&source.replace("Fade", "UnknownMask"),
+        assert!(milkrust_frame_set_from_source(&source.replace("Zoom", "UnknownMask"),
             0.0, 0.0, 0.0, 0.0).entries.is_empty());
     }
 

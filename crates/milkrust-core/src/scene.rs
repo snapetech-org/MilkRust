@@ -65,8 +65,8 @@ impl Scene {
 pub(crate) fn build(preset: &mut MilkRustPresetDocument, scope: &mut BTreeMap<String, MilkRustValue>,
     samples: &[f64], spectrum: &[f64], stereo: Option<&audio::Stereo>, rgb: [f64; 3], mesh: Option<&crate::MilkRustWarpMesh>) -> Scene {
     let mut scene = Scene::default();
-    // These markers place saved sprites at MilkDrop's feedback layers: after
-    // warp, after shapes, after custom waves, and after the main wave/borders.
+    // Saved sprite layer markers run after warp, after shapes, after custom
+    // waves, and after the main wave plus borders in both GPU hosts.
     scene.order.push(MilkRustDrawCommand::SpriteLayer(1));
     let motion_alpha = number(scope, "mv_a", 0.0).clamp(0.0,1.0);
     let motion = crate::warp::motion_vectors(scope, mesh);

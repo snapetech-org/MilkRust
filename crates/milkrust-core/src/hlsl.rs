@@ -97,16 +97,17 @@ fn lower_modern_resource_syntax(tokens: &mut Vec<String>) -> Result<(), String> 
     let mut index = 0;
     while index < tokens.len() {
         let dimension = match tokens[index].as_str() {
+            "Texture1D" => Some(1),
             "Texture2D" => Some(2),
             "Texture3D" => Some(3),
-            "Texture1D" | "Texture1DArray" | "Texture2DArray" | "Texture2DMS" | "Texture2DMSArray"
+            "Texture1DArray" | "Texture2DArray" | "Texture2DMS" | "Texture2DMSArray"
             | "TextureCube" | "TextureCubeArray" | "SamplerComparisonState" | "RWTexture1D"
             | "RWTexture1DArray" | "RWTexture2D" | "RWTexture2DArray" | "RWTexture3D"
             | "RasterizerOrderedTexture1D" | "RasterizerOrderedTexture2D" | "RasterizerOrderedTexture3D"
             | "Buffer" | "RWBuffer" | "StructuredBuffer" | "RWStructuredBuffer"
             | "AppendStructuredBuffer" | "ConsumeStructuredBuffer" | "ByteAddressBuffer"
             | "RWByteAddressBuffer" | "ConstantBuffer" => {
-                return Err(format!("{} is outside the 2D/3D MilkRust texture profile", tokens[index]));
+                return Err(format!("{} is outside the 1D/2D/3D MilkRust texture profile", tokens[index]));
             }
             _ => None,
         };
@@ -164,7 +165,7 @@ fn lower_modern_resource_syntax(tokens: &mut Vec<String>) -> Result<(), String> 
                     }
                 }).or_insert(Some(shape));
             }
-            tokens[type_index] = if dimension == 2 { "sampler2D" } else { "sampler3D" }.into();
+            tokens[type_index] = if dimension <= 2 { "sampler2D" } else { "sampler3D" }.into();
             index = name_index + 1;
             continue;
         }
@@ -316,7 +317,7 @@ fn lower_modern_resource_syntax(tokens: &mut Vec<String>) -> Result<(), String> 
             })
         } else {
             resource_shapes.get(&base_name).copied().flatten()
-        }.ok_or_else(|| format!("HLSL resource method receiver {base_name} has no unambiguous Texture2D/Texture3D declaration"))?;
+        }.ok_or_else(|| format!("HLSL resource method receiver {base_name} has no unambiguous Texture1D/Texture2D/Texture3D declaration"))?;
         let dimension = resource_shape.dimension;
         let (args, end) = split_hlsl_call(tokens, index + 2)?;
         if method == "GetDimensions" {
@@ -347,7 +348,7 @@ fn lower_modern_resource_syntax(tokens: &mut Vec<String>) -> Result<(), String> 
                 let target = &args[axis + if has_mip { 1 } else { 0 }];
                 rewritten.extend(target.clone());
                 rewritten.push("=".into());
-                rewritten.push(if dimension == 2 { "tex2Dsize" } else { "tex3Dsize" }.into());
+                rewritten.push(if dimension <= 2 { "tex2Dsize" } else { "tex3Dsize" }.into());
                 rewritten.push("(".into());
                 rewritten.extend_from_slice(&tokens[base_start..index]);
                 if has_mip {
@@ -361,7 +362,9 @@ fn lower_modern_resource_syntax(tokens: &mut Vec<String>) -> Result<(), String> 
             }
             if has_mip {
                 let target = args.last().ok_or_else(|| "Malformed HLSL mip-level GetDimensions".to_string())?;
-                let size = if dimension == 2 {
+                let size = if dimension == 1 {
+                    format!("tex2Dsize({receiver}).x")
+                } else if dimension == 2 {
                     format!("max(tex2Dsize({receiver}).x, tex2Dsize({receiver}).y)")
                 } else {
                     format!("max(tex3Dsize({receiver}).x, max(tex3Dsize({receiver}).y, tex3Dsize({receiver}).z))")
@@ -374,17 +377,17 @@ fn lower_modern_resource_syntax(tokens: &mut Vec<String>) -> Result<(), String> 
             continue;
         }
         let (intrinsic, coordinate): (&str, Vec<String>) = match (method, args.len(), dimension) {
-            ("Sample", 2, 2) => ("tex2D", args[1].clone()),
+            ("Sample", 2, 1 | 2) => ("tex2D", args[1].clone()),
             ("Sample", 2, 3) => ("tex3D", args[1].clone()),
-            ("Sample", 3, 2) => ("tex2Doffset", args[1].clone()),
+            ("Sample", 3, 1 | 2) => ("tex2Doffset", args[1].clone()),
             ("Sample", 3, 3) => ("tex3Doffset", args[1].clone()),
-            ("SampleLevel", 3 | 4, 2) => ("tex2Dlod", args[1].clone()),
+            ("SampleLevel", 3 | 4, 1 | 2) => ("tex2Dlod", args[1].clone()),
             ("SampleLevel", 3 | 4, 3) => ("tex3Dlod", args[1].clone()),
-            ("SampleBias", 3 | 4, 2) => ("tex2Dbias", args[1].clone()),
+            ("SampleBias", 3 | 4, 1 | 2) => ("tex2Dbias", args[1].clone()),
             ("SampleBias", 3 | 4, 3) => ("tex3Dbias", args[1].clone()),
-            ("SampleGrad", 4 | 5, 2) => ("tex2Dgrad", args[1].clone()),
+            ("SampleGrad", 4 | 5, 1 | 2) => ("tex2Dgrad", args[1].clone()),
             ("SampleGrad", 4 | 5, 3) => ("tex3Dgrad", args[1].clone()),
-            ("Load", 1 | 2, 2) => ("tex2Dfetch", args[0].clone()),
+            ("Load", 1 | 2, 1 | 2) => ("tex2Dfetch", args[0].clone()),
             ("Load", 1 | 2, 3) => ("tex3Dfetch", args[0].clone()),
             _ => return Err(format!("Invalid argument count for HLSL texture method {method}")),
         };
@@ -409,19 +412,50 @@ fn lower_modern_resource_syntax(tokens: &mut Vec<String>) -> Result<(), String> 
         if method == "SampleLevel" || method == "SampleBias" {
             rewritten.push("float4".into());
             rewritten.push("(".into());
-            rewritten.extend(coordinate);
-            if dimension == 2 { rewritten.push(",".into()); rewritten.push("0.0".into()); }
+            if dimension == 1 {
+                rewritten.extend(["float2".into(), "(".into()]);
+                rewritten.extend(coordinate);
+                rewritten.extend([",".into(), "0.5".into(), ")".into()]);
+            } else {
+                rewritten.extend(coordinate);
+            }
+            if dimension == 2 {
+                rewritten.extend([",".into(), "0.0".into()]);
+            }
+            if dimension == 1 {
+                // `float4(float2(u, 0.5), 0.0, lod)` keeps the LOD in `.w`.
+                rewritten.extend([",".into(), "0.0".into()]);
+            }
             rewritten.push(",".into());
             rewritten.extend(args[2].clone());
             rewritten.push(")".into());
         } else {
-            rewritten.extend(coordinate);
+            if dimension == 1 {
+                rewritten.extend(if method == "Load" { vec!["int2".into()] } else { vec!["float2".into()] });
+                rewritten.push("(".into());
+                rewritten.extend(coordinate);
+                rewritten.extend([",".into(), if method == "Load" { "0" } else { "0.5" }.into(), ")".into()]);
+            } else {
+                rewritten.extend(coordinate);
+            }
         }
         if method == "SampleGrad" {
             rewritten.push(",".into());
-            rewritten.extend(args[2].clone());
+            if dimension == 1 {
+                rewritten.extend(["float2".into(), "(".into()]);
+                rewritten.extend(args[2].clone());
+                rewritten.extend([",".into(), "0.0".into(), ")".into()]);
+            } else {
+                rewritten.extend(args[2].clone());
+            }
             rewritten.push(",".into());
-            rewritten.extend(args[3].clone());
+            if dimension == 1 {
+                rewritten.extend(["float2".into(), "(".into()]);
+                rewritten.extend(args[3].clone());
+                rewritten.extend([",".into(), "0.0".into(), ")".into()]);
+            } else {
+                rewritten.extend(args[3].clone());
+            }
         }
         let offset_index = match (method, args.len()) {
             ("Sample", 3) => Some(2),
@@ -432,7 +466,13 @@ fn lower_modern_resource_syntax(tokens: &mut Vec<String>) -> Result<(), String> 
         };
         if let Some(offset) = offset_index.and_then(|offset| args.get(offset)) {
             rewritten.push(",".into());
-            rewritten.extend(offset.clone());
+            if dimension == 1 {
+                rewritten.extend(["int2".into(), "(".into()]);
+                rewritten.extend(offset.clone());
+                rewritten.extend([",".into(), "0".into(), ")".into()]);
+            } else {
+                rewritten.extend(offset.clone());
+            }
         }
         rewritten.push(")".into());
         if resource_shape.width < 4 {
