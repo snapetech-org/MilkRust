@@ -10,7 +10,7 @@ impl TextureKind {
 pub fn base_name(name: &str) -> &str {
     let name = name.strip_prefix("sampler_").unwrap_or(name);
     let name = name.strip_prefix("sampler_").unwrap_or(name);
-    ["fc_", "fw_", "pc_", "pw_"].iter().find_map(|p| name.strip_prefix(p)).unwrap_or(name)
+    ["fc_", "fw_", "pc_", "pw_"].iter().find_map(|p| name.strip_prefix(*p)).unwrap_or(name)
 }
 pub fn texture_kind(name: &str) -> TextureKind {
     match base_name(name) {

@@ -10,6 +10,7 @@
 #include <new> // for placement new
 #include <stdexcept>
 #include <cstddef>
+#include <functional>
 
 #ifndef NULL
 #define NULL    0
@@ -116,7 +117,10 @@ public:
     Array& operator=(const Array&) = delete;
 
     void PushBack(const T & val) {
-        ASSERT(&val < buffer || &val >= buffer+size);
+        // std::less supplies a total order for unrelated pointers; plain
+        // relational comparisons do not. Avoid arithmetic on a null buffer.
+        ASSERT(buffer == NULL || std::less<const T*>()(&val, buffer)
+            || !std::less<const T*>()(&val, buffer + size));
 
         int old_size = size;
         int new_size = size + 1;

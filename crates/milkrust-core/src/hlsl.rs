@@ -14,7 +14,7 @@ pub(crate) fn sampler_names(source: &str) -> Result<Vec<String>, String> {
         .map(|pair| &pair[1]).collect();
     let is_return_type = |name: &String| {
         structures.contains(&name) || ["void", "float", "half", "int", "uint", "bool", "double"]
-            .iter().any(|base| name.strip_prefix(base).is_some_and(|suffix|
+            .iter().any(|base| name.strip_prefix(*base).is_some_and(|suffix|
                 suffix.is_empty() || (suffix.len() <= 3 && suffix.bytes().all(|b| matches!(b, b'1'..=b'4' | b'x')))))
     };
     for (index, token) in tokens.iter().enumerate() {
