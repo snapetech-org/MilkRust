@@ -432,7 +432,7 @@ impl MilkRustWebGlRenderer {
         let write_index = 1 - read_index;
         self.shader_resources.borrow_mut().prepare(frame.shader_stages.warp.texture_samplers.iter()
             .chain(&frame.shader_stages.composite.texture_samplers), drawing_width, drawing_height)?;
-        self.shader_resources.borrow_mut().build(&targets.targets[read_index].texture);
+        self.shader_resources.borrow_mut().build(frame, &targets.targets[read_index].texture);
         self.gl.bind_sampler(0, None);
 
         self.gl
@@ -456,7 +456,7 @@ impl MilkRustWebGlRenderer {
         }
         self.draw_textured_primitives(frame, &targets.targets[read_index].texture)?;
         self.draw_primitives(frame);
-        self.shader_resources.borrow_mut().build(&targets.targets[write_index].texture);
+        self.shader_resources.borrow_mut().build(frame, &targets.targets[write_index].texture);
 
         self.gl
             .bind_framebuffer(web_sys::WebGl2RenderingContext::FRAMEBUFFER, None);
@@ -665,6 +665,9 @@ impl MilkRustWebGlRenderer {
         for (name, v) in milkrust_core::resources::uniform_vectors(frame, time, drawing_width.max(1) as u32, drawing_height.max(1) as u32) {
             self.gl.uniform4f(uniform(name).as_ref(), v[0], v[1], v[2], v[3]);
         }
+        for (name, matrix) in milkrust_core::resources::uniform_matrices(frame, time) {
+            self.gl.uniform_matrix3x4fv_with_f32_array(uniform(name).as_ref(), false, &matrix);
+        }
         for index in 0..stage.texture_samplers.len() {
             let texture_unit = index + 1;
             self.gl
@@ -693,7 +696,7 @@ impl MilkRustWebGlRenderer {
         self.gl.uniform1f(uniform("isWarp").as_ref(), if warp { 1.0 } else { 0.0 });
         self.gl.uniform4f(uniform("motion").as_ref(), frame.rotation as f32, frame.zoom as f32,
             frame.dx as f32, frame.dy as f32);
-        self.gl.uniform1f(uniform("time").as_ref(), time as f32);
+        self.gl.uniform1f(uniform("time").as_ref(), time.rem_euclid(10000.0) as f32);
         self.gl.uniform1f(uniform("sampleRate").as_ref(), 44_100.0);
         self.gl.uniform2f(
             uniform("resolution").as_ref(),
@@ -747,6 +750,10 @@ impl MilkRustWebGlRenderer {
         }
         for (name, value) in &frame.shader_values {
             if name != "preset_seed" { self.gl.uniform1f(uniform(name).as_ref(), *value as f32); }
+        }
+        for (level, [low, high]) in milkrust_core::resources::blur_ranges(frame).iter().copied().enumerate() {
+            self.gl.uniform1f(uniform(&format!("blur{}_min", level+1)).as_ref(), low);
+            self.gl.uniform1f(uniform(&format!("blur{}_max", level+1)).as_ref(), high);
         }
 
         Ok(())

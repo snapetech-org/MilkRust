@@ -5176,6 +5176,7 @@ pub fn create_translated_milkrust_fragment_shader(source: &str) -> String {
 
 fn create_translated_milkrust_fragment_shader_with_output(source: &str, legacy_feedback: bool) -> String {
     if source.trim().is_empty() { return String::new(); }
+    if hlsl::needs_environment(source) { return hlsl::compile(source, legacy_feedback).unwrap_or_default(); }
     let Some(program) = parse_milkrust_shader_program(source) else {
         return hlsl::compile(source, legacy_feedback).unwrap_or_default();
     };
@@ -5539,7 +5540,7 @@ pub fn analyze_milkrust_shader_compatibility(source: &str) -> MilkRustShaderAnal
 
 /// Bounded compiler diagnostics for the actual native/WebGL fallback path.
 pub fn milkrust_shader_compiler_error(source: &str) -> Option<String> {
-    if source.trim().is_empty() || parse_milkrust_shader_program(source).is_some() { return None; }
+    if source.trim().is_empty() || (!hlsl::needs_environment(source) && parse_milkrust_shader_program(source).is_some()) { return None; }
     hlsl::compile(source, false).err()
 }
 

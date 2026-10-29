@@ -110,6 +110,7 @@ impl Program {
     fn vector3(&self, name: &str, x: f32, y: f32, z: f32) { unsafe { (self.gl.uniform_3f)(self.location(name), x, y, z); } }
     fn vector4(&self, name: &str, x: f32, y: f32, z: f32, w: f32) { unsafe { (self.gl.uniform_4f)(self.location(name), x, y, z, w); } }
     fn floats(&self, name: &str, values: &[f32]) { unsafe { (self.gl.uniform_1fv)(self.location(name), values.len() as i32, values.as_ptr()); } }
+    fn matrix3x4(&self, name: &str, values: &[f32; 12]) { unsafe { (self.gl.uniform_matrix3x4fv)(self.location(name), 1, 0, values.as_ptr()); } }
 }
 
 impl Texture {
@@ -337,7 +338,7 @@ impl Renderer {
             program.float(&format!("u_transitionRandom{}", index + 1), *value);
         }
         program.vector2("u_transitionResolution", self.width as f32, self.height as f32);
-        program.float("time", time as f32); program.float("sampleRate", 44_100.0);
+        program.float("time", time.rem_euclid(10000.0) as f32); program.float("sampleRate", 44_100.0);
         program.vector2("resolution", self.width as f32, self.height as f32);
         program.vector2("pixelSize", 1.0/self.width as f32, 1.0/self.height as f32);
         program.float("aspect", self.width as f32/self.height as f32);
@@ -350,7 +351,12 @@ impl Renderer {
         program.floats("waveformBins", &frame.waveform_bins.map(|v| v as f32));
         for (index, value) in frame.q_registers.iter().enumerate() { program.float(&format!("q{}", index + 1), *value as f32); }
         for (name, value) in &frame.shader_values { if name != "preset_seed" { program.float(name, *value as f32); } }
+        for (level, [low, high]) in resources::blur_ranges(frame).iter().copied().enumerate() {
+            program.float(&format!("blur{}_min", level+1), low);
+            program.float(&format!("blur{}_max", level+1), high);
+        }
         for (name, v) in resources::uniform_vectors(frame, time, self.width, self.height) { program.vector4(name, v[0], v[1], v[2], v[3]); }
+        for (name, matrix) in resources::uniform_matrices(frame, time) { program.matrix3x4(name, &matrix); }
         for (index, name) in stage.texture_samplers.iter().enumerate() {
             let (texture, target) = match resources::texture_kind(name) {
                 TextureKind::Main => (history, TEXTURE_2D),
@@ -373,7 +379,7 @@ impl Renderer {
         Ok(())
     }
 
-    fn build_resources(&self, layer: &Layer, history: u32) -> Result<(), String> {
+    fn build_resources(&self, frame: &MilkRustFrame, layer: &Layer, history: u32) -> Result<(), String> {
         self.bind_texture(0, history);
         unsafe { (self.gl.generate_mipmap)(TEXTURE_2D); (self.gl.disable)(BLEND); }
         let mut source = history;
@@ -384,6 +390,8 @@ impl Renderer {
                 self.bind_texture(0, source);
                 unsafe { (self.gl.bind_framebuffer)(FRAMEBUFFER, target.id); (self.gl.viewport)(0, 0, width as i32, height as i32); }
                 self.blur_program.bind(); self.blur_program.integer("previousFrame", 0);
+                let [scale, bias] = resources::blur_transform(frame, level, pass);
+                self.blur_program.vector2("blurTransform", scale, bias);
                 self.blur_program.vector2("blurStep", if pass == 0 { 1.0/width as f32 } else { 0.0 }, if pass == 1 { 1.0/height as f32 } else { 0.0 });
                 self.draw(0x0004, &quad())?;
                 source = target.texture.id;
@@ -421,7 +429,7 @@ impl Renderer {
         for (index, entry) in frames.entries.iter().enumerate() {
             let layer = &self.layers[index]; let frame = &entry.frame;
             let write = 1 - layer.read;
-            self.build_resources(layer, layer.targets[layer.read].texture.id)?;
+            self.build_resources(frame, layer, layer.targets[layer.read].texture.id)?;
             unsafe { (self.gl.bind_framebuffer)(FRAMEBUFFER, layer.targets[write].id); (self.gl.disable)(BLEND); }
             self.bind_texture(0, layer.targets[layer.read].texture.id);
             let warp = layer.warp.as_ref().map_or(&self.copy, |(_, program)| program);
@@ -443,7 +451,7 @@ impl Renderer {
                     MilkRustPrimitiveMode::Points => 0x0000, MilkRustPrimitiveMode::TriangleFan => 0x0006, MilkRustPrimitiveMode::Triangles => 0x0004 };
                 self.draw(mode, &interleave(&primitive.vertices, &[], &primitive.vertex_colors, primitive.color)?)?;
             }
-            self.build_resources(layer, layer.targets[write].texture.id)?;
+            self.build_resources(frame, layer, layer.targets[write].texture.id)?;
             // The final composite samples this layer's completed feedback. It
             // never writes the display composite back into the feedback loop.
             unsafe {

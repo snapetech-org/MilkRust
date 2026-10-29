@@ -37,7 +37,7 @@ pub(crate) fn sampler_names(source: &str) -> Result<Vec<String>, String> {
     // Only referenced resources are reflected, never arbitrary identifiers in
     // unknown function calls. Sampler parameters belong to their function.
     for call in tokens.windows(4) {
-        if ["tex", "tex2D", "tex2Dlod", "tex2Dbias", "tex2Dgrad", "tex2Dproj", "tex3D", "tex3Dlod", "tex3Dbias"].contains(&call[0].as_str())
+        if ["tex", "tex2d", "tex3d", "tex2D", "tex2Dlod", "tex2Dbias", "tex2Dgrad", "tex2Dproj", "tex3D", "tex3Dlod", "tex3Dbias"].contains(&call[0].as_str())
             && call[1] == "(" && call[3] == "," && !crate::is_milkrust_main_sampler(&call[2])
             && !sampler_parameters.contains(&&call[2]) && !names.contains(&call[2]) {
             names.push(call[2].clone());
@@ -64,14 +64,29 @@ pub(crate) fn sampler_names(source: &str) -> Result<Vec<String>, String> {
     Ok(names)
 }
 
+pub(crate) fn needs_environment(source: &str) -> bool {
+    let Ok(tokens) = milkrust_hlsl::tokenize(source) else { return true; };
+    tokens.iter().any(|name| crate::resources::MATRIX_UNIFORMS.contains(&name.as_str())
+        || crate::resources::VECTOR_UNIFORMS.contains(&name.as_str())
+        || crate::resources::SCALAR_UNIFORMS.contains(&name.as_str())
+        || name.starts_with("mip_") || name.starts_with("texsize_")
+        || ["rad", "ang", "aspect", "GetMain", "GetPixel", "GetBlur1", "GetBlur2", "GetBlur3", "lum",
+            "M_PI", "M_PI_2", "M_INV_PI_2", "tex2d", "tex3d"].contains(&name.as_str()))
+}
+
 pub(crate) fn compile(source: &str, legacy_feedback: bool) -> Result<String, String> {
     if source.len() > 128 * 1024 { return Err("Shader source exceeds 128 KiB".into()); }
     let source = milkrust_hlsl::preprocess(source)?;
     let samplers = sampler_names(&source)?;
     let mut aliases: BTreeMap<String, String> = BTreeMap::new();
     aliases.insert("tex".into(), "tex2D".into());
+    aliases.insert("tex2d".into(), "tex2D".into());
+    aliases.insert("tex3d".into(), "tex3D".into());
     aliases.insert("aspect".into(), "hlslAspect".into());
-    for name in ["sampler_main", "sampler_fc_main", "sampler_sampler_main"] {
+    for (name, value) in [("M_PI", "3.141592653589793"), ("M_PI_2", "6.283185307179586"),
+        ("M_INV_PI_2", "0.159154943091895"), ("mip_x", "_c12.x"), ("mip_y", "_c12.y"),
+        ("mip_xy", "_c12.xy"), ("mip_avg", "_c12.z")] { aliases.insert(name.into(), value.into()); }
+    for name in ["sampler_main"] {
         aliases.insert(name.into(), "previousFrame".into());
     }
     for (index, name) in samplers.iter().enumerate() { aliases.insert(name.clone(), format!("shaderTexture{index}")); }
@@ -85,6 +100,11 @@ pub(crate) fn compile(source: &str, legacy_feedback: bool) -> Result<String, Str
     // Rename any user entry before the emitter adds its GLSL main.
     aliases.insert("main".into(), "milkrust_user_entry".into());
     let mut tokens = milkrust_hlsl::tokenize(&source)?;
+    for pair in tokens.windows(2) {
+        if matches!(pair[0].as_str(), "float" | "double" | "half") && matches!(pair[1].as_str(), "M_PI" | "M_PI_2" | "M_INV_PI_2") {
+            aliases.remove(&pair[1]);
+        }
+    }
     if tokens.iter().any(|t| t.starts_with("milkrust_") || t.starts_with("gl_") || t.starts_with("rast_") || t.starts_with("frag_")) {
         return Err("Shader uses a reserved compiler identifier".into());
     }
@@ -126,11 +146,14 @@ pub(crate) fn compile(source: &str, legacy_feedback: bool) -> Result<String, Str
     }
     for name in crate::resources::SCALAR_UNIFORMS { preamble.push_str(&format!("float {name};\n")); }
     for name in crate::resources::VECTOR_UNIFORMS { preamble.push_str(&format!("float4 {name};\n")); }
+    for name in crate::resources::MATRIX_UNIFORMS { preamble.push_str(&format!("float4x3 {name};\n")); }
     for level in 1..=3 {
         if let Some(index) = samplers.iter().position(|name| name == &format!("sampler_blur{level}")) {
-            preamble.push_str(&format!("float3 GetBlur{level}(float2 p) {{ return tex2D(shaderTexture{index}, p).rgb; }}\n"));
+            let (scale, bias) = match level { 1 => ("_c5.x", "_c5.y"), 2 => ("_c5.z", "_c5.w"), _ => ("_c6.x", "_c6.y") };
+            preamble.push_str(&format!("float3 GetBlur{level}(float2 p) {{ return tex2D(shaderTexture{index}, p).rgb * {scale} + {bias}; }}\n"));
         }
     }
+    preamble.push_str("float3 GetMain(float2 p) { return tex2D(previousFrame, p).rgb; }\nfloat3 GetPixel(float2 p) { return GetMain(p); }\nfloat lum(float3 c) { return dot(c, float3(0.32, 0.49, 0.29)); }\n");
     preamble.push_str("float get_fft(float p) { return fftBins[(int)(clamp(p, 0.0, 1.0)*63.0)]; }\nfloat get_fft_hz(float hz) { return get_fft(hz / max(sampleRate * 0.5, 1.0)); }\nfloat get_waveform(float p) { return waveformBins[(int)(clamp(p,0.0,1.0)*63.0)]; }\n");
     let entry;
     if explicit_entry {
@@ -153,8 +176,10 @@ pub(crate) fn compile(source: &str, legacy_feedback: bool) -> Result<String, Str
 float3 milkrust_body(float2 uv) {{
     float2 uv_orig = uv;
     float x = uv.x; float y = uv.y;
-    float2 centered = uv - float2(0.5, 0.5);
-    float rad = length(centered); float ang = atan2(centered.y, centered.x);
+    float2 centered = (uv * 2.0 - 1.0) * hlslAspect.xy;
+    float rad = length(centered) / length(hlslAspect.xy);
+    float ang = atan2(centered.y, centered.x);
+    if (ang < 0.0) ang += 6.283185307179586;
     float3 ret = color;
     {body}
     return ret;
@@ -209,6 +234,15 @@ fn adapt_output(glsl: &str, feedback: bool) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn compiles_milkdrop_environment_and_distinct_main_sampler_modes() {
+        let source = "shader_body { float3 p=mul(float4(uv,0,1),rot_s1); ret=GetMain(uv)+GetPixel(uv)+GetBlur2(uv); ret+=tex2d(sampler_PC_main,uv).rgb; ret+=float3(rad,ang/M_PI_2,mip_avg)+_c3.xyz+_qa.xyz+p+lum(ret); }";
+        assert!(needs_environment(source));
+        let output = compile(source, false).unwrap();
+        assert!(output.contains("mat3x4 rot_s1"));
+        assert!(output.contains("_c5"));
+        assert_eq!(sampler_names(source).unwrap(), vec!["sampler_PC_main", "sampler_blur2"]);
+    }
     #[test]
     fn compiles_typed_helpers_arrays_matrices_and_loops() {
         let result = compile("#define COUNT 3\nfloat3 tint(float3 x) { float3x3 m = float3x3(1,0,0,0,1,0,0,0,1); return mul(m,x); }\nshader_body { float a[3]; a[0]=0.1; a[1]=0.2; a[2]=0.3; for(int i=0;i<COUNT;i++){ ret += tint(float3(a[i],a[i],a[i])); } }", false).unwrap();

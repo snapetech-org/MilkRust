@@ -47,6 +47,7 @@ functions! {
     uniform_3f: "glUniform3f" (i32, f32, f32, f32);
     uniform_4f: "glUniform4f" (i32, f32, f32, f32, f32);
     uniform_1fv: "glUniform1fv" (i32, i32, *const f32);
+    uniform_matrix3x4fv: "glUniformMatrix3x4fv" (i32, i32, u8, *const f32);
     gen_buffers: "glGenBuffers" (i32, *mut u32);
     bind_buffer: "glBindBuffer" (u32, u32);
     buffer_data: "glBufferData" (u32, isize, *const c_void, u32);

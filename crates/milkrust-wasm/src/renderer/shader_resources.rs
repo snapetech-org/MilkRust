@@ -85,7 +85,7 @@ impl ShaderResources {
         Ok(())
     }
 
-    pub fn build(&mut self, history: &WebGlTexture) {
+    pub fn build(&mut self, frame: &milkrust_core::MilkRustFrame, history: &WebGlTexture) {
         self.history = Some(history.clone());
         let gl = &self.gl;
         gl.active_texture(Gl::TEXTURE0); gl.bind_sampler(0, None);
@@ -100,11 +100,13 @@ impl ShaderResources {
             gl.enable_vertex_attrib_array(position as u32);
             gl.vertex_attrib_pointer_with_i32(position as u32, 2, Gl::FLOAT, false, 0, 0);
         }
-        for level in &self.blur {
+        for (index, level) in self.blur.iter().enumerate() {
             gl.viewport(0, 0, level.width, level.height);
             for (pass, target) in level.targets.iter().enumerate() {
                 gl.bind_texture(Gl::TEXTURE_2D, Some(&source));
                 gl.bind_framebuffer(Gl::FRAMEBUFFER, Some(&target.framebuffer));
+                let [scale, bias] = resources::blur_transform(frame, index, pass);
+                gl.uniform2f(gl.get_uniform_location(&self.program, "blurTransform").as_ref(), scale, bias);
                 gl.uniform2f(gl.get_uniform_location(&self.program, "blurStep").as_ref(),
                     if pass == 0 { 1.0/level.width as f32 } else { 0.0 },
                     if pass == 1 { 1.0/level.height as f32 } else { 0.0 });

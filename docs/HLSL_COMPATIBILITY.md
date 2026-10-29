@@ -59,3 +59,31 @@ compiler and runtime in addition to Rust. Browser runners require Emscripten
 3.1.64. Preserve every parser, driver, black-frame and image-difference failure
 in the qualification report. Do not promote broader packs based only on source
 compilation or catalog schema validation.
+
+## MilkDrop environment bindings (2026-10-29 source update)
+
+The native and WebGL hosts now bind all 24 `rot_s/d/f/vf/uf/rand1..4`
+`float4x3` matrices as column-major GLSL `mat3x4`, including the fourth-row
+translation. Their deterministic random stream is seeded per preset; animated
+families follow the legacy `Rx * translation * Rz * Ry` composition and rate
+curve. They are not expected to reproduce another process's random seed.
+
+The typed path supplies `_c0.._c13`, packed q vectors, mip aliases, the three
+MilkDrop PI spellings, `GetMain`, `GetPixel`, `lum`, lowercase sampling aliases,
+and uppercase sampler addressing prefixes. `sampler_fc_main` now keeps its
+own clamp binding. Roaming vectors use the legacy rates and phases; `rad` is
+normalized to the aspect-corrected screen corner and `ang` wraps to `[0, 2pi)`.
+Shaders using these names bypass the older scalar-expression path.
+
+Blur levels normalize their encoded range and `GetBlur1..3` decode the same
+range in both hosts. Nested/reversed ranges are made finite and nondegenerate;
+this deliberately avoids the divide-by-zero typo in historical min/max repair.
+The current Gaussian kernel and generated noise still require reference-image
+comparisons. These changes supply missing environment behavior, not evidence
+that every legacy shader is visually conformant. New regression sources are
+unrun under the source-only instruction.
+
+Algorithm/reference: `jecassis/foo_vis_milk2`, `vis_milk2/milkdropfs.cpp`
+(`ApplyShaderParams`, `UvToMathSpace`) and `state.cpp` (`RandomizePresetVars`),
+plus MilkDrop's `include.fx`. The implementation here uses its own seeded RNG
+and independently expressed matrix arithmetic.
