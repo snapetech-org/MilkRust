@@ -1,0 +1,31 @@
+# ng-runner-policy: private-jit-only-v1
+name: Prepare cleared preset pack candidates
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: milkrust-cleared-pack-candidates
+  cancel-in-progress: false
+jobs:
+  prepare:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ${{ fromJSON(format('{{"group":"ng-shared-main-jit","labels":["self-hosted","linux","x64","ng-shared-main-milkrust","ng-main-run-{0}","gha-{0}-cleared-pack-candidates"]}}', github.run_id)) }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Convert and package the MIT-licensed shaderless subset
+        env:
+          SOURCE_REVISION: ${{ github.sha }}
+        run: >-
+          python3 tools/build_cleared_pack_candidates.py
+          --source-revision "$SOURCE_REVISION"
+          --output "$RUNNER_TEMP/cleared-pack-candidates"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: cleared-pack-candidates-${{ github.sha }}
+          path: ${{ runner.temp }}/cleared-pack-candidates/
+          if-no-files-found: error
+          retention-days: 14

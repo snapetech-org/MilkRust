@@ -3934,6 +3934,7 @@ fn create_milkrust_frame_primitives_and_textures_stateful(
 pub struct MilkRustPresetCompatibility {
     pub parse_errors: Vec<String>,
     pub renderer_features: Vec<String>,
+    pub shader_diagnostics: Vec<String>,
     pub shader_sections: Vec<String>,
     pub unsupported_functions: Vec<String>,
 }
@@ -4058,15 +4059,16 @@ pub fn analyze_milkrust_preset_compatibility(
     unsupported_functions.sort();
 
     let mut shader_sections = Vec::new();
-    if !preset.warp_shader.trim().is_empty()
-        && !analyze_milkrust_shader_support(&preset.warp_shader).supported
-    {
-        shader_sections.push("warp_shader".to_string());
-    }
-    if !preset.comp_shader.trim().is_empty()
-        && !analyze_milkrust_shader_support(&preset.comp_shader).supported
-    {
-        shader_sections.push("comp_shader".to_string());
+    let mut shader_diagnostics = Vec::new();
+    for (section, source) in [
+        ("warp_shader", preset.warp_shader.as_str()),
+        ("comp_shader", preset.comp_shader.as_str()),
+    ] {
+        if source.trim().is_empty() { continue; }
+        let analysis = analyze_milkrust_shader_compatibility(source);
+        if !analysis.supported { shader_sections.push(section.to_string()); }
+        shader_diagnostics.extend(analysis.issues.into_iter()
+            .map(|issue| format!("{section}:{}", issue.code())));
     }
 
     // Cross-renderer gates remain conservative. The experimental WebGL source
@@ -4086,6 +4088,7 @@ pub fn analyze_milkrust_preset_compatibility(
     MilkRustPresetCompatibility {
         parse_errors: preset.parse_errors.clone(),
         renderer_features,
+        shader_diagnostics,
         shader_sections,
         unsupported_functions,
     }
@@ -4135,6 +4138,7 @@ pub struct MilkRustCompatibilityPresetReport {
     pub index: usize,
     pub metrics: MilkRustPresetMetrics,
     pub renderer_features: Vec<String>,
+    pub shader_diagnostics: Vec<String>,
     pub shader_sections: Vec<String>,
     pub title: String,
     pub unsupported_functions: Vec<String>,
@@ -4152,6 +4156,7 @@ pub struct MilkRustCompatibilityEntry {
     pub preset_count: usize,
     pub preset_reports: Vec<MilkRustCompatibilityPresetReport>,
     pub renderer_features: Vec<String>,
+    pub shader_diagnostics: Vec<String>,
     pub shader_sections: Vec<String>,
     pub supported: bool,
     pub unsupported_functions: Vec<String>,
@@ -4175,6 +4180,7 @@ pub struct MilkRustCompatibilitySummary {
     pub total_waves: usize,
     pub unsupported_count: usize,
     pub unsupported_functions: Vec<String>,
+    pub shader_diagnostics: Vec<String>,
     pub unsupported_renderer_features: Vec<String>,
     pub unsupported_shader_sections: Vec<String>,
     pub webgpu_supported_count: usize,
@@ -4374,6 +4380,7 @@ pub fn build_milkrust_compatibility_entry(
             };
             let compatibility_error = milkrust_compatibility_error(&report);
             let equations_supported = report.unsupported_functions.is_empty();
+            let shader_diagnostics = report.shader_diagnostics;
             let renderer_features = report.renderer_features;
             let webgpu_renderer_features = renderer_features.clone();
             let error = [content_error, compatibility_error]
@@ -4387,6 +4394,7 @@ pub fn build_milkrust_compatibility_entry(
                 index: preset.index,
                 metrics: milkrust_preset_metrics(preset),
                 renderer_features,
+                shader_diagnostics,
                 shader_sections: report.shader_sections,
                 title: preset.title.clone(),
                 unsupported_functions: report.unsupported_functions,
@@ -4410,6 +4418,12 @@ pub fn build_milkrust_compatibility_entry(
         preset_reports
             .iter()
             .flat_map(|report| report.shader_sections.clone())
+            .collect(),
+    );
+    let shader_diagnostics = merge_milkrust_unique(
+        preset_reports
+            .iter()
+            .flat_map(|report| report.shader_diagnostics.clone())
             .collect(),
     );
     let unsupported_functions = merge_milkrust_unique(
@@ -4455,6 +4469,7 @@ pub fn build_milkrust_compatibility_entry(
         preset_count: preset_reports.len(),
         preset_reports,
         renderer_features,
+        shader_diagnostics,
         shader_sections,
         supported,
         unsupported_functions,
@@ -4488,6 +4503,9 @@ pub fn summarize_milkrust_compatibility_matrix(
             .unsupported_functions
             .extend(entry.unsupported_functions.clone());
         summary
+            .shader_diagnostics
+            .extend(entry.shader_diagnostics.clone());
+        summary
             .unsupported_renderer_features
             .extend(entry.renderer_features.clone());
         summary
@@ -4508,6 +4526,7 @@ pub fn summarize_milkrust_compatibility_matrix(
             .unwrap_or_default()
     });
     summary.unsupported_functions = merge_milkrust_unique(summary.unsupported_functions);
+    summary.shader_diagnostics = merge_milkrust_unique(summary.shader_diagnostics);
     summary.unsupported_renderer_features =
         merge_milkrust_unique(summary.unsupported_renderer_features);
     summary.unsupported_shader_sections =
@@ -4529,6 +4548,44 @@ pub struct MilkRustShaderProgram {
 #[derive(Clone, Debug, PartialEq)]
 pub struct MilkRustShaderSupport {
     pub supported: bool,
+}
+
+/// Stable categories explaining why a MilkDrop HLSL body falls outside the
+/// current bounded translator. These are diagnostics, not promises that a
+/// particular construct will be translated by every GPU backend.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MilkRustHlslIssue {
+    SourceLimit,
+    Preprocessor,
+    StructuredTypes,
+    MatrixOperations,
+    ControlFlow,
+    ArraysOrIndexing,
+    ResourceDeclarations,
+    UnsupportedTextureIntrinsic,
+    RestrictedGrammar,
+}
+
+impl MilkRustHlslIssue {
+    pub const fn code(self) -> &'static str {
+        match self {
+            Self::SourceLimit => "source-limit",
+            Self::Preprocessor => "preprocessor",
+            Self::StructuredTypes => "structured-types",
+            Self::MatrixOperations => "matrix-operations",
+            Self::ControlFlow => "control-flow",
+            Self::ArraysOrIndexing => "arrays-or-indexing",
+            Self::ResourceDeclarations => "resource-declarations",
+            Self::UnsupportedTextureIntrinsic => "unsupported-texture-intrinsic",
+            Self::RestrictedGrammar => "restricted-grammar",
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct MilkRustShaderAnalysis {
+    pub supported: bool,
+    pub issues: Vec<MilkRustHlslIssue>,
 }
 
 fn strip_milkrust_shader_comments(source: &str) -> String {
@@ -5231,10 +5288,97 @@ fn fragmentMain() -> @location(0) vec4f {{
     )
 }
 
+fn contains_milkrust_shader_identifier(source: &str, wanted: &str) -> bool {
+    source
+        .split(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '_'))
+        .any(|identifier| identifier.eq_ignore_ascii_case(wanted))
+}
+
+fn is_milkrust_hlsl_matrix_type(identifier: &str) -> bool {
+    let identifier = identifier.to_ascii_lowercase();
+    let dimensions = ["float", "half", "double", "min16float"]
+        .iter()
+        .find_map(|prefix| identifier.strip_prefix(prefix));
+    let Some((rows, columns)) = dimensions.and_then(|value| value.split_once('x')) else {
+        return false;
+    };
+    matches!(rows, "1" | "2" | "3" | "4")
+        && matches!(columns, "1" | "2" | "3" | "4")
+}
+
+fn push_milkrust_hlsl_issue(issues: &mut Vec<MilkRustHlslIssue>, issue: MilkRustHlslIssue) {
+    if !issues.contains(&issue) { issues.push(issue); }
+}
+
+/// Analyze the native/WebGL HLSL subset and return bounded, actionable feature
+/// diagnostics. This deliberately uses the same parser as code generation so
+/// a positive result cannot drift away from what the renderer emits.
+pub fn analyze_milkrust_shader_compatibility(source: &str) -> MilkRustShaderAnalysis {
+    if source.trim().is_empty() {
+        return MilkRustShaderAnalysis { supported: true, issues: Vec::new() };
+    }
+
+    let oversized = source.len() > 128 * 1024;
+    let clean = if oversized { String::new() } else { strip_milkrust_shader_comments(source) };
+    let normalized = normalize_simple_milkrust_conditional_return(&clean);
+    let mut issues = Vec::new();
+
+    if oversized { push_milkrust_hlsl_issue(&mut issues, MilkRustHlslIssue::SourceLimit); }
+    if clean.lines().any(|line| line.trim_start().starts_with('#')) {
+        push_milkrust_hlsl_issue(&mut issues, MilkRustHlslIssue::Preprocessor);
+    }
+    if ["struct", "typedef", "class"].iter()
+        .any(|name| contains_milkrust_shader_identifier(&clean, name))
+    {
+        push_milkrust_hlsl_issue(&mut issues, MilkRustHlslIssue::StructuredTypes);
+    }
+    if contains_milkrust_shader_identifier(&clean, "matrix")
+        || clean
+            .split(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '_'))
+            .any(is_milkrust_hlsl_matrix_type)
+        || find_milkrust_shader_call(&clean, "mul").is_some()
+    {
+        push_milkrust_hlsl_issue(&mut issues, MilkRustHlslIssue::MatrixOperations);
+    }
+    if ["for", "while", "do", "switch", "case", "if"].iter()
+        .any(|name| contains_milkrust_shader_identifier(&normalized, name))
+    {
+        push_milkrust_hlsl_issue(&mut issues, MilkRustHlslIssue::ControlFlow);
+    }
+    if clean.contains('[') || clean.contains(']') {
+        push_milkrust_hlsl_issue(&mut issues, MilkRustHlslIssue::ArraysOrIndexing);
+    }
+    if [
+        "sampler", "sampler1d", "sampler2d", "sampler3d", "samplercube",
+        "samplerstate", "samplercomparisonstate", "texture1d", "texture2d",
+        "texture3d", "texturecube", "rwtexture2d", "cbuffer", "tbuffer", "register",
+    ].iter().any(|name| contains_milkrust_shader_identifier(&clean, name))
+    {
+        push_milkrust_hlsl_issue(&mut issues, MilkRustHlslIssue::ResourceDeclarations);
+    }
+    let lowered = clean.to_ascii_lowercase();
+    if [
+        "tex1d", "tex3d", "texcube", "tex2darray", "tex2dms", "tex2dcmp",
+        "texcubelod", "sample", "samplelevel", "samplebias", "samplegrad",
+    ].iter().any(|name| find_milkrust_shader_call(&lowered, name).is_some())
+    {
+        push_milkrust_hlsl_issue(&mut issues, MilkRustHlslIssue::UnsupportedTextureIntrinsic);
+    }
+
+    let supported = !oversized && parse_milkrust_shader_program(source).is_some();
+    if supported {
+        MilkRustShaderAnalysis { supported: true, issues: Vec::new() }
+    } else {
+        if issues.is_empty() {
+            push_milkrust_hlsl_issue(&mut issues, MilkRustHlslIssue::RestrictedGrammar);
+        }
+        MilkRustShaderAnalysis { supported: false, issues }
+    }
+}
+
 pub fn analyze_milkrust_shader_support(source: &str) -> MilkRustShaderSupport {
     MilkRustShaderSupport {
-        supported: source.trim().is_empty()
-            || !create_translated_milkrust_fragment_shader(source).is_empty(),
+        supported: analyze_milkrust_shader_compatibility(source).supported,
     }
 }
 

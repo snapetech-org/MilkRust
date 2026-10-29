@@ -22,6 +22,16 @@ there is no downloaded crypto package or execution of preset content.
 
 ## Release provisioning
 
+The source-side preparation is now split from credential provisioning. Run
+`python3 tools/catalog_release_preflight.py` or dispatch **Catalog release
+preflight (no credentials)** from `main` to inspect the checked-in trust root,
+publisher workflow and catalog shape. The report is deliberately keyless and
+offline: it does not read environment variables, GitHub secrets, API
+credentials or signing keys. Its expected current result is
+`prepared-blocked-on-provisioning`, because `content/catalog-trust.json` still
+has no production public keys. The workflow uploads only that readiness report
+and has repository read permission.
+
 1. Generate Ed25519 keys in the organization's approved key custody system.
    Back them up and limit access to the protected catalog environment. This
    repository intentionally contains no production private key or invented key.
@@ -49,6 +59,11 @@ there is no downloaded crypto package or execution of preset content.
    through the app, including cancellation, expiry, rollback and offline use.
 5. Renew before expiry. Signing is manual until custody and runner operations
    have been exercised; no unattended production job is enabled by this PR.
+
+The preflight does not create a public trust root, pin it in the app, provision
+an environment, configure any credential, test runner capacity, sign an
+envelope or publish a catalog. Those require the separately approved
+custody/platform operations above.
 
 For rotation, ship overlapping public keys first, publish signatures satisfying
 both old and new supported app quorums during migration, then retire old keys in

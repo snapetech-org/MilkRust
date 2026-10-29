@@ -1,37 +1,59 @@
-# Pack promotion evidence
+# Pack qualification evidence
 
-No qualification reports exist yet. No empty example report is a pass.
+Catalog promotion uses two separate gates: redistribution rights and runtime
+compatibility. A source license or a successful conversion does not satisfy the
+runtime gate. A disclaimer does not substitute for permission to redistribute.
 
-`tools/catalog_qualification.py` is called by the catalog preparation step.
-It checks immutable evidence for the exact archive, every preset and every
-target in `all-native-hosts-v1`: Linux x64/arm64, Windows x64/arm64, macOS
-x64/arm64, iOS/tvOS arm64, Android arm64/armv7/x64, webOS ARM and Tizen ARM.
-The current webOS/Tizen TV packages are 32-bit ARM; x64 emulators are not device proof.
-Each report also pins engine/host revisions, artifact hashes, physical GPU and
-driver, private JIT run URL, rights review and source/evidence digests. A target
-matrix change is a reviewed protocol/policy change in both MilkRust and PlezyNG.
+`tools/catalog_qualification.py` accepts a pack only when its immutable report
+is pinned by commit and SHA-256 in `content/downloads/catalog.json`. A complete
+report uses `schemaVersion: 1`, `status: qualified`, and
+`policy: all-native-hosts-v1`. It identifies the exact pack ID, version and
+archive SHA-256, includes approved rights-review evidence, and covers every
+target below exactly once:
 
-The sole fixture exception pins the exact existing two-preset CC0 archive
-digest and still reports `sample-fixture-only`. Renaming a different archive or
-adding a license disclaimer cannot use this exception.
+| Target | Required physical device |
+| --- | --- |
+| `linux-x64` | Linux x64 |
+| `linux-arm64` | Linux ARM64 |
+| `windows-x64` | Windows x64 |
+| `windows-arm64` | Windows ARM64 |
+| `macos-x64` | macOS x64 |
+| `macos-arm64` | macOS ARM64 |
+| `ios-arm64` | iOS ARM64 |
+| `tvos-arm64` | tvOS ARM64 |
+| `android-arm64` | Android ARM64 |
+| `android-armv7` | Android ARMv7 |
+| `android-x64` | Android x64 |
+| `webos-arm` | webOS ARM |
+| `tizen-arm` | Tizen ARM |
 
-Reports go in `reports/<id>.json`; referenced evidence goes in
-`evidence/<id>.json`. Use the validator's field names and types. The synthetic
-unit cases in `tools/tests/test_catalog_qualification.py` illustrate the schema
-but must never be copied into release evidence. Capture digests identify
-retained private JIT artifacts; review the actual captures and measurements
-before accepting a report. Metadata checks cannot prove a renderer ran.
+For every preset on every target, the report must pin the engine and host
+revisions and artifacts, identify the physical device, and link a private
+ephemeral JIT run. Per-preset evidence covers at least 300 rendered frames,
+reference-output comparison, audio synchronization, resource limits and app
+lifecycle. Evidence files are immutable JSON under
+`content/qualification/evidence/`; the report is immutable JSON under
+`content/qualification/reports/`. Both are bound to the exact archive and
+preset hashes.
 
-Every preset's evidence must pass rendering (at least 300 frames with pinned
-audio and capture digests), a reviewed comparison against an identified
-reference, audio synchronization, resource limits and lifecycle recovery. Each
-check records its method; qualitative review is explicit rather than a made-up
-universal image-difference threshold. Missing, skipped, unsupported, failed,
-converted-only and not-run results block promotion. The engine revision in a
-report defines its scope; future engines/devices need requalification.
+The verifier checks structure and identity only. Reviewers must inspect retained
+run artifacts, confirm actual pixels and behavior, and approve the rights basis
+before setting a report to `qualified`. The verifier cannot inspect a display,
+prove that a rights review was sound, or replace device testing. All jobs that
+build, render or package content must use the approved private ephemeral JIT
+runner policy in `AGENTS.md`.
 
-After review, commit the evidence first. Add a `qualification` pin with
-`revision` (40 hex commit), `path` and `sha256` to the pack entry, and set its
-`compatibilityStatus` to `qualified`. The publisher verifies the report from
-that commit. Archive publication and signing remain separate reviewed steps.
-There is no converter-to-production automatic promotion.
+The sole qualification exception is the exact two-preset authored CC0 fixture
+archive already pinned in the catalog, which remains labeled
+`sample-fixture-only` with no qualified targets. A different digest, a rename,
+or a license disclaimer cannot use that exception.
+
+## Candidate status
+
+`tools/build_cleared_pack_candidates.py` can create deterministic archives from
+the MIT-licensed Butterchurn shaderless subset. The separate
+`Prepare cleared preset pack candidates` workflow uploads them as short-lived
+review artifacts. Candidate metadata always reports zero rendered and zero
+qualified presets. It does not change the signed download catalog, so these
+archives do not appear in the app until the rights and compatibility gates are
+completed and reviewed.

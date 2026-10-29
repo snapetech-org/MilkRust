@@ -8,11 +8,14 @@ There are currently no broader-pack qualification reports. The downloadable
 catalog contains only the small authored CC0 sample archive, labeled
 `sample-fixture-only`; it does not establish MilkDrop compatibility. Historical
 community collections without explicit redistribution rights remain link-only
-or local-import sources. A disclaimer does not grant redistribution rights, and
-a license does not establish rendering compatibility. Do not promote a wider
-pack until its rights review and every preset's exact-archive, renderer, host,
-physical-device, audio-sync, resource-limit, lifecycle and private-JIT evidence
-are reviewed and pinned in an immutable report. See
+or local-import sources. A deterministic, private-JIT candidate workflow now
+packages the shaderless subset of the vendored MIT Butterchurn collection into
+review artifacts. Those artifacts are unqualified and are not in the download
+catalog. A disclaimer does not grant redistribution rights, and a license does
+not establish rendering compatibility. Do not promote a wider pack until its
+rights review and every preset's exact-archive, renderer, host, physical-device,
+audio-sync, resource-limit, lifecycle and private-JIT evidence are reviewed and
+pinned in an immutable report. See
 [`content/qualification/README.md`](../content/qualification/README.md).
 
 ## Layout

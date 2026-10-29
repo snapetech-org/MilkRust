@@ -224,6 +224,9 @@ fn print_studio_text(
             summary.unsupported_shader_sections
         );
     }
+    if !summary.shader_diagnostics.is_empty() {
+        println!("HLSL shader diagnostics: {:?}", summary.shader_diagnostics);
+    }
     println!("Pack plugins discovered: {}", pack_plugins.len());
     for plugin in pack_plugins {
         println!("  - {} ({})", plugin.id, plugin.kind);
@@ -261,6 +264,9 @@ fn print_studio_text(
             if !entry.shader_sections.is_empty() {
                 println!("  unsupportedShaders: {}", entry.shader_sections.join(", "));
             }
+            if !entry.shader_diagnostics.is_empty() {
+                println!("  HLSL shader diagnostics: {}", entry.shader_diagnostics.join(", "));
+            }
             if !entry.webgpu_shader_sections.is_empty() {
                 println!(
                     "  webGpuUnsupportedShaders: {}",
@@ -294,6 +300,9 @@ fn print_studio_json(
                 "unsupportedFunctions": report.compatibility_entry
                     .as_ref()
                     .map(|entry| &entry.unsupported_functions),
+                "shaderDiagnostics": report.compatibility_entry
+                    .as_ref()
+                    .map(|entry| &entry.shader_diagnostics),
                 "rendererFeatures": report.compatibility_entry
                     .as_ref()
                     .map(|entry| &entry.renderer_features),
@@ -316,6 +325,7 @@ fn print_studio_json(
         "webGpuSupportedCount": summary.webgpu_supported_count,
         "webGpuUnsupportedCount": summary.webgpu_unsupported_count,
         "unsupportedFunctions": summary.unsupported_functions,
+        "shaderDiagnostics": summary.shader_diagnostics,
         "unsupportedRendererFeatures": summary.unsupported_renderer_features,
         "unsupportedShaderSections": summary.unsupported_shader_sections,
         "webGpuUnsupportedRendererFeatures": summary.webgpu_unsupported_renderer_features,
