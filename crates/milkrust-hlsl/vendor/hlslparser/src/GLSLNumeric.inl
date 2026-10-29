@@ -4,6 +4,7 @@ struct MatrixSelection {
     HLSLExpression* matrix = NULL;
     HLSLExpression* row = NULL;
     HLSLExpression* index = NULL;
+    int scalarSwizzleWidth = 1;
     std::vector<std::pair<int, int>> components; // HLSL row, column; -1 = row argument
 };
 
@@ -33,7 +34,15 @@ static bool SelectMatrix(HLSLExpression* expression, MatrixSelection& out) {
             return true;
         }
         if (SelectMatrix(member->object, out)) {
-            if (out.index) throw std::invalid_argument("Swizzling an indexed matrix selection is unsupported");
+            if (out.index) {
+                // A dynamic component is a scalar, which HLSL may replicate
+                // with .xx/.rrrr. Keep the index expression evaluated once.
+                for (const char* p = member->field; *p; ++p)
+                    if (SwizzleIndex(*p) < 0 || SwizzleIndex(*p) >= out.scalarSwizzleWidth)
+                        throw std::invalid_argument("Invalid indexed matrix scalar swizzle");
+                out.scalarSwizzleWidth = int(strlen(member->field));
+                return true;
+            }
             const auto original = out.components;
             out.components.clear();
             for (const char* p = member->field; *p; ++p) {
@@ -79,6 +88,8 @@ bool GLSLGenerator::OutputMatrixSelection(HLSLExpression* expression, HLSLExpres
     const int count = int(selection.components.size());
     if (count < 1 || count > 4) throw std::invalid_argument("Invalid matrix selection width");
     const bool write = operation != NULL;
+    if (write && selection.index && selection.scalarSwizzleWidth > 1)
+        throw std::invalid_argument("Matrix assignment repeats a destination component");
     const std::string matrixType = GetTypeName(selection.matrix->expressionType);
     const std::string type = GetTypeName(expression->expressionType);
     std::string parameters = (write ? "inout " : "") + matrixType + " m";
@@ -97,7 +108,10 @@ bool GLSLGenerator::OutputMatrixSelection(HLSLExpression* expression, HLSLExpres
         read += component;
     }
     if (count > 1) read += ")";
-    if (selection.index) read = "(" + read + ")[j]";
+    if (selection.index) {
+        read = "(" + read + ")[j]";
+        if (selection.scalarSwizzleWidth > 1) read = type + "(" + read + ")";
+    }
     std::string body;
     if (selection.row) body += "if (i < 0 || i >= " + std::to_string(MatrixRows(selection.matrix->expressionType.baseType)) + ") return " + type + "(0); ";
     if (selection.index) body += "if (j < 0 || j >= " + std::to_string(count) + ") return " + type + "(0); ";

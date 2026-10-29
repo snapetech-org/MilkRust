@@ -87,6 +87,14 @@ mod tests {
     }
 
     #[test]
+    fn user_identifiers_do_not_collide_with_glsl_keywords_or_intrinsics() {
+        compile(include_str!("../tests/fixtures/identifiers.hlsl"), "main")
+            .expect("identifier control must reach GLSL generation");
+        compile("float4 input(float2 uv:TEXCOORD0):COLOR0 { return float4(uv,0,1); }", "input")
+            .expect("a renamed entry point remains callable");
+    }
+
+    #[test]
     fn malformed_declarations_fail_with_bounded_diagnostics() {
         for body in [
             "float values[uint(0xffffffffu)];",
@@ -126,6 +134,7 @@ mod tests {
             "float2x2 m=0; float x=m._00;",
             "float2x2 m=0; float2 x=m._11_m01;",
             "float2x2 m=0; m._11_11=float2(1,2);",
+            "float2x2 m=0; m[0][1].xx=float2(1,2);",
         ] {
             let source = format!("float4 main(float2 uv:TEXCOORD0):COLOR0 {{ {statement} return 1; }}");
             assert!(compile(&source, "main").is_err(), "invalid selection accepted: {statement}");

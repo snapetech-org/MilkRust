@@ -246,3 +246,19 @@ matrices, multidimensional arrays or modern resource-object syntax.
 Semantic references: Microsoft's [vector types](https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl/dx-graphics-hlsl-vector),
 [user-defined types](https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl/dx-graphics-hlsl-user-defined)
 and [loop attributes](https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl/dx-graphics-hlsl-for).
+
+## Identifier and indexed-selection checkpoint
+
+Before GLSL generation, a bounded AST pass gives colliding user declarations,
+struct types/fields, arguments, and references unique names. It protects GLSL
+keywords, intrinsic names, reserved prefixes and double-underscore spellings;
+HLSL intrinsic call objects keep their original identity. Ordinary value
+identifiers no longer pass through the intrinsic-function mapper, so variables
+named `frac`, `clip` or `tex2D` remain variables. Entry-point lookup follows the
+same renaming. The name rules follow GLSL ES 3.00 sections 3.8–3.9.
+
+Dynamic matrix component reads now allow scalar replication and chained
+swizzles, with indices evaluated once. Single-component writes remain writable;
+repeated destinations still fail. Boolean scalar swizzles have typed helpers.
+The identifier pixel control and extended numeric/rejection cases are source
+only and have not run.

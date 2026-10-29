@@ -3,6 +3,7 @@
 #include "HLSLParser.h"
 #include "HLSLTree.h"
 #include "GLSLGenerator.h"
+#include "HLSLIdentifiers.h"
 #include <cstring>
 #include <string>
 #include <exception>
@@ -50,10 +51,13 @@ extern "C" int milkrust_hlsl_compile(const char* source, size_t size,
         }
         ValidateArrayBounds bounds(tree);
         bounds.VisitRoot(tree.GetRoot());
+        M4::GLSLIdentifiers identifiers(tree);
+        identifiers.VisitRoot(tree.GetRoot());
+        const char* generated_entry = identifiers.Name(entry);
         M4::GLSLGenerator generator;
         const M4::GLSLGenerator::Options options;
         if (!generator.Generate(&tree, M4::GLSLGenerator::Target_FragmentShader,
-            M4::GLSLGenerator::Version_300_ES, entry, options)) {
+            M4::GLSLGenerator::Version_300_ES, generated_entry, options)) {
             copy_error(error, error_capacity, M4::Diagnostics());
             return -1;
         }

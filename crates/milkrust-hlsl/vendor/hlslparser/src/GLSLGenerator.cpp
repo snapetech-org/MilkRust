@@ -399,6 +399,10 @@ bool GLSLGenerator::Generate(HLSLTree* tree, Target target, Version version, con
     m_writer.WriteLine(0, "vec4  %s(float x) { return  vec4(x, x, x, x); }", m_scalarSwizzle4Function);
     m_writer.WriteLine(0, "ivec4 %s(int   x) { return ivec4(x, x, x, x); }", m_scalarSwizzle4Function);
 
+    m_writer.WriteLine(0, "bvec2 %s(bool x) { return bvec2(x); }", m_scalarSwizzle2Function);
+    m_writer.WriteLine(0, "bvec3 %s(bool x) { return bvec3(x); }", m_scalarSwizzle3Function);
+    m_writer.WriteLine(0, "bvec4 %s(bool x) { return bvec4(x); }", m_scalarSwizzle4Function);
+
     if (!m_versionLegacy)
     {
         m_writer.WriteLine(0, "uvec2 %s(uint  x) { return uvec2(x, x); }", m_scalarSwizzle2Function);
@@ -513,7 +517,9 @@ void GLSLGenerator::OutputExpression(HLSLExpression* expression, const HLSLType*
     else if (expression->nodeType == HLSLNodeType_IdentifierExpression)
     {
         HLSLIdentifierExpression* identifierExpression = static_cast<HLSLIdentifierExpression*>(expression);
-        OutputIdentifier(identifierExpression->name);
+        // Value identifiers must not pass through the intrinsic-name mapper:
+        // a local named frac or tex2D is a variable, not a sampling call.
+        m_writer.Write("%s", GetSafeIdentifierName(identifierExpression->name));
     }
     else if (expression->nodeType == HLSLNodeType_ConstructorExpression)
     {

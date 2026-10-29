@@ -43,5 +43,10 @@ float4 main(float2 coord:TEXCOORD0):COLOR0 {
     float3x2 right=float3x2(1,0,0,1,1,1);
     float2x2 rectangularProduct=mul(left,right);
     ok=ok && rectangularProduct._11==4 && rectangularProduct._12==5 && rectangularProduct._21==10 && rectangularProduct._22==11;
+    row=0;
+    float2 replicated=m[row++][1].xx;
+    ok=ok && row==1 && all(replicated==7);
+    m[0][1].x+=1;
+    ok=ok && m[0][1].xx.y==8;
     return ok ? float4(0.25,0.5,0.75,1) : float4(1,0,0,1);
 }
