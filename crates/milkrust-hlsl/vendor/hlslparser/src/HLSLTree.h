@@ -731,9 +731,13 @@ struct HLSLConstructorExpression : public HLSLExpression
 	HLSLConstructorExpression()
 	{
 		argument = NULL;
+		initializer = false;
 	}
     HLSLType            type;
     HLSLExpression*     argument;
+    // Braces follow flattened legacy aggregate initialization, independent of
+    // how the input groups its values. Ordinary constructors retain their rules.
+    bool               initializer;
 };
 
 /** object.member **/

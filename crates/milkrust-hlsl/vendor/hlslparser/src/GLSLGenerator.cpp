@@ -11,6 +11,7 @@
 #include "HLSLParser.h"
 #include "HLSLTree.h"
 #include "HLSLNumeric.h"
+#include "HLSLAggregates.h"
 
 //#include "Engine/String.h"
 //#include "Engine/Log.h"
@@ -96,7 +97,8 @@ static const char* GetTypeName(const HLSLType& type)
 
 static bool GetCanImplicitCast(const HLSLType& srcType, const HLSLType& dstType)
 {
-    return srcType.baseType == dstType.baseType;
+    return srcType.baseType == dstType.baseType && !srcType.array && !dstType.array &&
+        (srcType.baseType != HLSLBaseType_UserDefined || String_Equal(srcType.typeName, dstType.typeName));
 }
 
 static int GetFunctionArguments(HLSLFunctionCall* functionCall, HLSLExpression* expression[], int maxArguments)
@@ -497,6 +499,7 @@ void GLSLGenerator::OutputExpressionList(HLSLExpression* expression, HLSLArgumen
 
 #include "GLSLNumeric.inl"
 #include "GLSLIntrinsics.inl"
+#include "GLSLAggregates.inl"
 
 void GLSLGenerator::OutputExpression(HLSLExpression* expression, const HLSLType* dstType)
 {
@@ -524,6 +527,9 @@ void GLSLGenerator::OutputExpression(HLSLExpression* expression, const HLSLType*
     else if (expression->nodeType == HLSLNodeType_ConstructorExpression)
     {
         HLSLConstructorExpression* constructorExpression = static_cast<HLSLConstructorExpression*>(expression);
+        if (constructorExpression->initializer) {
+            OutputAggregateConstructor(constructorExpression); return;
+        }
         if (IsMatrixType(constructorExpression->type.baseType)) {
             OutputMatrixConstructor(constructorExpression); return;
         }
@@ -1722,17 +1728,8 @@ void GLSLGenerator::OutputEntryCaller(HLSLFunction* entryFunction)
             CheckBudget();
             m_writer.BeginLine(1);
             m_writer.Write("%s = ", GetSafeIdentifierName(declaration->name));
-            if (declaration->assignment) {
-                if (declaration->type.array) {
-                    m_writer.Write("%s[]( ", GetTypeName(declaration->type));
-                    HLSLType element = declaration->type; element.array = false; element.arraySize = NULL;
-                    for (auto* value = declaration->assignment; value; value = value->nextExpression) {
-                        OutputExpression(value, &element);
-                        if (value->nextExpression) m_writer.Write(", ");
-                    }
-                    m_writer.Write(" )");
-                } else OutputExpression(declaration->assignment, &declaration->type);
-            } else OutputDefaultValue(declaration->type);
+            if (declaration->assignment) OutputExpression(declaration->assignment, &declaration->type);
+            else OutputDefaultValue(declaration->type);
             m_writer.EndLine(";");
         }
     }
@@ -1880,16 +1877,7 @@ void GLSLGenerator::OutputDeclaration(HLSLDeclaration* declaration, bool skipIni
                 int value=0; m_tree->GetExpressionValue(declaration->assignment, value);
                 m_writer.Write("%d", value);
             }
-            else if( declaration->type.array )
-			{
-				m_writer.Write( "%s[]( ", GetTypeName( declaration->type ) );
-                HLSLType element = declaration->type; element.array = false; element.arraySize = NULL;
-                for (auto* item = declaration->assignment; item; item = item->nextExpression) {
-                    OutputExpression(item, &element);
-                    if (item->nextExpression) m_writer.Write(", ");
-                }
-				m_writer.Write( " )" );
-			}
+
 			else
 			{
 				OutputExpression( declaration->assignment, &declaration->type );

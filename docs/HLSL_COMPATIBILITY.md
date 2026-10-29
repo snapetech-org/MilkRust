@@ -275,3 +275,28 @@ LOD offsets, while array bounds are independently folded from the HLSL AST.
 Deferred array initializers convert each element to its declared type. The
 existing declaration and sampling controls now exercise these cases; they
 remain unrun.
+
+
+## Legacy aggregate initialization and casts
+
+Brace initializers now flatten all numeric source values, regardless of brace
+nesting, and fill vectors, matrix rows, array elements and struct fields in HLSL
+order. Array extents can be inferred from the flattened element count. Struct
+fields may themselves contain arrays or structs. Initializers require exactly
+the destination's scalar count; they do not use the later C++-style partial
+zero-initialization proposal. Every expanded source expression is captured once
+before its components are used. Numeric scalar/vector constructors keep a direct
+constant-expression path for named texture offsets.
+
+Explicit aggregate casts support numeric scalar splats (including `(Struct)0`),
+array/struct flattening and truncation, and per-component scalar conversion.
+Same-type struct/array copies preserve their type instead of generating an
+invalid GLSL scalar constructor. Aggregate expansion is limited to 4096 scalar
+components, in addition to the existing depth, operation, temporary and output
+budgets. Arrays of arrays and resource-bearing structs remain outside the
+profile. `aggregates.hlsl` covers nested fields, arbitrary brace grouping,
+row-major reconstruction, inferred arrays, copies, scalar splats and
+single-evaluation side effects; the native and browser cases are unrun.
+
+Semantic references: Microsoft's [legacy aggregate rules](https://microsoft.github.io/hlsl-specs/proposals/0005-strict-initializer-lists/)
+and [elementwise/splat conversions](https://microsoft.github.io/hlsl-specs/specs/4-Conv.html).

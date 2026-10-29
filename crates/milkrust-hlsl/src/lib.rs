@@ -87,6 +87,12 @@ mod tests {
     }
 
     #[test]
+    fn flattened_aggregate_contract_compiles() {
+        compile(include_str!("../tests/fixtures/aggregates.hlsl"), "main")
+            .expect("aggregate control must reach GLSL generation");
+    }
+
+    #[test]
     fn user_identifiers_do_not_collide_with_glsl_keywords_or_intrinsics() {
         compile(include_str!("../tests/fixtures/identifiers.hlsl"), "main")
             .expect("identifier control must reach GLSL generation");
@@ -103,6 +109,10 @@ mod tests {
             "const int n=int(uv.x); float values[n];",
             "float values[]={};",
             "float values[2]={1,2,3};",
+            "float2 values[2]={1,2,3};",
+            "float2 values[]={1,2,3};",
+            "float3 values={1};",
+            "float values[4096]={float4(1,2,3,4)};",
             "vector<float,5> v;",
             "typedef float Tone; typedef int Tone;",
             "[unroll(0)] for(int i=0;i<2;i++) {}",

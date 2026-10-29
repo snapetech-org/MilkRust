@@ -13,6 +13,7 @@
 #include "HLSLParser.h"
 #include "HLSLTree.h"
 #include "HLSLNumeric.h"
+#include "HLSLAggregates.h"
 
 #include <algorithm>
 #include <ctype.h>
@@ -1632,41 +1633,66 @@ bool HLSLParser::ParseTypedef()
     return Expect(';');
 }
 
+bool HLSLParser::ParseInitializerList(HLSLExpression*& first, HLSLExpression*& last, int& count)
+{
+    DepthGuard depth;
+    if (!Expect('{')) return false;
+    bool separator = false;
+    while (!Accept('}')) {
+        if (CheckForUnexpectedEndOfStream('}')) return false;
+        if (separator && !Expect(',')) return false;
+        if (Accept('}')) break;
+        if (m_tokenizer.GetToken() == '{') {
+            if (!ParseInitializerList(first, last, count)) return false;
+        } else {
+            HLSLExpression* item = NULL;
+            if (!ParseExpression(item)) return false;
+            if (last) last->nextExpression = item; else first = item;
+            last = item;
+            if (++count > 4096) throw std::length_error("HLSL initializer expression limit exceeded");
+        }
+        separator = true;
+    }
+    return true;
+}
+
 bool HLSLParser::ParseInitializer(const HLSLType& type, HLSLExpression*& expression)
 {
     DepthGuard depth;
     if (m_tokenizer.GetToken() != '{') return ParseExpression(expression);
-    if (type.array) { m_tokenizer.Error("Nested array initializers are unavailable"); return false; }
-    m_tokenizer.Next();
     auto* constructor = m_tree->AddNode<HLSLConstructorExpression>(GetFileName(), GetLineNumber());
     constructor->type = type;
-    constructor->expressionType = type;
-    constructor->expressionType.flags = HLSLTypeFlag_Const;
+    constructor->initializer = true;
     HLSLExpression* last = NULL;
-    const HLSLStruct* structure = type.baseType == HLSLBaseType_UserDefined ? FindUserDefinedType(type.typeName) : NULL;
-    const HLSLStructField* field = structure ? structure->field : NULL;
     int count = 0;
-    while (!Accept('}')) {
-        if (CheckForUnexpectedEndOfStream('}')) return false;
-        if (count && !Expect(',')) return false;
-        if (Accept('}')) break;
-        HLSLExpression* item = NULL;
-        // Nested braces initialize a struct field or a matrix row. Flat
-        // numeric lists retain the HLSL row-major constructor ordering.
-        HLSLType itemType = field ? field->type : HLSLType(ScalarBaseType[type.baseType]);
-        if (!field && IsMatrixType(type.baseType) && m_tokenizer.GetToken() == '{')
-            itemType = HLSLType(NumericShape(ScalarBaseType[type.baseType], 0, NumericWidth(type.baseType)));
-        if (!ParseInitializer(itemType, item)) return false;
-        if (last) last->nextExpression = item; else constructor->argument = item;
-        last = item;
-        constructor->expressionType.flags &= item->expressionType.flags;
-        ++count;
-        if (structure) {
-            if (!field) { m_tokenizer.Error("Too many structure initializer values"); return false; }
-            field = field->nextField;
+    if (!ParseInitializerList(constructor->argument, last, count)) return false;
+    if (!count) { m_tokenizer.Error("Empty aggregate initializer"); return false; }
+    std::vector<HLSLBaseType> source;
+    for (auto* item = constructor->argument; item; item = item->nextExpression)
+        AggregateScalarTypes(*m_tree, item->expressionType, source);
+    if (type.array && !type.arraySize) {
+        HLSLType element = type; element.array = false;
+        std::vector<HLSLBaseType> components;
+        AggregateScalarTypes(*m_tree, element, components);
+        if (components.empty() || source.size() % components.size()) {
+            m_tokenizer.Error("Incomplete inferred array element"); return false;
         }
+        auto* size = m_tree->AddNode<HLSLLiteralExpression>(constructor->fileName, constructor->line);
+        size->type = HLSLBaseType_Int; size->iValue = int(source.size() / components.size());
+        size->expressionType = HLSLType(HLSLBaseType_Int); size->expressionType.flags = HLSLTypeFlag_Const;
+        constructor->type.arraySize = size;
     }
-    if (!count || field) { m_tokenizer.Error("Incomplete initializer"); return false; }
+    std::vector<HLSLBaseType> target;
+    AggregateScalarTypes(*m_tree, constructor->type, target);
+    if (source.size() != target.size()) {
+        m_tokenizer.Error("Aggregate initializer component count does not match its destination"); return false;
+    }
+    for (size_t i = 0; i < source.size(); ++i)
+        if (!CheckTypeCast(HLSLType(source[i]), HLSLType(target[i]))) return false;
+    constructor->expressionType = constructor->type;
+    constructor->expressionType.flags = HLSLTypeFlag_Const;
+    for (auto* item = constructor->argument; item; item = item->nextExpression)
+        constructor->expressionType.flags &= item->expressionType.flags;
     expression = constructor;
     return true;
 }
@@ -1675,41 +1701,18 @@ bool HLSLParser::ParseDeclarationAssignment(HLSLDeclaration* declaration)
 {
     DepthGuard depth;
     if (!Accept('=')) return true;
-    if (declaration->type.array) {
-        if (!Expect('{')) return false;
-        HLSLType element = declaration->type; element.array = false; element.arraySize = NULL;
-        HLSLExpression* last = NULL;
-        int count = 0;
-        while (!Accept('}')) {
-            if (CheckForUnexpectedEndOfStream('}')) return false;
-            if (count && !Expect(',')) return false;
-            if (Accept('}')) break;
-            HLSLExpression* item = NULL;
-            if (!ParseInitializer(element, item)) return false;
-            if (!CheckTypeCast(item->expressionType, element)) return false;
-            if (last) last->nextExpression = item; else declaration->assignment = item;
-            last = item;
-            if (++count > 4096) throw std::length_error("HLSL array initializer limit exceeded");
-        }
-        if (!count) { m_tokenizer.Error("Empty array initializer"); return false; }
-        if (!declaration->type.arraySize) {
-            auto* size = m_tree->AddNode<HLSLLiteralExpression>(declaration->fileName, declaration->line);
-            size->type = HLSLBaseType_Int; size->iValue = count;
-            size->expressionType = HLSLType(HLSLBaseType_Int); size->expressionType.flags = HLSLTypeFlag_Const;
-            declaration->type.arraySize = size;
-            // The scope entry was declared before reading its initializer.
-            for (int i = m_variables.GetSize() - 1; i >= 0; --i)
-                if (m_variables[i].declaration == declaration) { m_variables[i].type = declaration->type; break; }
-        } else {
-            int bound = 0;
-            if (!m_tree->GetExpressionValue(declaration->type.arraySize, bound) || bound != count) {
-                m_tokenizer.Error("Array initializer count must match its constant bound"); return false;
-            }
-        }
-        return true;
-    }
     if (IsSamplerType(declaration->type.baseType)) return ParseSamplerState(declaration->assignment);
-    return ParseInitializer(declaration->type, declaration->assignment);
+    if (!ParseInitializer(declaration->type, declaration->assignment)) return false;
+    if (declaration->type.array && !declaration->type.arraySize) {
+        if (!declaration->assignment->expressionType.array) {
+            m_tokenizer.Error("An inferred array requires an array initializer"); return false;
+        }
+        declaration->type.arraySize = declaration->assignment->expressionType.arraySize;
+        // The scope entry was declared before reading its initializer.
+        for (int i = m_variables.GetSize() - 1; i >= 0; --i)
+            if (m_variables[i].declaration == declaration) { m_variables[i].type = declaration->type; break; }
+    }
+    return CheckTypeCast(declaration->assignment->expressionType, declaration->type);
 }
 
 bool HLSLParser::ParseFieldDeclaration(HLSLStructField*& field)

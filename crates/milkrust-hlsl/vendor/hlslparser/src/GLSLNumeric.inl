@@ -20,7 +20,9 @@ static bool DirectConstantExpression(HLSLExpression* expression) {
         case HLSLNodeType_IdentifierExpression:
             return DirectConstantDeclaration(static_cast<HLSLIdentifierExpression*>(expression)->declaration);
         case HLSLNodeType_ConstructorExpression: {
-            for (auto* a = static_cast<HLSLConstructorExpression*>(expression)->argument; a; a = a->nextExpression)
+            auto* constructor = static_cast<HLSLConstructorExpression*>(expression);
+            if (constructor->type.array) return false;
+            for (auto* a = constructor->argument; a; a = a->nextExpression)
                 if (!DirectConstantExpression(a)) return false;
             return true;
         }
@@ -292,6 +294,9 @@ bool GLSLGenerator::OutputCallWithCopyOut(HLSLFunctionCall* expression) {
 void GLSLGenerator::OutputConversion(HLSLExpression* expression, const HLSLType& type) {
     const auto source = expression->expressionType.baseType;
     const auto target = type.baseType;
+    if (expression->expressionType.array || type.array || source == HLSLBaseType_UserDefined || target == HLSLBaseType_UserDefined) {
+        OutputAggregateConversion(expression, type); return;
+    }
     if (IsMatrixType(target) && IsScalarType(source)) {
         const std::string matrix = GetTypeName(type);
         std::string body = "return " + matrix + "(";

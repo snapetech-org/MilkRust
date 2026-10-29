@@ -76,6 +76,8 @@ private:
     void OutputConversion(HLSLExpression* expression, const HLSLType& type);
     bool OutputMatrixSelection(HLSLExpression* expression, HLSLExpression* value = NULL, const char* operation = NULL, bool postfix = false);
     void OutputMatrixConstructor(HLSLConstructorExpression* expression);
+    void OutputAggregateConstructor(HLSLConstructorExpression* expression);
+    void OutputAggregateConversion(HLSLExpression* expression, const HLSLType& type);
     bool OutputCallWithCopyOut(HLSLFunctionCall* expression);
     bool OutputLegacyIntrinsic(HLSLFunctionCall* expression);
     HLSLIdentifierExpression* LocalTemporary(const HLSLType& type);

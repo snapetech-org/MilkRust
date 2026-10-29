@@ -80,6 +80,7 @@ private:
     bool ParseTypedef();
     bool ParseArraySuffix(HLSLType& type, bool allowUnsized);
     bool ParseInitializer(const HLSLType& type, HLSLExpression*& expression);
+    bool ParseInitializerList(HLSLExpression*& first, HLSLExpression*& last, int& count);
     bool ParsePartialConstructor(HLSLExpression*& expression, HLSLBaseType type, const char* typeName);
 
     bool ParseStateName(bool isSamplerState, bool isPipelineState, const char*& name, const EffectState *& state);
