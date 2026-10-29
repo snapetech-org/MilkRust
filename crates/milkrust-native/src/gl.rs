@@ -68,6 +68,7 @@ functions! {
     tex_image_3d: "glTexImage3D" (u32, i32, i32, i32, i32, i32, i32, u32, u32, *const c_void);
     tex_image: "glTexImage2D" (u32, i32, i32, i32, i32, i32, u32, u32, *const c_void);
     tex_parameter: "glTexParameteri" (u32, u32, i32);
+    copy_tex_sub_image: "glCopyTexSubImage2D" (u32, i32, i32, i32, i32, i32, i32, i32);
     pixel_store: "glPixelStorei" (u32, i32);
     delete_textures: "glDeleteTextures" (i32, *const u32);
     gen_framebuffers: "glGenFramebuffers" (i32, *mut u32);

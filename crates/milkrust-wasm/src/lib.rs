@@ -44,6 +44,7 @@ pub struct WasmMilkRustEngine {
     canvas: web_sys::HtmlCanvasElement,
     renderer: MilkRustRenderer,
     runtime: MilkRustFrameSetRuntime,
+    pending_frame: Option<milkrust_core::MilkRustFrameSet>,
     source: String,
     texture_assets: Rc<RefCell<BTreeMap<String, String>>>,
     title: String,
@@ -92,6 +93,7 @@ impl WasmMilkRustEngine {
             canvas,
             renderer,
             runtime: MilkRustFrameSetRuntime::default(),
+            pending_frame: None,
             source,
             texture_assets,
             title,
@@ -142,6 +144,7 @@ impl WasmMilkRustEngine {
             title
         };
         self.runtime = MilkRustFrameSetRuntime::default();
+        self.pending_frame = None;
         self.renderer.reset();
         *self.texture_assets.borrow_mut() = texture_assets;
         self.render_error = None;
@@ -413,7 +416,9 @@ impl WasmMilkRustEngine {
         };
         let waveform = parse_milkrust_sample_csv(waveform_csv);
         let spectrum = parse_milkrust_sample_csv(spectrum_csv);
-        let frame_set = self.runtime.try_render_source_with_audio_and_input(
+        // Hold the evaluated frame while image codecs are loading. Advancing
+        // again could retire a one-frame sprite before it ever reaches the GPU.
+        let frame_set = if let Some(frame) = self.pending_frame.take() { Ok(frame) } else { self.runtime.try_render_source_with_audio_and_input(
             &self.source,
             time_seconds,
             bass,
@@ -422,7 +427,7 @@ impl WasmMilkRustEngine {
             &waveform,
             &spectrum,
             input,
-        );
+        ) };
         let frame_set = match frame_set {
             Ok(frame) => frame,
             Err(error) => {
@@ -432,7 +437,10 @@ impl WasmMilkRustEngine {
             }
         };
         match self.renderer.render_frame_set(&frame_set, time_seconds) {
-            Ok(rendered) => self.waiting_for_textures = !rendered,
+            Ok(rendered) => {
+                self.waiting_for_textures = !rendered;
+                if !rendered { self.pending_frame = Some(frame_set); }
+            },
             Err(error) => {
                 self.waiting_for_textures = false;
                 self.render_error = Some(error.as_string().unwrap_or_else(|| "Native WebGL operation failed".to_string()));

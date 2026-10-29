@@ -5,6 +5,7 @@ pub mod input_limits;
 pub mod text;
 pub mod texture;
 pub mod milk2;
+pub mod sprites;
 mod hlsl;
 pub mod resources;
 pub mod classic_keys;
@@ -122,6 +123,7 @@ pub struct MilkRustCompositeFrame {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct MilkRustFrameSet {
+    pub sprites: Vec<sprites::Frame>,
     pub entries: Vec<MilkRustCompositeFrame>,
     pub preset_count: usize,
     pub title: String,
@@ -997,7 +999,7 @@ pub fn milkrust_frame_set_from_source_with_audio_and_input(
     let transition_seconds = milkrust_transition_seconds(&parsed);
     if parsed.saved_blend.as_ref().and_then(milk2::SavedBlend::render_requirement).is_some()
         || parsed.presets.iter().any(|preset| !preset.parse_errors.is_empty()) {
-        return MilkRustFrameSet { entries: Vec::new(), preset_count: 0, title,
+        return MilkRustFrameSet { sprites: Vec::new(), entries: Vec::new(), preset_count: 0, title,
             transition_mode, transition_seconds };
     }
     let entries = parsed
@@ -1067,7 +1069,15 @@ pub fn milkrust_frame_set_from_source_with_audio_and_input(
         })
         .collect::<Vec<_>>();
 
+    let parent = create_milkrust_scope(&parsed.presets[0], time_seconds, bass, mid, treble);
+    let sprites = match sprites::Runtime::default().render(&parsed.embedded_sprites, &parent, time_seconds,
+        parsed.saved_blend.as_ref().map_or(0.0, |blend| blend.progress)) {
+        Ok(sprites) => sprites,
+        Err(_) => return MilkRustFrameSet { sprites: Vec::new(), entries: Vec::new(), preset_count: 0,
+            title, transition_mode, transition_seconds },
+    };
     MilkRustFrameSet {
+        sprites,
         preset_count: entries.len(),
         entries,
         title,
@@ -1271,6 +1281,7 @@ impl MilkRustRuntime {
 
 #[derive(Clone, Debug, Default)]
 pub struct MilkRustFrameSetRuntime {
+    sprite_runtime: sprites::Runtime,
     last_error: Option<String>,
      initialized: Vec<bool>,
      preset_documents: Vec<MilkRustPresetDocument>,
@@ -1331,7 +1342,7 @@ impl MilkRustFrameSetRuntime {
     ) -> MilkRustFrameSet {
         match self.try_render_source_with_audio_and_input(source, time_seconds, bass, mid, treble, waveform, spectrum, input) {
             Ok(frame) => frame,
-            Err(_) => MilkRustFrameSet { entries: Vec::new(), preset_count: 0, title: String::new(),
+            Err(_) => MilkRustFrameSet { sprites: Vec::new(), entries: Vec::new(), preset_count: 0, title: String::new(),
                     transition_mode: "none".to_string(), transition_seconds: 0.0 },
         }
     }
@@ -1364,8 +1375,15 @@ impl MilkRustFrameSetRuntime {
             if let Some(error) = error { self.last_error = Some(error.clone()); return Err(error); }
         }
         let budget = milkrust_expr::limits::FrameEvaluation::begin();
-        let frame = self.render_source_inner(source, time_seconds, bass, mid, treble, waveform, spectrum, input);
-        if let Some(error) = budget.error() {
+        let mut frame = self.render_source_inner(source, time_seconds, bass, mid, treble, waveform, spectrum, input);
+        let parsed = self.cached_preset_set.as_ref().expect("render_source_inner caches the parsed set");
+        let sprite_result = self.sprite_runtime.render(&parsed.embedded_sprites, &self.scopes[0], time_seconds,
+            parsed.saved_blend.as_ref().map_or_else(|| milkrust_scope_number(&self.scopes[0], "progress", 0.0), |blend| blend.progress));
+        let sprite_error = match sprite_result {
+            Ok(sprites) => { frame.sprites = sprites; None }
+            Err(error) => Some(error),
+        };
+        if let Some(error) = budget.error().or(sprite_error) {
             // Equations may have partially mutated registers before failure.
             // A later explicit retry starts with fresh state.
             *self = Self::default();
@@ -1392,6 +1410,7 @@ if self.source != source || self.preset_documents.is_empty() {
                  source,
                  source.to_ascii_lowercase().contains("[preset01]"),
              );
+             self.sprite_runtime = sprites::Runtime::default();
              self.cached_preset_set = Some(parsed.clone());
              self.shader_stages = parsed.presets.iter().map(milkrust_shader_stages).collect();
              self.initialized = vec![false; parsed.presets.len()];
@@ -1488,6 +1507,7 @@ if self.source != source || self.preset_documents.is_empty() {
         }
 
         MilkRustFrameSet {
+            sprites: Vec::new(),
             preset_count: entries.len(),
             entries,
             title,
@@ -1548,12 +1568,19 @@ fn validate_milkrust_import_for_renderer(source: &str, webgl_stages: bool) -> Re
         .iter()
         .enumerate()
         .filter_map(|(index, preset)| {
-            let content_error = if milkrust_preset_has_content(preset) {
+            let content_error = if milkrust_preset_has_content(preset) || !parsed.embedded_sprites.is_empty() {
                 String::new()
             } else {
                 "MilkRust preset content is empty".to_string()
             };
             let mut report = analyze_milkrust_preset_compatibility(preset);
+            if index == 0 && !parsed.embedded_sprites.is_empty() {
+                for sprite in &parsed.embedded_sprites {
+                    collect_milkrust_functions(&sprite.init, &mut report.unsupported_functions);
+                    collect_milkrust_functions(&sprite.code, &mut report.unsupported_functions);
+                }
+                if !webgl_stages { report.renderer_features.push("embedded-sprite-rendering".into()); }
+            }
             if webgl_stages {
                 report.renderer_features.retain(|feature| !matches!(feature.as_str(),
                     "separate-warp-and-composite-stage-rendering" | "shader-aware-per-pixel-mesh"));
@@ -1688,6 +1715,8 @@ impl MilkRustPresetDocument {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct MilkRustPresetSet {
+    pub embedded_sprites: Vec<sprites::Definition>,
+    pub embedded_sprite_source: String,
     pub saved_blend: Option<milk2::SavedBlend>,
     pub format: String,
     pub presets: Vec<MilkRustPresetDocument>,
@@ -1905,8 +1934,18 @@ pub fn parse_milkrust_preset_set(source: &str, force_milk2: bool) -> MilkRustPre
         let mut preset = MilkRustPresetDocument::new("", 0);
         preset.format = format.clone();
         preset.parse_errors.push(error);
-        return MilkRustPresetSet { format, presets: vec![preset], saved_blend: None };
+        return MilkRustPresetSet { embedded_sprites: Vec::new(), embedded_sprite_source: String::new(), format, presets: vec![preset], saved_blend: None };
     }
+    let blocks = match sprites::extract(source, sprites::enabled(source)) {
+        Ok(blocks) => blocks,
+        Err(error) => {
+            let mut preset = MilkRustPresetDocument::new("", 0);
+            preset.parse_errors.push(error);
+            return MilkRustPresetSet { embedded_sprites: Vec::new(), embedded_sprite_source: String::new(),
+                format: if force_milk2 { "milk2" } else { "milk" }.into(), presets: vec![preset], saved_blend: None };
+        }
+    };
+    let source = blocks.body.as_str();
     let (chunks, saved_blend) = if milk2::has_wrapper(source) {
         match milk2::parse(source) {
             Ok((blend, chunks)) => (chunks.to_vec(), Some(blend)),
@@ -1914,7 +1953,7 @@ pub fn parse_milkrust_preset_set(source: &str, force_milk2: bool) -> MilkRustPre
                 let mut preset = MilkRustPresetDocument::new("", 0);
                 preset.format = "milk2".into();
                 preset.parse_errors.push(error);
-                return MilkRustPresetSet { format: "milk2".into(), presets: vec![preset], saved_blend: None };
+                return MilkRustPresetSet { embedded_sprites: Vec::new(), embedded_sprite_source: String::new(), format: "milk2".into(), presets: vec![preset], saved_blend: None };
             }
         }
     } else { (split_milkrust_preset_pair(source), None) };
@@ -1933,7 +1972,7 @@ pub fn parse_milkrust_preset_set(source: &str, force_milk2: bool) -> MilkRustPre
             preset
         })
         .collect::<Vec<_>>();
-    MilkRustPresetSet { format, presets, saved_blend }
+    MilkRustPresetSet { embedded_sprites: blocks.definitions, embedded_sprite_source: blocks.source, format, presets, saved_blend }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -2107,8 +2146,10 @@ pub fn serialize_milkrust_preset_set(parsed: &MilkRustPresetSet) -> String {
         }
         rendered_presets.push(lines.join("\n"));
     }
-    if let Some(blend) = &parsed.saved_blend { return blend.serialize(&rendered_presets); }
-    format!("{}\n", rendered_presets.join("\n"))
+    let mut output = if let Some(blend) = &parsed.saved_blend { blend.serialize(&rendered_presets) }
+        else { format!("{}\n", rendered_presets.join("\n")) };
+    output.push_str(&parsed.embedded_sprite_source);
+    output
 }
 
 fn is_milkrust_q_variable(key: &str) -> bool {
@@ -4409,7 +4450,7 @@ pub fn build_milkrust_compatibility_entry(
     let parsed = parse_milkrust_preset_set(source, force_milk2);
     let saved_blend_requirement = if parsed.format == "milk2" {
         match &parsed.saved_blend {
-            Some(blend) if webgl_stages => blend.render_requirement(),
+            Some(blend) => blend.render_requirement().or_else(|| Some("milk2-saved-blend-pattern-and-transition-state".to_string())),
             _ => Some("milk2-saved-blend-pattern-and-transition-state".to_string()),
         }
     } else { None };
@@ -4418,11 +4459,18 @@ pub fn build_milkrust_compatibility_entry(
         .iter()
         .map(|preset| {
             let mut report = analyze_milkrust_preset_compatibility(preset);
+            if preset.index == 0 && !parsed.embedded_sprites.is_empty() {
+                report.renderer_features.push("embedded-sprite-rendering".into());
+                for sprite in &parsed.embedded_sprites {
+                    collect_milkrust_functions(&sprite.init, &mut report.unsupported_functions);
+                    collect_milkrust_functions(&sprite.code, &mut report.unsupported_functions);
+                }
+            }
             if let Some(requirement) = &saved_blend_requirement {
                 report.renderer_features.push(requirement.clone());
             }
             let webgpu_shader_sections = webgpu_shader_sections(preset);
-            let content_error = if milkrust_preset_has_content(preset) {
+            let content_error = if milkrust_preset_has_content(preset) || !parsed.embedded_sprites.is_empty() {
                 String::new()
             } else {
                 "preset content is empty".to_string()
@@ -4441,7 +4489,11 @@ pub fn build_milkrust_compatibility_entry(
                 parse_errors: report.parse_errors.clone(),
                 error,
                 index: preset.index,
-                metrics: milkrust_preset_metrics(preset),
+                metrics: {
+                    let mut metrics = milkrust_preset_metrics(preset);
+                    if preset.index == 0 { metrics.sprite_count += parsed.embedded_sprites.len(); }
+                    metrics
+                },
                 renderer_features,
                 shader_diagnostics,
                 shader_sections: report.shader_sections,

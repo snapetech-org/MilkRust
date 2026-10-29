@@ -30,9 +30,10 @@ masks for the documented patterns (`Fade`, `zoom`, `side`, `plasma`, `cercle`,
 `arrow`, `cross`, and `cross2`). These are independent procedural formulas
 based on the documented names and saved fields, not a port of MilkDrop3's
 transition renderer. The Canvas fallback rejects spatial patterns instead of
-silently showing a uniform cross-fade. Active embedded sprite/trailer extensions still fail closed. Bounded `NAME=`
-metadata and well-formed sprite blocks explicitly disabled by saved `sprite=0`
-are preserved without execution. Unknown flag values, unmatched/nested blocks
+silently showing a uniform cross-fade. Active saved sprite blocks now execute on
+native GL/GLES and WebGL; see [EMBEDDED_SPRITES.md](EMBEDDED_SPRITES.md).
+Bounded `NAME=` metadata and well-formed sprite blocks explicitly disabled by
+saved `sprite=0` are preserved without execution. Unknown flag values, unmatched/nested blocks
 and unrelated trailer records remain gated. The wrapper enforces the same
 2 MiB source budget even when called independently of the preset importer.
 
@@ -49,6 +50,6 @@ Observed format source: [MDropDX12 564407e](https://github.com/shanevbg/MDropDX1
 
 The inspected [MilkDrop3 source snapshot at `6b39088`](https://github.com/milkdrop2077/MilkDrop3/tree/6b39088f789441e18cc1665519ee7ffe439cece5/code/vis_milk2) documents `.milk2` blending in its README, but the checked-in renderer source does not contain a consumer for the saved wrapper/header records described above. It has a randomized preset-transition helper; that helper is not evidence for the frozen, serialized `.milk2` blend field. The available source snapshot therefore cannot serve as a complete implementation reference for the saved patterns. This is a source-availability finding, not a claim that MilkDrop3 itself lacks the feature. A port still needs authoritative per-pattern semantics and reference output for real saved files.
 
-The disabled-sprite flag is a format observation from `engine_presets.cpp`'s
-embedded-block parser in the cited source, independently implemented here.
-It does not implement active sprite equations, layers or blend modes.
+The saved sprite records are interpreted independently in `sprites.rs`. Unknown
+fields and malformed blocks fail import; the source checkpoint includes runtime,
+GPU passes and regression sources, not executed conformance evidence.

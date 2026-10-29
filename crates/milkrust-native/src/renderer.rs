@@ -153,6 +153,7 @@ impl Target {
 }
 
 pub struct Renderer {
+    sprite_program: Program, sprite_snapshot: Option<Texture>,
     gl: Gl, gles: bool, copy: Program, color: Program, textured: Program, blur_program: Program, samplers: Samplers, noise: BTreeMap<String, (Texture, u32)>,
     buffer: u32, vao: u32, max_texture: i32, texture_units: usize,
     width: u32, height: u32, capture: Option<(u32, u32, Target)>, layers: Vec<Layer>, textures: BTreeMap<String, Texture>,
@@ -170,6 +171,7 @@ impl Renderer {
         let copy = Program::new(gl, gles, &copy_source)?;
         let color = Program::new(gl, gles, COLOR)?;
         let textured = Program::new(gl, gles, TEXTURED)?;
+        let sprite_program = Program::new(gl, gles, milkrust_core::sprites::FRAGMENT)?;
         let blur_program = Program::new(gl, gles, resources::BLUR_FRAGMENT)?;
         let mut samplers = Samplers { gl, ids: [0; 4] };
         unsafe {
@@ -186,7 +188,7 @@ impl Renderer {
             (gl.get_integer)(0x0D33, &mut max_texture); (gl.get_integer)(0x8872, &mut units);
             (gl.gen_buffers)(1, &mut buffer); (gl.gen_vertex_arrays)(1, &mut vao);
         }
-        let result = Self { gl, gles, copy, color, textured, blur_program, samplers, noise: BTreeMap::new(), buffer, vao, max_texture, texture_units: units.max(0) as usize,
+        let result = Self { sprite_program, sprite_snapshot: None, gl, gles, copy, color, textured, blur_program, samplers, noise: BTreeMap::new(), buffer, vao, max_texture, texture_units: units.max(0) as usize,
             width: 0, height: 0, capture: None, layers: Vec::new(), textures: BTreeMap::new() };
         if buffer == 0 || vao == 0 || max_texture < 64 || units < 4 { return Err("Insufficient OpenGL context resources".into()); }
         unsafe {
@@ -196,7 +198,7 @@ impl Renderer {
         Ok(result)
     }
 
-    pub fn reset(&mut self) { self.layers.clear(); self.textures.clear(); self.noise.clear(); self.capture = None; self.width = 0; self.height = 0; }
+    pub fn reset(&mut self) { self.sprite_snapshot = None; self.layers.clear(); self.textures.clear(); self.noise.clear(); self.capture = None; self.width = 0; self.height = 0; }
 
     pub fn texture(&mut self, name: &str, width: u32, height: u32, bytes: &[u8]) -> Result<(), String> {
         dimensions(width, height, self.max_texture)?;
@@ -233,7 +235,12 @@ impl Renderer {
     fn prepare(&mut self, frames: &MilkRustFrameSet, width: u32, height: u32) -> Result<(), String> {
         dimensions(width, height, self.max_texture)?;
         if frames.entries.is_empty() || frames.entries.len() > 2 { return Err("Expected one or two preset layers".into()); }
-        let mut vertices = 0usize;
+        if frames.sprites.len() > milkrust_core::sprites::MAX_SPRITES { return Err("Too many sprite frames".into()); }
+        for sprite in &frames.sprites { self.named_texture(&sprite.texture)?; }
+        if !frames.sprites.is_empty() && self.sprite_snapshot.as_ref().is_none_or(|texture| texture.width != width || texture.height != height) {
+            self.sprite_snapshot = Some(Texture::new(self.gl, width, height, None)?);
+        }
+        let mut vertices = frames.sprites.len() * 4;
         for entry in &frames.entries {
             let frame = &entry.frame;
             vertices += frame.warp_mesh.as_ref().map_or(6, |mesh| mesh.positions.len() / 2);
@@ -434,6 +441,31 @@ impl Renderer {
         Ok(())
     }
 
+    fn draw_sprite(&self, sprite: &milkrust_core::sprites::Frame) -> Result<(), String> {
+        let image = self.named_texture_asset(&sprite.texture)?;
+        let background = self.sprite_snapshot.as_ref().ok_or("Missing sprite snapshot")?;
+        // Copy from the currently bound render target; sampling the live target
+        // would be undefined GL feedback, especially for multiple overlays.
+        self.bind_texture(1, background.id);
+        unsafe {
+            (self.gl.copy_tex_sub_image)(TEXTURE_2D, 0, 0, 0, 0, 0, self.width as i32, self.height as i32);
+            (self.gl.disable)(BLEND);
+        }
+        self.bind_texture(0, image.id);
+        unsafe { (self.gl.bind_sampler)(0, self.samplers.ids[2]); }
+        let program = &self.sprite_program;
+        program.bind(); program.integer("spriteImage", 0); program.integer("spriteBackground", 1);
+        program.vector2("spriteResolution", self.width as f32, self.height as f32);
+        program.vector4("spriteTint", sprite.color[0] as f32, sprite.color[1] as f32, sprite.color[2] as f32, sprite.color[3] as f32);
+        program.vector3("spriteColorKey", ((sprite.color_key >> 16) & 255) as f32 / 255.0,
+            ((sprite.color_key >> 8) & 255) as f32 / 255.0, (sprite.color_key & 255) as f32 / 255.0);
+        program.integer("spriteBlend", sprite.blend_mode);
+        let (positions, uvs) = sprite.geometry((image.width, image.height), (self.width, self.height));
+        self.draw(0x0006, &interleave(&positions, &uvs, &[], [1.0; 4])?)?;
+        unsafe { (self.gl.bind_sampler)(0, 0); }
+        Ok(())
+    }
+
     pub fn render(&mut self, frames: &MilkRustFrameSet, output: u32, width: u32, height: u32, time: f64) -> Result<(), String> {
         self.prepare(frames, width, height)?;
         unsafe {
@@ -467,6 +499,9 @@ impl Renderer {
                     MilkRustPrimitiveMode::Points => 0x0000, MilkRustPrimitiveMode::TriangleFan => 0x0006, MilkRustPrimitiveMode::Triangles => 0x0004 };
                 self.draw(mode, &interleave(&primitive.vertices, &[], &primitive.vertex_colors, primitive.color)?)?;
             }
+            for sprite in frames.sprites.iter().filter(|sprite| sprite.burn && sprite.layer > 0) {
+                self.draw_sprite(sprite)?;
+            }
             self.build_resources(frame, layer, layer.targets[write].texture.id)?;
             // The final composite samples this layer's completed feedback. It
             // never writes the display composite back into the feedback loop.
@@ -484,8 +519,16 @@ impl Renderer {
             self.uniforms(composite, frame, &frame.shader_stages.composite, time,
                 transition.output_alpha(index == 0), 1.0, transition, layer, layer.targets[write].texture.id)?;
             self.draw(0x0004, &quad())?;
+            // Back-layer burns become history for the next frame, after the
+            // current composite has sampled it. Equations still ran only once.
+            unsafe { (self.gl.bind_framebuffer)(FRAMEBUFFER, layer.targets[write].id); }
+            for sprite in frames.sprites.iter().filter(|sprite| sprite.burn && sprite.layer == 0) {
+                self.draw_sprite(sprite)?;
+            }
             self.layers[index].read = write;
         }
+        unsafe { (self.gl.bind_framebuffer)(FRAMEBUFFER, output); }
+        for sprite in frames.sprites.iter().filter(|sprite| !sprite.burn) { self.draw_sprite(sprite)?; }
         unsafe {
             (self.gl.disable)(BLEND); (self.gl.active_texture)(TEXTURE0);
             if (self.gl.get_error)() != 0 { return Err("OpenGL failed while rendering a preset pass".into()); }

@@ -11,7 +11,7 @@ pub struct SavedBlend {
     pub random: [Option<f64>; 5],
     /// Retain all header records for lossless export of unknown extensions.
     pub header: BTreeMap<String, String>,
-    /// Embedded sprite/extensions after preset 2 are preserved, not executed.
+    /// Trailing sprite blocks and metadata are retained for lossless export.
     pub trailer: String,
 }
 
@@ -27,30 +27,17 @@ impl SavedBlend {
     /// It is metadata, not an executable sprite/shader extension, so it must
     /// not disable an otherwise supported uniform Fade blend.
     fn has_only_supported_trailer_metadata(&self) -> bool {
+        let enabled = self.header.get("sprite").map(String::as_str) != Some("0");
+        let Ok(blocks) = crate::sprites::extract(&self.trailer, enabled) else { return false; };
         let mut saw_name = false;
-        let disabled_sprites = self.header.get("sprite").map(String::as_str) == Some("0");
-        let mut sprite_end: Option<String> = None;
-        for line in self.trailer.lines() {
+        for line in blocks.body.lines() {
             let line = line.trim();
-            let upper = line.to_ascii_uppercase();
-            if let Some(end) = &sprite_end {
-                if &upper == end { sprite_end = None; }
-                else if upper.starts_with("[SPRITE") { return false; }
-                continue;
-            }
             if line.is_empty() || line.starts_with("//") || line.starts_with(';') { continue; }
-            if let Some(index) = upper.strip_prefix("[SPRITE").and_then(|v| v.strip_suffix("_BEGIN]")) {
-                // The explicit saved flag disables execution, not preservation.
-                // Do not accept malformed or nested blocks as ordinary metadata.
-                if !disabled_sprites || index.is_empty() || index.len()>6 || !index.bytes().all(|b| b.is_ascii_digit()) { return false; }
-                sprite_end = Some(format!("[SPRITE{index}_END]"));
-                continue;
-            }
             let Some((key, value)) = line.split_once('=') else { return false; };
-            if !key.trim().eq_ignore_ascii_case("NAME") || saw_name || value.trim().len()>512 { return false; }
+            if !key.trim().eq_ignore_ascii_case("NAME") || saw_name || value.trim().len() > 512 { return false; }
             saw_name = true;
         }
-        sprite_end.is_none()
+        true
     }
 
     fn has_supported_header(&self) -> bool {
@@ -347,7 +334,8 @@ mod tests {
         let (blend,presets)=parse(&source).unwrap();
         assert!(blend.supports_uniform_composite());
         assert_eq!(parse(&blend.serialize(&presets)).unwrap(),(blend,presets));
-        for invalid in [source.replace("sprite=0","sprite=1"),source.replace("[SPRITE0_END]",""),source.replace("code_1=x=1;","[SPRITE1_BEGIN]")] {
+        assert!(parse(&source.replace("sprite=0", "sprite=1")).unwrap().0.supports_rendered_pattern());
+        for invalid in [source.replace("[SPRITE0_END]",""),source.replace("code_1=x=1;","[SPRITE1_BEGIN]")] {
             assert!(!parse(&invalid).unwrap().0.supports_rendered_pattern());
         }
     }

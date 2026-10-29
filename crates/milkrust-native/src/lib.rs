@@ -100,7 +100,8 @@ pub unsafe extern "C" fn milkrust_load(handle: u64, text_bytes: *const u8, lengt
         // translation/unsupported saved pattern never becomes a fallback scene.
         validate_milkrust_webgl_import(source)?;
         let parsed = milkrust_core::parse_milkrust_preset_set(source, false);
-        let mut textures = std::collections::BTreeSet::new();
+        let mut textures = parsed.embedded_sprites.iter().map(|sprite| sprite.texture.clone())
+            .collect::<std::collections::BTreeSet<_>>();
         for preset in &parsed.presets {
             for shader in [&preset.warp_shader, &preset.comp_shader] {
                 textures.extend(milkrust_core::get_milkrust_shader_texture_samplers(shader).into_iter()

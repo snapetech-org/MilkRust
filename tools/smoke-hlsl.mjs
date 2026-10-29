@@ -55,6 +55,7 @@ try {
     const legacyTexture = 'data:image/x-tga;base64,' + btoa(String.fromCharCode(...tga));
     cases.push({ id: 'legacy-tga-dimensions', shader: 'shader_body { ret=tex2D(sampler_pc_art,uv).rgb * (texsize_art.x/2); }', textures: {art: legacyTexture} });
     const rows = [];
+    const spriteRows = [];
     try {
       for (const test of cases) {
         engine.loadPresetText(preset(test.shader), test.id + '.milk', JSON.stringify(test.textures || {}));
@@ -72,6 +73,38 @@ try {
         if (lit < canvas.width * canvas.height / 20 || max - min < 10) throw new Error(`${test.id}: blank or uniform output`);
         rows.push({ id: test.id, status: 'pass', litPixels: lit, range: max-min });
       }
+      // Saved-sprite arithmetic and lifetime through the real WASM/WebGL path.
+      // These are authored controls, not MilkDrop reference-image qualification.
+      const spriteTga = tga.slice(0, 21); spriteTga[12]=1; spriteTga.set([192,128,64],18);
+      const spriteTexture = 'data:image/x-tga;base64,' + btoa(String.fromCharCode(...spriteTga));
+      const background = [0.1,0.2,0.3], sourceColor = [64/255,128/255,192/255];
+      const expected = (mode) => sourceColor.map((s,i) => {
+        const d = background[i];
+        return Math.min(1, Math.max(0, [s,s,d+s,s*s+d*(1-s),s,d*s,d*(1-s),1-s,0,d*Math.min(1,0.5+s),d+2*s][mode]))*255;
+      });
+      for (let mode=0; mode<=10; mode++) {
+        const sprite = `\n[SPRITE0_BEGIN]\nSpriteName=art.tga\nSpriteBlend=${mode}\nSpriteBurn=0\nSpriteSX=-0.75\nSpriteSY=-0.75\n[SPRITE0_END]\n`;
+        engine.loadPresetText(preset('shader_body { ret=float3(0.1,0.2,0.3); }')+sprite, `sprite-${mode}.milk`, JSON.stringify({'art.tga':spriteTexture}));
+        for(let frame=0;frame<3;frame++) engine.render(frame/30,0,0,0,'','',0,0.5,0.5,0,0);
+        if(JSON.parse(engine.renderStatusJson()).state!=='preview') throw new Error(`Sprite ${mode} failed`);
+        const pixel = new Uint8Array(4);
+        gl.readPixels(canvas.width/2,canvas.height/2,1,1,gl.RGBA,gl.UNSIGNED_BYTE,pixel);
+        if(expected(mode).some((value,i)=>Math.abs(value-pixel[i])>3)) throw new Error(`Sprite mode ${mode}: ${pixel}`);
+        spriteRows.push({mode,center:Array.from(pixel),status:'pass'});
+      }
+      const once = '\n[SPRITE0_BEGIN]\nSpriteName=art.tga\nSpriteBurn=0\ncode_1=done=1;\n[SPRITE0_END]\n';
+      engine.loadPresetText(preset('shader_body { ret=0; }')+once, 'one-frame-sprite.milk', JSON.stringify({'art.tga':spriteTexture}));
+      engine.render(0,0,0,0,'','',0,0.5,0.5,0,0); // texture admission holds this frame
+      engine.render(1/30,0,0,0,'','',0,0.5,0.5,0,0);
+      const oncePixel = new Uint8Array(4);
+      gl.readPixels(canvas.width/2,canvas.height/2,1,1,gl.RGBA,gl.UNSIGNED_BYTE,oncePixel);
+      if(oncePixel[1]<120) throw new Error('One-frame sprite expired during texture admission');
+      engine.render(2/30,0,0,0,'','',0,0.5,0.5,0,0);
+      gl.readPixels(canvas.width/2,canvas.height/2,1,1,gl.RGBA,gl.UNSIGNED_BYTE,oncePixel);
+      if(oncePixel.slice(0,3).some(value=>value>2)) throw new Error('Retired overlay leaked into feedback');
+      // Restore a nonblank shader for the context-loss comparison below.
+      engine.loadPresetText(preset('shader_body { ret=float3(uv,0.5); }'), 'recovery.milk', '{}');
+      engine.render(0,0,0,0,'','',0,0.5,0.5,0,0);
       const loss = gl.getExtension('WEBGL_lose_context');
       if (!loss) throw new Error('Context recovery integration requires WEBGL_lose_context');
       const event = (name) => new Promise((resolve, reject) => {
@@ -94,9 +127,10 @@ try {
         if (!rejected) throw new Error('Invalid shader import was accepted');
       }
     } finally { engine.free(); }
-    return { schemaVersion: 1, profile: 'milkrust-hlslparser-es300-v1', rows, rejected: invalid.length, contextRecovery: 'pass', fidelity: 'not-assessed', physicalDevice: false };
+    return { schemaVersion: 1, profile: 'milkrust-hlslparser-es300-v1', rows, spriteRows, rejected: invalid.length, contextRecovery: 'pass', fidelity: 'not-assessed', physicalDevice: false };
   }, { cases, invalid });
   assert.equal(report.rows.length, cases.length + 1);
+  assert.equal(report.spriteRows.length, 11);
   if (process.env.RUNNER_TEMP) await writeFile(resolve(process.env.RUNNER_TEMP, 'milkrust-hlsl-browser.json'), JSON.stringify(report, null, 2) + '\n');
   console.log(JSON.stringify(report));
 } finally {

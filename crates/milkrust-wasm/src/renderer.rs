@@ -1,3 +1,4 @@
+mod sprites;
 mod shader_resources;
 use shader_resources::ShaderResources;
 use std::{cell::{Cell, RefCell}, collections::BTreeMap, rc::Rc};
@@ -81,7 +82,7 @@ impl MilkRustRenderer {
         match self {
             Self::WebGl(renderer_set) => renderer_set.render_frame_set(frame_set, time),
             Self::Canvas { canvas, context } => {
-                if frame_set.entries.iter().any(|entry| entry.frame.shader_stages.warp.required ||
+                if !frame_set.sprites.is_empty() || frame_set.entries.iter().any(|entry| entry.frame.shader_stages.warp.required ||
                     entry.frame.shader_stages.composite.required || entry.frame.warp_mesh.is_some() ||
                     !entry.frame.textured_primitives.is_empty() ||
                     milk2::blend_pattern_code(&entry.blend_pattern).is_some_and(|pattern| pattern != 0)) {
@@ -110,6 +111,7 @@ pub struct MilkRustWebGlRendererSet {
 }
 
 struct MilkRustWebGlRenderer {
+    sprite_pass: RefCell<Option<sprites::SpritePass>>,
     shader_resources: RefCell<ShaderResources>,
     buffer: web_sys::WebGlBuffer,
     feedback_targets: RefCell<MilkRustFeedbackTargets>,
@@ -237,6 +239,9 @@ impl MilkRustWebGlRendererSet {
         for (renderer, entry) in renderers.iter().zip(&frame_set.entries) {
             renderer.prepare_stages(&entry.frame)?;
             if !renderer.prepare_textures(&entry.frame)? { return Ok(false); }
+            for sprite in &frame_set.sprites {
+                if renderer.named_texture_for(&sprite.texture)?.is_none() { return Ok(false); }
+            }
         }
         for (index, entry) in frame_set.entries.iter().enumerate() {
             if let Some(renderer) = renderers.get(index) {
@@ -244,8 +249,13 @@ impl MilkRustWebGlRendererSet {
                     entry,
                     time,
                     index == 0,
+                    &frame_set.sprites,
                 )?;
             }
+        }
+        self.gl.bind_framebuffer(web_sys::WebGl2RenderingContext::FRAMEBUFFER, None);
+        if let Some(renderer) = renderers.first() {
+            for sprite in frame_set.sprites.iter().filter(|sprite| !sprite.burn) { renderer.draw_sprite(sprite)?; }
         }
         Ok(true)
     }
@@ -371,6 +381,7 @@ impl MilkRustWebGlRenderer {
         )?);
 
         Ok(Self {
+            sprite_pass: RefCell::new(None),
             u_color: gl.get_uniform_location(&program, "u_color"),
             u_counts: gl.get_uniform_location(&program, "u_counts"),
             u_display_only: gl.get_uniform_location(&program, "u_displayOnly"),
@@ -418,6 +429,7 @@ impl MilkRustWebGlRenderer {
         entry: &MilkRustCompositeFrame,
         time: f64,
         clear_screen: bool,
+        sprites: &[milkrust_core::sprites::Frame],
     ) -> Result<(), JsValue> {
         let frame = &entry.frame;
         let transition = TransitionUniforms::from_entry(entry);
@@ -463,6 +475,7 @@ impl MilkRustWebGlRenderer {
         }
         self.draw_textured_primitives(frame, &targets.targets[read_index].texture)?;
         self.draw_primitives(frame);
+        for sprite in sprites.iter().filter(|sprite| sprite.burn && sprite.layer > 0) { self.draw_sprite(sprite)?; }
         self.shader_resources.borrow_mut().build(frame, &targets.targets[write_index].texture);
 
         self.gl
@@ -500,6 +513,9 @@ impl MilkRustWebGlRenderer {
         if should_blend {
             self.gl.disable(web_sys::WebGl2RenderingContext::BLEND);
         }
+        self.gl.bind_framebuffer(web_sys::WebGl2RenderingContext::FRAMEBUFFER, Some(&targets.targets[write_index].framebuffer));
+        for sprite in sprites.iter().filter(|sprite| sprite.burn && sprite.layer == 0) { self.draw_sprite(sprite)?; }
+        self.gl.bind_framebuffer(web_sys::WebGl2RenderingContext::FRAMEBUFFER, None);
         targets.read_index = write_index;
         if self.gl.get_error() != web_sys::WebGl2RenderingContext::NO_ERROR {
             return Err(JsValue::from_str("WebGL failed while drawing a preset stage"));
@@ -991,6 +1007,19 @@ impl MilkRustWebGlRenderer {
         }
         self.gl.disable(web_sys::WebGl2RenderingContext::BLEND);
         self.gl.use_program(Some(&self.program));
+    }
+
+    fn draw_sprite(&self, sprite: &milkrust_core::sprites::Frame) -> Result<(), JsValue> {
+        let texture = self.named_texture_for(&sprite.texture)?.ok_or_else(|| JsValue::from_str("Sprite image is still loading"))?;
+        let dimensions = {
+            let textures = self.named_textures.borrow();
+            get_milkrust_texture_name_aliases(&sprite.texture).iter().find_map(|alias| textures.get(alias))
+                .map(|asset| asset.image.as_ref().map_or((asset.width, asset.height), |image| (image.natural_width(), image.natural_height())))
+                .ok_or_else(|| JsValue::from_str("Sprite image dimensions are unavailable"))?
+        };
+        let mut pass = self.sprite_pass.borrow_mut();
+        if pass.is_none() { *pass = Some(sprites::SpritePass::new(self.gl.clone())?); }
+        pass.as_mut().unwrap().draw(sprite, &texture, dimensions)
     }
 
     fn prepare_textures(&self, frame: &MilkRustFrame) -> Result<bool, JsValue> {
