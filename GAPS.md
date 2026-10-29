@@ -11,6 +11,11 @@ run is recorded for this checkpoint.
 
 - Standard numbered `warp_N`/`comp_N` shaders, initialization ordering, indexed
   shape/wave/sprite keys, bounded input and explicit read/encoding/parse failures.
+  MilkDrop's four custom shape/wave slots are enforced: inert out-of-range
+  records remain round-trippable; active or equation-backed out-of-range
+  objects fail before frame construction. Legacy double-preset detection uses
+  exact section-marker lines, so marker text in a comment does not change the
+  imported format.
   The corpus denominator retains unreadable and unsupported files.
 - Saved sprites have bounded independent equations/lifetimes, relative texture
   dependencies, transforms and all eleven MilkDrop 3 blend modes (default mode 0;
@@ -122,6 +127,24 @@ run is recorded for this checkpoint.
   Regression sources cover the typed compiler, resource bindings, unsafe input,
   initialization retry and browser render failures; they remain unrun.
 
+## Public corpus source inventory — 2026-10-29
+
+A filesystem inventory of `content/community-unlicensed` found 14,576 preset
+files. All decode losslessly under the current UTF-8, BOM-marked UTF-16, and
+Windows-1252 policy: 14,539 UTF-8, 23 Windows-1252, and 14 UTF-16. The
+inventory found 36 distinct call names in recognized equation fields; every
+name is present in the EEL function allowlist. The highest observed custom
+wave/shape index is 4; its records occur in one preset and both index-4 objects
+are disabled. MilkDrop 3 has four slots, indexed 0–3. The tree contains 94 JPEG,
+12 TGA, and one PNG image; no other image extensions. Its single mixed-case
+preset suffix is `.MILk`, which exposed an app import/native-load mismatch and
+is now accepted case-insensitively by PlezyNG's shared native host.
+
+This inventory is lexical source evidence only. The full CLI compatibility
+report still must run on the private JIT runner to exercise MilkRust's parser
+and typed shader frontend across every file. It does not compile shaders,
+render frames, resolve external texture packs, or establish fidelity.
+
 ## Still open
 
 - First compiler/link/build checks on the required private JIT runners,
@@ -145,11 +168,11 @@ run is recorded for this checkpoint.
   bounded pixel-shader profile, not all HLSL shader models. The separate WGSL
   path remains limited.
 - Complete format/EEL/texture behavior for every corpus file, including other legacy
-  encodings, other executable extensions and unsupported formats. UTF-8, BOM-marked UTF-16
-  and Windows-1252 now have bounded decoders; preserve every remaining exception.
-  Animated PNG/WebP and additional unsupported historical image formats remain
-  explicit import failures. A corpus-wide scan is still needed to determine which
-  failures represent valid source-level compatibility gaps.
+  encodings, other executable extensions and unsupported formats. The current
+  community-tree inventory found no unhandled text encoding or equation call,
+  but CLI parser/shader analysis and missing external texture-pack accounting
+  remain unrun. Animated PNG/WebP and additional unsupported historical image
+  formats remain explicit import failures.
 - OS-level compiler/driver process/device hang containment, browser-process OOM
   isolation for native codec internals, recovery qualification, long-run
   resource/performance and accessibility evidence. Worker termination only bounds JS-side decoder

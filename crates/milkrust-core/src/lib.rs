@@ -938,8 +938,10 @@ pub fn milkrust_frame_set_from_source_with_audio_and_input(
     spectrum: &[f64],
     input: MilkRustInputState,
 ) -> MilkRustFrameSet {
-    let parsed =
-        parse_milkrust_preset_set(source, source.to_ascii_lowercase().contains("[preset01]"));
+    let parsed = parse_milkrust_preset_set(
+        source,
+        milkrust_source_requires_milk2_error_context(source),
+    );
     let title = milkrust_preset_set_title(&parsed);
     let transition_mode = milkrust_transition_mode(&parsed);
     let transition_seconds = milkrust_transition_seconds(&parsed);
@@ -1378,7 +1380,7 @@ impl MilkRustFrameSetRuntime {
         if self.source != source || self.preset_documents.is_empty() {
             let parsed = parse_milkrust_preset_set(
                 source,
-                source.to_ascii_lowercase().contains("[preset01]"),
+                milkrust_source_requires_milk2_error_context(source),
             );
             self.previous_time = None;
             self.sprite_runtime = sprites::Runtime::default();
@@ -1538,8 +1540,10 @@ pub fn validate_milkrust_webgl_import(source: &str) -> Result<String, String> {
 
 fn validate_milkrust_import_for_renderer(source: &str, webgl_stages: bool) -> Result<String, String> {
     validate_preset_source(source)?;
-    let parsed =
-        parse_milkrust_preset_set(source, source.to_ascii_lowercase().contains("[preset01]"));
+    let parsed = parse_milkrust_preset_set(
+        source,
+        milkrust_source_requires_milk2_error_context(source),
+    );
     if parsed.presets.is_empty() {
         return Err("MilkRust preset is empty".to_string());
     };
@@ -1752,6 +1756,10 @@ fn split_milkrust_preset_pair(source: &str) -> Vec<String> {
     vec![normalized]
 }
 
+fn milkrust_source_requires_milk2_error_context(source: &str) -> bool {
+    milk2::has_wrapper(source) || split_milkrust_preset_pair(source).len() > 1
+}
+
 fn parse_indexed_key<'a>(key: &'a str, prefix: &str) -> Option<(usize, &'a str)> {
     let rest = key.strip_prefix(prefix)?;
     let digit_count = rest.chars().take_while(|ch| ch.is_ascii_digit()).count();
@@ -1782,6 +1790,19 @@ fn ensure_milkrust_entry(
         entries.push(MilkRustIndexedEntry::default());
     }
     &mut entries[index]
+}
+
+fn milkrust_indexed_entry_may_be_active(entry: &MilkRustIndexedEntry) -> bool {
+    milkrust_base_number(&entry.base_values, "enabled", 0.0) > 0.0
+        || [
+            &entry.equations.init,
+            &entry.equations.frame,
+            &entry.equations.per_frame,
+            &entry.equations.point,
+            &entry.equations.per_pixel,
+        ]
+        .iter()
+        .any(|equation| !equation.trim().is_empty())
 }
 
 fn assign_milkrust_equation(equations: &mut MilkRustEquations, key: &str, value: &str) -> bool {
@@ -1915,6 +1936,28 @@ fn parse_milkrust_preset_text(text: &str, index: usize) -> MilkRustPresetDocumen
     }
     for line in numbered_comp_shader.values() {
         append_milkrust_statement(&mut preset.comp_shader, line);
+    }
+
+    // MilkDrop 3 owns four custom shape and wave slots. Keep inert records
+    // round-trippable, but reject anything that is enabled now or can become
+    // enabled through an indexed equation.
+    if preset
+        .shapes
+        .iter()
+        .enumerate()
+        .skip(input_limits::MILKDROP3_CUSTOM_SHAPE_COUNT)
+        .any(|(_, shape)| milkrust_indexed_entry_may_be_active(shape))
+    {
+        preset.parse_errors.push("MilkDrop 3 supports four custom shapes (indices 0–3)".into());
+    }
+    if preset
+        .waves
+        .iter()
+        .enumerate()
+        .skip(input_limits::MILKDROP3_CUSTOM_WAVE_COUNT)
+        .any(|(_, wave)| milkrust_indexed_entry_may_be_active(wave))
+    {
+        preset.parse_errors.push("MilkDrop 3 supports four custom waves (indices 0–3)".into());
     }
 
     preset

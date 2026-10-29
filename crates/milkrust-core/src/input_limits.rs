@@ -3,6 +3,9 @@
 
 pub const MAX_PRESET_BYTES: usize = 2 * 1024 * 1024;
 pub const MAX_INDEXED_ENTRIES: usize = 64;
+/// MilkDrop 3 exposes four custom shape and four custom wave slots (indices 0–3).
+pub const MILKDROP3_CUSTOM_SHAPE_COUNT: usize = 4;
+pub const MILKDROP3_CUSTOM_WAVE_COUNT: usize = 4;
 
 pub fn validate_preset_source(source: &str) -> Result<(), String> {
     if source.len() > MAX_PRESET_BYTES || source.as_bytes().contains(&0) {
