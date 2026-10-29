@@ -319,6 +319,7 @@ export const loadMilkRustPackPlugins = async (
 
 let rustModulePromise;
 let rustModuleInitPromise;
+let hlslInitPromise;
 
 const loadMilkRustModule = async (modulePath = globalThis.__milkrustModulePath || '/milkrust_wasm.js') => {
   if (globalThis.__milkrustModule) {
@@ -333,6 +334,14 @@ const loadMilkRustModule = async (modulePath = globalThis.__milkrustModulePath |
     rustModuleInitPromise = rustModule.default({ module_or_path: wasmPath });
   }
   await rustModuleInitPromise;
+  if (typeof rustModule.initializeHlslCompiler === 'function' && !hlslInitPromise) {
+    const compilerUrl = new URL('milkrust_hlsl.js', absoluteMilkRustUrl(modulePath)).href;
+    hlslInitPromise = rustModule.initializeHlslCompiler(compilerUrl).catch((error) => {
+      hlslInitPromise = undefined;
+      throw error;
+    });
+  }
+  await hlslInitPromise;
   return rustModule;
 };
 

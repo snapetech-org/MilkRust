@@ -102,7 +102,7 @@ pub unsafe extern "C" fn milkrust_load(handle: u64, utf8: *const u8, length: usi
         let mut textures = std::collections::BTreeSet::new();
         for preset in &parsed.presets {
             for shader in [&preset.warp_shader, &preset.comp_shader] {
-                textures.extend(milkrust_core::get_milkrust_shader_texture_samplers(shader));
+                textures.extend(milkrust_core::get_milkrust_shader_texture_samplers(shader).into_iter().filter(|name| !milkrust_core::resources::texture_kind(name).is_builtin()));
             }
             for object in preset.shapes.iter().chain(&preset.sprites) {
                 for key in ["texture", "tex", "tex_name", "texname", "image", "img", "file", "filename"] {

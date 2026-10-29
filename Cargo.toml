@@ -4,6 +4,7 @@ members = [
     "crates/milkrust-core",
     "crates/milkrust-native",
     "crates/milkrust-expr",
+    "crates/milkrust-hlsl",
     "crates/milkrust-pack",
     "crates/milkrust-renderer-core",
     "crates/milkrust-renderer-headless",

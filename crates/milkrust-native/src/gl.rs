@@ -59,6 +59,12 @@ functions! {
     gen_textures: "glGenTextures" (i32, *mut u32);
     bind_texture: "glBindTexture" (u32, u32);
     active_texture: "glActiveTexture" (u32);
+    gen_samplers: "glGenSamplers" (i32, *mut u32);
+    delete_samplers: "glDeleteSamplers" (i32, *const u32);
+    bind_sampler: "glBindSampler" (u32, u32);
+    sampler_parameter: "glSamplerParameteri" (u32, u32, i32);
+    generate_mipmap: "glGenerateMipmap" (u32);
+    tex_image_3d: "glTexImage3D" (u32, i32, i32, i32, i32, i32, i32, u32, u32, *const c_void);
     tex_image: "glTexImage2D" (u32, i32, i32, i32, i32, i32, u32, u32, *const c_void);
     tex_parameter: "glTexParameteri" (u32, u32, i32);
     pixel_store: "glPixelStorei" (u32, i32);
@@ -88,3 +94,5 @@ pub const SRC_ALPHA: u32 = 0x0302;
 pub const ONE_MINUS_SRC_ALPHA: u32 = 0x0303;
 pub const ARRAY_BUFFER: u32 = 0x8892;
 pub const TEXTURE0: u32 = 0x84C0;
+
+pub const TEXTURE_3D: u32 = 0x806F;

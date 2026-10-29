@@ -1,3 +1,5 @@
+mod shader_resources;
+use shader_resources::ShaderResources;
 use std::{cell::{Cell, RefCell}, collections::BTreeMap, rc::Rc};
 
 use milkrust_core::{
@@ -108,6 +110,7 @@ pub struct MilkRustWebGlRendererSet {
 }
 
 struct MilkRustWebGlRenderer {
+    shader_resources: RefCell<ShaderResources>,
     buffer: web_sys::WebGlBuffer,
     feedback_targets: RefCell<MilkRustFeedbackTargets>,
     gl: web_sys::WebGl2RenderingContext,
@@ -212,7 +215,7 @@ impl MilkRustWebGlRendererSet {
         texture_assets: Rc<RefCell<BTreeMap<String, String>>>,
     ) -> Result<Self, JsValue> {
         Ok(Self {
-            gl,
+            gl: gl.clone(),
             renderers: RefCell::new(Vec::new()),
             texture_assets,
         })
@@ -384,7 +387,7 @@ impl MilkRustWebGlRenderer {
             warp_uv_buffer,
             buffer,
             feedback_targets,
-            gl,
+            gl: gl.clone(),
             named_textures: RefCell::new(BTreeMap::new()),
             texture_pixels: Rc::new(Cell::new(0)),
             max_texture_units,
@@ -397,6 +400,7 @@ impl MilkRustWebGlRenderer {
             textured_program,
             textured_uv_buffer,
             texture_assets,
+            shader_resources: RefCell::new(ShaderResources::new(&gl)?),
             translated_warp_program: RefCell::new(None),
             translated_composite_program: RefCell::new(None),
         })
@@ -426,6 +430,10 @@ impl MilkRustWebGlRenderer {
         }
         let read_index = targets.read_index;
         let write_index = 1 - read_index;
+        self.shader_resources.borrow_mut().prepare(frame.shader_stages.warp.texture_samplers.iter()
+            .chain(&frame.shader_stages.composite.texture_samplers), drawing_width, drawing_height)?;
+        self.shader_resources.borrow_mut().build(&targets.targets[read_index].texture);
+        self.gl.bind_sampler(0, None);
 
         self.gl
             .active_texture(web_sys::WebGl2RenderingContext::TEXTURE0);
@@ -448,6 +456,7 @@ impl MilkRustWebGlRenderer {
         }
         self.draw_textured_primitives(frame, &targets.targets[read_index].texture)?;
         self.draw_primitives(frame);
+        self.shader_resources.borrow_mut().build(&targets.targets[write_index].texture);
 
         self.gl
             .bind_framebuffer(web_sys::WebGl2RenderingContext::FRAMEBUFFER, None);
@@ -651,17 +660,22 @@ impl MilkRustWebGlRenderer {
             b as f32 / 255.0,
         );
         self.gl.uniform1i(uniform("previousFrame").as_ref(), 0);
+        self.shader_resources.borrow().bind_sampler(0, "sampler_main");
+        for (name, v) in milkrust_core::resources::uniform_vectors(frame, time, drawing_width.max(1) as u32, drawing_height.max(1) as u32) {
+            self.gl.uniform4f(uniform(name).as_ref(), v[0], v[1], v[2], v[3]);
+        }
         for index in 0..stage.texture_samplers.len() {
             let texture_unit = index + 2;
             self.gl
                 .active_texture(web_sys::WebGl2RenderingContext::TEXTURE0 + texture_unit as u32);
-            let texture = stage
-                .texture_samplers
-                .get(index)
-                .and_then(|name| self.named_texture_for(name).ok().flatten())
-                .unwrap_or_else(|| self.placeholder_texture.clone());
-            self.gl
-                .bind_texture(web_sys::WebGl2RenderingContext::TEXTURE_2D, Some(&texture));
+            let name = &stage.texture_samplers[index];
+            let (texture, target) = self.shader_resources.borrow().texture(name)
+                .or_else(|| self.named_texture_for(name).ok().flatten()
+                    .map(|t| (t, web_sys::WebGl2RenderingContext::TEXTURE_2D)))
+                .unwrap_or_else(|| (self.placeholder_texture.clone(), web_sys::WebGl2RenderingContext::TEXTURE_2D));
+            self.gl.bind_texture(target, Some(&texture));
+            if !milkrust_core::resources::texture_kind(name).is_builtin() { self.gl.generate_mipmap(target); }
+            self.shader_resources.borrow().bind_sampler(texture_unit as u32, name);
             self.gl.uniform1i(
                 uniform(&format!("shaderTexture{index}")).as_ref(),
                 texture_unit as i32,
@@ -727,6 +741,10 @@ impl MilkRustWebGlRenderer {
             self.gl
                 .uniform1f(uniform(&format!("q{}", index + 1)).as_ref(), *value as f32);
         }
+        for (name, value) in &frame.shader_values {
+            if name != "preset_seed" { self.gl.uniform1f(uniform(name).as_ref(), *value as f32); }
+        }
+
     }
 
     fn draw_translated_quad(
@@ -945,7 +963,7 @@ impl MilkRustWebGlRenderer {
         for name in frame.shader_stages.warp.texture_samplers.iter()
             .chain(&frame.shader_stages.composite.texture_samplers)
             .chain(frame.textured_primitives.iter().map(|primitive| &primitive.texture_name)) {
-            if name.is_empty() { continue; }
+            if name.is_empty() || milkrust_core::resources::texture_kind(name).is_builtin() { continue; }
             if self.named_texture_for(name)?.is_none() { ready = false; }
         }
         Ok(ready)

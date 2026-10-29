@@ -1,86 +1,58 @@
-# HLSL compatibility scope
+# HLSL compiler and rendering profile
 
-MilkRust still does **not** have a full HLSL compiler. The native and WebGL
-paths share a restricted HLSL-like expression/declaration translator. A driver
-accepting generated GLSL is not a fidelity result. Full HLSL, full `.milk2`,
-and broad community-preset compatibility remain unimplemented and
-unqualified.
+The native GL/GLES and WebGL2 paths now have a typed legacy HLSL compiler:
+`milkrust-hlsl` vendors Thekla HLSLParser at
+`4f4aefdc52ec49910a7542da4e772b9a0c246d7b` under MIT. The original expression
+translator remains a fast path and the separate WGSL path remains restricted.
+This source integration is not a build, device qualification, or universal
+community-preset compatibility result.
 
-## Implemented translator subset
+## Implemented source
 
-The bounded path currently handles a single returned expression, a limited
-sequence of initialized scalar/vector declarations and assignments, simple
-conditional returns, selected common HLSL intrinsics, and these legacy 2D
-sampling forms when the sampler maps to a known MilkDrop texture binding:
-`tex2D`/`tex`, `tex2Dlod`, `tex2Dbias`, `tex2Dproj`, and `tex2Dgrad`. The code
-preserves HLSL `fmod` truncation for native/WebGL. WebGPU rejects sampling
-forms whose sampling semantics are not represented by its current bindings.
-It also unwraps one parameterless scalar/vector HLSL `main` entry point with
-an optional output semantic, and accepts a simple `return expression;` body.
-Entry-point parameters, preambles, helper functions, general control flow and
-multiple functions remain unsupported.
+- A safe Rust API around one exception-contained C++ ABI; the core crate keeps
+  `unsafe_code = forbid`. Native builds compile the pinned source with `cc`.
+- The browser builds the same source using pinned Emscripten 3.1.64 and loads
+  its ES module before shader imports. `tools/build-wasm-package.sh` includes
+  the compiler JS/WASM, license, and provenance in the package.
+- Token-based object/function macros, conditional compilation, `defined`,
+  integer expressions, continuation lines, token pasting, and nested arguments.
+  Includes and filesystem/network access are unavailable.
+- Typed functions, overloads, structures, arrays/indexing, scalar/vector/matrix
+  expressions, implicit conversions, if/else, for/while/do loops, switch/case,
+  break/continue, discard and legacy sampling intrinsics. Local fixes cover
+  explicit block emission, empty/expression loop initializers, bare returns,
+  const globals and HLSL `fmod` sign semantics.
+- MilkDrop `shader_body` wrappers with helper preambles, and explicit pixel
+  entry points with TEXCOORD0/COLOR0. Unknown input/output semantics fail.
+- Separate warp/composite passes, three separable blur levels, deterministic
+  original 2D/3D noise resources, mipmap generation, and per-binding sampler
+  filtering/addressing on native GL/GLES and WebGL2. Noise and blur algorithms
+  are independent implementations and still need reference comparisons.
+- Scalar frame values, q1–q64 and packed q vectors, texture dimensions, aspect,
+  deterministic preset/frame randoms and roaming vectors shared by both hosts.
 
-Common `float1`, `half`/`halfN`, `min16floatN`/`min10floatN`, `intN`, `uintN`
-and `boolN` declarations and constructors now lower to explicit GLSL
-scalar/vector types. The half and minimum-precision float forms widen to
-32-bit GLSL floats; rounding can differ from a 16-bit HLSL implementation.
-WebGPU rejects integer and boolean types until their WGSL constructor and
-binding path is implemented. This alias lowering does not supply HLSL's
-broader implicit cast, overflow or precision rules.
+## Limits and errors
 
-`analyze_milkrust_shader_compatibility` returns stable issue categories for
-common unsupported classes: source limit, preprocessor, structured types,
-matrix operations, control flow, arrays/indexing, resource declarations,
-unsupported texture intrinsics, or the remaining restricted grammar. These
-diagnostics are surfaced in CLI and desktop compatibility reports. They are a
-triage aid, not a compiler or qualification claim. A supported result means
-only that the current translator generated its bounded output.
+Source is bounded to 128 KiB at import, 256 KiB after preprocessing; tokens,
+macro expansions, conditional depth, compiler recursion, cumulative allocation,
+operations and elapsed compilation time are bounded. Diagnostics are capped at
+8 KiB and compiler output at 1 MiB (renderer input remains 256 KiB). A bounded
+per-thread cache avoids repeat native compilation. GPU loop execution shares a
+16,384-iteration counter per fragment and discards fragments exceeding it.
+These limits do not sandbox a graphics driver or certify arbitrary GPU code.
 
-The translator is not a general HLSL front end. Macros, arbitrary functions and
-scope, arrays, structs, typed matrices and `mul`, loops and general branching,
-resource reflection, shader-model semantics, blur/noise/mipmap resources,
-exact MilkDrop uniforms and stage behavior remain unsupported. Compiler and
-driver hangs also need resource/time containment. Native and WebGL renderers
-approximate documented non-Fade `.milk2` pattern names with independent
-procedural masks. Exact reference behavior, per-pattern progress tuning,
-unknown names and embedded executable extensions remain unsupported or
-unqualified.
+Unknown semantics, unsupported resource kinds, macro stringification, include
+files, unsupported shader models and remaining emitter gaps fail rather than
+becoming a fallback scene. This is a legacy pixel-shader profile, not all modern
+DirectX HLSL. The WGSL path does not inherit the new compiler. Exact reference
+parity for noise, blur, uniforms and `.milk2` patterns remains unqualified.
 
-## Integration preparation and acceptance criteria
+## Private JIT acceptance
 
-The MIT-licensed [Thekla HLSLParser](https://github.com/Thekla/hlslparser) is a
-candidate parser, not a complete compatibility solution. Its legacy D3D9 scope
-and community-maintained GLSL emitter must be reviewed at a pinned revision.
-Before adding it to a shipping runtime, the implementation must:
-
-1. Pin source and transitive dependencies, record every license, and establish
-   native plus WebAssembly buildability without relaxing `unsafe_code = forbid`
-   across the Rust workspace. If a foreign-language parser is required, isolate
-   its FFI behind a separately reviewed safe boundary.
-2. Parse HLSL into a typed, bounded intermediate form and map MilkDrop's
-   uniforms, texture aliases, sampler state and warp/composite stages explicitly.
-   Keep GLSL ES and WGSL resource layouts distinct; reject any resource or
-   intrinsic a selected backend cannot represent.
-3. Enforce byte, token, nesting, recursion, instruction, allocation and elapsed
-   time limits before handing output to a driver. Compilation must be
-   cancellable or isolated so hostile presets cannot hang playback.
-4. Use a rights-cleared shader corpus and per-case records for source parser
-   result, generated source, backend compilation, image comparison, audio
-   synchronization and resource behavior. Compare supported targets with an
-   approved reference implementation; retain black-frame and translation
-   failure cases as failures.
-5. Version the compatibility profile and only broaden it when every required
-   backend passes the corpus. Keep unsupported constructs visible in the app's
-   compatibility report and never silently downgrade a shader-bearing preset.
-
-projectM's open-source HLSL conversion work and
-[MilkDrop shader converter](https://github.com/jberg/milkdrop-shader-converter/tree/291c8851d2ed0769fce5d06cf32b39d51d027875)
-are useful comparison sources, not drop-in renderer replacements. Their
-translation limitations and different runtime/resource models mean parser
-integration alone cannot support a claim that all `.milk` or `.milk2` presets
-work. No source from the noncommercial MDropDX12 renderer was copied.
-
-No HLSL compiler integration, GPU comparison, full `.milk2` implementation or
-qualification was performed in this source-only change. The added type
-lowering and issue diagnostics improve a limited subset and make failure
-categories visible; the compiler and rendering work remain open.
+No build or test was executed during this source-only implementation. Run the
+crate tests, native host/GL corpus and browser WASM compiler corpus on approved
+private ephemeral JIT runners. Native cross builds now require a target C++11
+compiler and runtime in addition to Rust. Browser runners require Emscripten
+3.1.64. Preserve every parser, driver, black-frame and image-difference failure
+in the qualification report. Do not promote broader packs based only on source
+compilation or catalog schema validation.

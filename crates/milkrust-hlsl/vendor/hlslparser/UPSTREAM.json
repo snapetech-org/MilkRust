@@ -1,0 +1,20 @@
+{
+  "repository": "https://github.com/Thekla/hlslparser",
+  "revision": "4f4aefdc52ec49910a7542da4e772b9a0c246d7b",
+  "license": "MIT",
+  "licenseFile": "LICENSE",
+  "scope": "Legacy pixel-shader parser and GLSL ES 3 emitter; not the HLSL/MSL emitters or command-line driver",
+  "localPatches": [
+    "Allocation, recursion, operation, elapsed-time and generated-output budgets",
+    "Bounded returned diagnostics instead of process stdout",
+    "Array ownership, checked indices and allocation failures",
+    "Consistent malloc/free ownership of interned formatted strings",
+    "Reject formatted-token truncation",
+    "HLSL fmod truncation semantics",
+    "Explicit block, while/do/switch and empty/expression for-loop handling",
+    "Per-fragment loop iteration budget",
+    "Const global declarations and empty returns",
+    "GLSL ES integer and 3D sampler precision declarations",
+    "Trailing whitespace normalization"
+  ]
+}

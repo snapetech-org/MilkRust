@@ -11,6 +11,13 @@ use milkrust_core::{
 };
 use wasm_bindgen::prelude::*;
 
+/// Initialize the matching compiler module before importing shader presets.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen(js_name = initializeHlslCompiler)]
+pub fn initialize_hlsl_compiler(url: &str) -> js_sys::Promise {
+    milkrust_hlsl::initialize(url)
+}
+
 #[wasm_bindgen(js_name = milkrustWebGpuBatchSummaryJson)]
 pub fn wasm_milkrust_webgpu_batch_summary_json(
     source: &str,

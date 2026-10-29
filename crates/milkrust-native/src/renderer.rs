@@ -4,6 +4,7 @@ use std::{collections::BTreeMap, ffi::{c_void, CString}, ptr};
 use milkrust_core::{milk2, get_milkrust_texture_name_aliases, MilkRustCompositeFrame, MilkRustFrame, MilkRustFrameSet,
     MilkRustPrimitiveMode, MilkRustShaderStage, MilkRustTexturedPrimitiveMode};
 use crate::gl::*;
+use milkrust_core::resources::{self, TextureKind};
 
 const VERTEX: &str = "#version 300 es\nin vec2 position; in vec2 sourceUv; in vec4 vertexColor; out vec2 uv; out vec4 tint; void main(){ uv=sourceUv; tint=vertexColor; gl_Position=vec4(position,0,1); gl_PointSize=1.0; }";
 const COPY_BODY: &str = "uniform sampler2D previousFrame; uniform float feedback; uniform float outputAlpha; in vec2 uv; out vec4 outColor; void main(){outColor=vec4(texture(previousFrame,uv).rgb*feedback,outputAlpha*milkrust_transition_mask(uv));}";
@@ -33,11 +34,13 @@ impl Drop for Program { fn drop(&mut self) { unsafe { (self.gl.delete_program)(s
 struct Shader { gl: Gl, id: u32 }
 impl Drop for Shader { fn drop(&mut self) { unsafe { (self.gl.delete_shader)(self.id); } } }
 struct Texture { gl: Gl, id: u32, pixels: u64 }
+struct Samplers { gl: Gl, ids: [u32; 4] }
+impl Drop for Samplers { fn drop(&mut self) { unsafe { (self.gl.delete_samplers)(4, self.ids.as_ptr()); } } }
 impl Drop for Texture { fn drop(&mut self) { unsafe { (self.gl.delete_textures)(1, &self.id); } } }
 struct Target { gl: Gl, id: u32, texture: Texture }
 impl Drop for Target { fn drop(&mut self) { unsafe { (self.gl.delete_framebuffers)(1, &self.id); } } }
 struct Layer {
-    targets: [Target; 2], read: usize,
+    targets: [Target; 2], read: usize, blur: Vec<[Target; 2]>,
     warp: Option<(String, Program)>, composite: Option<(String, Program)>,
 }
 
@@ -53,6 +56,7 @@ fn source_for_context(source: &str, gles: bool) -> String {
     if gles { source.to_owned() } else {
         source.replace("#version 300 es", "#version 150")
             .replace("precision highp float;", "").replace("precision mediump float;", "")
+            .replace("precision highp int;", "").replace("precision highp sampler3D;", "")
     }
 }
 
@@ -145,7 +149,7 @@ impl Target {
 }
 
 pub struct Renderer {
-    gl: Gl, gles: bool, copy: Program, color: Program, textured: Program,
+    gl: Gl, gles: bool, copy: Program, color: Program, textured: Program, blur_program: Program, samplers: Samplers, noise: BTreeMap<String, (Texture, u32)>,
     buffer: u32, vao: u32, max_texture: i32, texture_units: usize,
     width: u32, height: u32, capture: Option<(u32, u32, Target)>, layers: Vec<Layer>, textures: BTreeMap<String, Texture>,
 }
@@ -162,12 +166,23 @@ impl Renderer {
         let copy = Program::new(gl, gles, &copy_source)?;
         let color = Program::new(gl, gles, COLOR)?;
         let textured = Program::new(gl, gles, TEXTURED)?;
+        let blur_program = Program::new(gl, gles, resources::BLUR_FRAGMENT)?;
+        let mut samplers = Samplers { gl, ids: [0; 4] };
+        unsafe {
+            (gl.gen_samplers)(4, samplers.ids.as_mut_ptr());
+            for (index, id) in samplers.ids.iter().enumerate() {
+                if *id == 0 { return Err("GL could not allocate samplers".into()); }
+                (gl.sampler_parameter)(*id, 0x2801, if index & 1 != 0 { 0x2700 } else { 0x2703 });
+                (gl.sampler_parameter)(*id, 0x2800, if index & 1 != 0 { 0x2600 } else { 0x2601 });
+                for axis in [0x2802, 0x2803, 0x8072] { (gl.sampler_parameter)(*id, axis, if index & 2 != 0 { 0x2901 } else { 0x812F }); }
+            }
+        }
         let (mut buffer, mut vao, mut max_texture, mut units) = (0, 0, 0, 0);
         unsafe {
             (gl.get_integer)(0x0D33, &mut max_texture); (gl.get_integer)(0x8872, &mut units);
             (gl.gen_buffers)(1, &mut buffer); (gl.gen_vertex_arrays)(1, &mut vao);
         }
-        let result = Self { gl, gles, copy, color, textured, buffer, vao, max_texture, texture_units: units.max(0) as usize,
+        let result = Self { gl, gles, copy, color, textured, blur_program, samplers, noise: BTreeMap::new(), buffer, vao, max_texture, texture_units: units.max(0) as usize,
             width: 0, height: 0, capture: None, layers: Vec::new(), textures: BTreeMap::new() };
         if buffer == 0 || vao == 0 || max_texture < 64 || units < 4 { return Err("Insufficient OpenGL context resources".into()); }
         unsafe {
@@ -177,7 +192,7 @@ impl Renderer {
         Ok(result)
     }
 
-    pub fn reset(&mut self) { self.layers.clear(); self.textures.clear(); self.capture = None; self.width = 0; self.height = 0; }
+    pub fn reset(&mut self) { self.layers.clear(); self.textures.clear(); self.noise.clear(); self.capture = None; self.width = 0; self.height = 0; }
 
     pub fn texture(&mut self, name: &str, width: u32, height: u32, bytes: &[u8]) -> Result<(), String> {
         dimensions(width, height, self.max_texture)?;
@@ -195,6 +210,7 @@ impl Renderer {
         let mut flipped = Vec::with_capacity(bytes.len());
         for row in bytes.chunks_exact(stride).rev() { flipped.extend_from_slice(row); }
         let texture = Texture::new(self.gl, width, height, Some(&flipped))?;
+        unsafe { (self.gl.generate_mipmap)(TEXTURE_2D); }
         self.textures.insert(folded, texture);
         Ok(())
     }
@@ -220,7 +236,33 @@ impl Renderer {
             for stage in [&frame.shader_stages.warp, &frame.shader_stages.composite] {
                 if stage.required && stage.source.is_empty() { return Err("Required shader could not be translated".into()); }
                 if stage.texture_samplers.len() + 1 > self.texture_units { return Err("Shader exceeds available texture units".into()); }
-                for name in &stage.texture_samplers { self.named_texture(name)?; }
+                for name in &stage.texture_samplers {
+                    match resources::texture_kind(name) {
+                        TextureKind::Asset => { self.named_texture(name)?; }
+                        TextureKind::Noise2d(seed) | TextureKind::Noise3d(seed) => {
+                            let key = resources::base_name(name).to_string();
+                            if !self.noise.contains_key(&key) {
+                                let volume = resources::texture_kind(name).is_volume();
+                                let (w, h, d, data) = resources::noise_texture(seed, volume);
+                                let target = if volume { TEXTURE_3D } else { TEXTURE_2D };
+                                let texture = if volume {
+                                    let mut id = 0;
+                                    unsafe { (self.gl.gen_textures)(1, &mut id); }
+                                    if id == 0 { return Err("GL noise allocation failed".into()); }
+                                    let texture = Texture { gl: self.gl, id, pixels: u64::from(w*h*d) };
+                                    unsafe {
+                                        (self.gl.active_texture)(TEXTURE0); (self.gl.bind_texture)(target, id);
+                                        (self.gl.tex_image_3d)(target, 0, 0x8058, w as i32, h as i32, d as i32, 0, 0x1908, 0x1401, data.as_ptr().cast());
+                                    }
+                                    texture
+                                } else { Texture::new(self.gl, w, h, Some(&data))? };
+                                unsafe { (self.gl.generate_mipmap)(target); }
+                                self.noise.insert(key, (texture, target));
+                            }
+                        }
+                        _ => {}
+                    }
+                }
             }
             for primitive in &frame.textured_primitives {
                 if !primitive.texture_name.is_empty() { self.named_texture(&primitive.texture_name)?; }
@@ -230,11 +272,20 @@ impl Renderer {
             let mut layers = Vec::with_capacity(frames.entries.len());
             for _ in &frames.entries {
                 layers.push(Layer { targets: [Target::new(self.gl, width, height)?, Target::new(self.gl, width, height)?],
-                    read: 0, warp: None, composite: None });
+                    read: 0, blur: Vec::new(), warp: None, composite: None });
             }
             self.layers = layers; self.width = width; self.height = height;
         }
         for (layer, entry) in self.layers.iter_mut().zip(&frames.entries) {
+            let blur_count = entry.frame.shader_stages.warp.texture_samplers.iter()
+                .chain(&entry.frame.shader_stages.composite.texture_samplers)
+                .filter_map(|name| match resources::texture_kind(name) { TextureKind::Blur(i) => Some(i + 1), _ => None })
+                .max().unwrap_or(0);
+            while layer.blur.len() < blur_count {
+                let scale = 1u32 << (layer.blur.len() + 1);
+                let (w, h) = ((width / scale).max(1), (height / scale).max(1));
+                layer.blur.push([Target::new(self.gl, w, h)?, Target::new(self.gl, w, h)?]);
+            }
             for (cache, stage) in [(&mut layer.warp, &entry.frame.shader_stages.warp), (&mut layer.composite, &entry.frame.shader_stages.composite)] {
                 if !stage.required { *cache = None; continue; }
                 if cache.as_ref().is_some_and(|(source, _)| source == &stage.source) { continue; }
@@ -271,12 +322,13 @@ impl Renderer {
     }
 
     fn bind_texture(&self, unit: usize, texture: u32) {
-        unsafe { (self.gl.active_texture)(TEXTURE0 + unit as u32); (self.gl.bind_texture)(TEXTURE_2D, texture); }
+        unsafe { (self.gl.active_texture)(TEXTURE0 + unit as u32); (self.gl.bind_sampler)(unit as u32, 0); (self.gl.bind_texture)(TEXTURE_2D, texture); }
     }
 
     fn uniforms(&self, program: &Program, frame: &MilkRustFrame, stage: &MilkRustShaderStage,
-        time: f64, alpha: f32, feedback: f32, transition: TransitionUniforms) -> Result<(), String> {
+        time: f64, alpha: f32, feedback: f32, transition: TransitionUniforms, layer: &Layer, history: u32) -> Result<(), String> {
         program.bind(); program.integer("previousFrame", 0);
+        unsafe { (self.gl.bind_sampler)(0, self.samplers.ids[2]); }
         program.float("feedback", feedback); program.float("outputAlpha", alpha);
         program.integer("u_transitionPattern", transition.pattern);
         program.float("u_transitionProgress", transition.progress);
@@ -297,11 +349,49 @@ impl Renderer {
         program.floats("fftBins", &frame.fft_bins.map(|v| v as f32));
         program.floats("waveformBins", &frame.waveform_bins.map(|v| v as f32));
         for (index, value) in frame.q_registers.iter().enumerate() { program.float(&format!("q{}", index + 1), *value as f32); }
+        for (name, value) in &frame.shader_values { if name != "preset_seed" { program.float(name, *value as f32); } }
+        for (name, v) in resources::uniform_vectors(frame, time, self.width, self.height) { program.vector4(name, v[0], v[1], v[2], v[3]); }
         for (index, name) in stage.texture_samplers.iter().enumerate() {
-            self.bind_texture(index + 1, self.named_texture(name)?);
+            let (texture, target) = match resources::texture_kind(name) {
+                TextureKind::Main => (history, TEXTURE_2D),
+                TextureKind::Blur(i) => (layer.blur.get(i).ok_or("Missing blur target")?[1].texture.id, TEXTURE_2D),
+                TextureKind::Noise2d(_) | TextureKind::Noise3d(_) => {
+                    let (texture, target) = self.noise.get(resources::base_name(name)).ok_or("Missing noise texture")?;
+                    (texture.id, *target)
+                }
+                TextureKind::Asset => (self.named_texture(name)?, TEXTURE_2D),
+            };
+            let (nearest, repeat) = resources::sampler_state(name);
+            unsafe {
+                (self.gl.active_texture)(TEXTURE0 + (index + 1) as u32);
+                (self.gl.bind_texture)(target, texture);
+                (self.gl.bind_sampler)((index + 1) as u32, self.samplers.ids[usize::from(nearest) + 2*usize::from(repeat)]);
+            }
             program.integer(&format!("shaderTexture{index}"), (index + 1) as i32);
         }
         unsafe { (self.gl.active_texture)(TEXTURE0); }
+        Ok(())
+    }
+
+    fn build_resources(&self, layer: &Layer, history: u32) -> Result<(), String> {
+        self.bind_texture(0, history);
+        unsafe { (self.gl.generate_mipmap)(TEXTURE_2D); (self.gl.disable)(BLEND); }
+        let mut source = history;
+        for (level, targets) in layer.blur.iter().enumerate() {
+            let scale = 1u32 << (level + 1);
+            let (width, height) = ((self.width / scale).max(1), (self.height / scale).max(1));
+            for (pass, target) in targets.iter().enumerate() {
+                self.bind_texture(0, source);
+                unsafe { (self.gl.bind_framebuffer)(FRAMEBUFFER, target.id); (self.gl.viewport)(0, 0, width as i32, height as i32); }
+                self.blur_program.bind(); self.blur_program.integer("previousFrame", 0);
+                self.blur_program.vector2("blurStep", if pass == 0 { 1.0/width as f32 } else { 0.0 }, if pass == 1 { 1.0/height as f32 } else { 0.0 });
+                self.draw(0x0004, &quad())?;
+                source = target.texture.id;
+            }
+            self.bind_texture(0, source);
+            unsafe { (self.gl.generate_mipmap)(TEXTURE_2D); }
+        }
+        unsafe { (self.gl.viewport)(0, 0, self.width as i32, self.height as i32); }
         Ok(())
     }
 
@@ -331,11 +421,12 @@ impl Renderer {
         for (index, entry) in frames.entries.iter().enumerate() {
             let layer = &self.layers[index]; let frame = &entry.frame;
             let write = 1 - layer.read;
+            self.build_resources(layer, layer.targets[layer.read].texture.id)?;
             unsafe { (self.gl.bind_framebuffer)(FRAMEBUFFER, layer.targets[write].id); (self.gl.disable)(BLEND); }
             self.bind_texture(0, layer.targets[layer.read].texture.id);
             let warp = layer.warp.as_ref().map_or(&self.copy, |(_, program)| program);
             self.uniforms(warp, frame, &frame.shader_stages.warp, time, 1.0,
-                (1.0-frame.background_alpha).clamp(0.0, 1.0) as f32, TransitionUniforms::fade())?;
+                (1.0-frame.background_alpha).clamp(0.0, 1.0) as f32, TransitionUniforms::fade(), layer, layer.targets[layer.read].texture.id)?;
             self.draw(0x0004, &feedback_vertices(frame)?)?;
             unsafe { (self.gl.enable)(BLEND); (self.gl.blend_func_separate)(SRC_ALPHA, ONE_MINUS_SRC_ALPHA, 1, ONE_MINUS_SRC_ALPHA); }
             for primitive in &frame.textured_primitives {
@@ -352,6 +443,7 @@ impl Renderer {
                     MilkRustPrimitiveMode::Points => 0x0000, MilkRustPrimitiveMode::TriangleFan => 0x0006, MilkRustPrimitiveMode::Triangles => 0x0004 };
                 self.draw(mode, &interleave(&primitive.vertices, &[], &primitive.vertex_colors, primitive.color)?)?;
             }
+            self.build_resources(layer, layer.targets[write].texture.id)?;
             // The final composite samples this layer's completed feedback. It
             // never writes the display composite back into the feedback loop.
             unsafe {
@@ -366,7 +458,7 @@ impl Renderer {
             let composite = layer.composite.as_ref().map_or(&self.copy, |(_, program)| program);
             let transition = TransitionUniforms::from_entry(entry);
             self.uniforms(composite, frame, &frame.shader_stages.composite, time,
-                transition.output_alpha(index == 0), 1.0, transition)?;
+                transition.output_alpha(index == 0), 1.0, transition, layer, layer.targets[write].texture.id)?;
             self.draw(0x0004, &quad())?;
             self.layers[index].read = write;
         }

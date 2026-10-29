@@ -525,6 +525,7 @@ dependencies = [
 name = "milkrust-core"
 version = "0.1.0"
 dependencies = [
+ "milkrust-hlsl",
  "milkrust-expr",
  "serde_json",
 ]
@@ -545,6 +546,15 @@ dependencies = [
 [[package]]
 name = "milkrust-expr"
 version = "0.1.0"
+
+[[package]]
+name = "milkrust-hlsl"
+version = "0.1.0"
+dependencies = [
+ "cc",
+ "js-sys",
+ "wasm-bindgen",
+]
 
 [[package]]
 name = "milkrust-native"
@@ -580,6 +590,7 @@ dependencies = [
 name = "milkrust-wasm"
 version = "0.1.0"
 dependencies = [
+ "milkrust-hlsl",
  "js-sys",
  "milkrust-core",
  "serde_json",

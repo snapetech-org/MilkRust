@@ -3,6 +3,8 @@ use std::collections::BTreeMap;
 
 pub mod input_limits;
 pub mod milk2;
+mod hlsl;
+pub mod resources;
 pub mod classic_keys;
 use input_limits::validate_preset_source;
 
@@ -48,6 +50,7 @@ pub struct MilkRustFrame {
     /// Independent programs/resources for feedback warp and final display.
     /// The legacy single-shader fields above remain for older consumers only.
     pub shader_stages: MilkRustShaderStages,
+    pub shader_values: BTreeMap<String, f64>,
     pub textured_primitives: Vec<MilkRustTexturedPrimitive>,
     pub rotation: f64,
     pub treble: f64,
@@ -74,6 +77,7 @@ impl Default for MilkRustFrame {
             shader_source: String::new(),
             shader_texture_samplers: Vec::new(),
             shader_stages: MilkRustShaderStages::default(),
+            shader_values: BTreeMap::new(),
             textured_primitives: Vec::new(),
             rotation: 0.0,
             treble: 0.0,
@@ -257,6 +261,7 @@ pub fn milkrust_frame(
         shader_source: String::new(),
         shader_texture_samplers: Vec::new(),
         shader_stages: MilkRustShaderStages::default(),
+            shader_values: BTreeMap::new(),
         textured_primitives: Vec::new(),
         rotation: preset.rot + (time_seconds * 0.37).sin() * 0.035 + (treble - 0.5) * 0.05,
         treble,
@@ -763,6 +768,7 @@ fn build_milkrust_frame_from_scope(
         shader_source: translated_milkrust_shader_source(preset_document),
         shader_texture_samplers: milkrust_shader_texture_samplers(preset_document),
         shader_stages: milkrust_shader_stages(preset_document),
+        shader_values: resources::frame_values(scope, &preset_document.title),
         textured_primitives,
         treble,
         wave_color,
@@ -852,6 +858,7 @@ fn build_milkrust_frame_from_runtime_scope(
          shader_source: translated_shader_source.unwrap_or_default().to_string(),
          shader_texture_samplers: shader_texture_samplers.to_vec(),
          shader_stages: shader_stages.clone(),
+         shader_values: resources::frame_values(scope, &preset_document.title),
          textured_primitives,
          treble,
          wave_color,
@@ -4882,11 +4889,14 @@ fn normalize_milkrust_hlsl_texture_calls(source: &str, texture_samplers: &[Strin
 fn is_milkrust_main_sampler(name: &str) -> bool {
     matches!(
         name.to_ascii_lowercase().as_str(),
-        "previousframe" | "sampler_main" | "sampler_fc_main" | "sampler_sampler_main"
+        "previousframe" | "sampler_main"
     )
 }
 
 pub fn get_milkrust_shader_texture_samplers(source: &str) -> Vec<String> {
+    if let Ok(samplers) = hlsl::sampler_names(source) {
+        if !samplers.is_empty() { return samplers; }
+    }
     let cleaned = strip_milkrust_shader_comments(source);
     let mut samplers = Vec::new();
     for marker in MILKRUST_HLSL_TEXTURE_CALLS {
@@ -5159,8 +5169,9 @@ pub fn create_translated_milkrust_fragment_shader(source: &str) -> String {
 }
 
 fn create_translated_milkrust_fragment_shader_with_output(source: &str, legacy_feedback: bool) -> String {
+    if source.trim().is_empty() { return String::new(); }
     let Some(program) = parse_milkrust_shader_program(source) else {
-        return String::new();
+        return hlsl::compile(source, legacy_feedback).unwrap_or_default();
     };
     let uniforms = (1..=64)
         .map(|index| format!("uniform float q{index};"))
@@ -5506,7 +5517,7 @@ pub fn analyze_milkrust_shader_compatibility(source: &str) -> MilkRustShaderAnal
         push_milkrust_hlsl_issue(&mut issues, MilkRustHlslIssue::UnsupportedTextureIntrinsic);
     }
 
-    let supported = !oversized && parse_milkrust_shader_program(source).is_some();
+    let supported = !oversized && !create_translated_milkrust_fragment_shader_with_output(source, false).is_empty();
     if supported {
         MilkRustShaderAnalysis { supported: true, issues: Vec::new() }
     } else {

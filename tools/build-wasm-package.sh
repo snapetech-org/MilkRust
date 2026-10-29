@@ -4,6 +4,8 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 out_dir="${1:-$repo_root/pkg}"
 
+bash "$repo_root/tools/build-hlsl-wasm.sh" "$out_dir"
+
 cargo build \
   --manifest-path "$repo_root/Cargo.toml" \
   -p milkrust-wasm \
