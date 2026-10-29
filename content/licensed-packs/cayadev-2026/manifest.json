@@ -1,0 +1,1286 @@
+{
+  "schemaVersion": 1,
+  "id": "milkrust-cayadev-2026",
+  "name": "CaYaDev MilkDrop Presets",
+  "version": "2026.10.28",
+  "author": "CaYaDev",
+  "license": "CC-BY-4.0",
+  "licenseFiles": [
+    "licenses/UPSTREAM-LICENSE.md"
+  ],
+  "distributionStatus": "redistributable",
+  "contentNotice": "Copyright (c) 2026 CaYaDev. Presets reproduced without source changes under CC BY 4.0; archive filenames normalized. Give attribution, link the license, and identify any later modifications. No endorsement by CaYaDev is implied. Candidate collection: rendering qualification has not been performed.",
+  "sourceUrls": [
+    "https://github.com/CaYatur/SoundVisualizer/tree/2aab1db0458312484d4065013903133b1f49ed0a/presets/cayadev"
+  ],
+  "sourceRevision": "2aab1db0458312484d4065013903133b1f49ed0a",
+  "presets": [
+    {
+      "id": "apollonian-lace",
+      "title": "Apollonian Lace",
+      "file": "presets/apollonian-lace.milk",
+      "sourceFormat": "milk",
+      "tags": [
+        "community",
+        "cayadev"
+      ],
+      "thumbnail": ""
+    },
+    {
+      "id": "arcade-invaders",
+      "title": "Arcade Invaders",
+      "file": "presets/arcade-invaders.milk",
+      "sourceFormat": "milk",
+      "tags": [
+        "community",
+        "cayadev"
+      ],
+      "thumbnail": ""
+    },
+    {
+      "id": "bioluminescence",
+      "title": "Bioluminescence",
+      "file": "presets/bioluminescence.milk",
+      "sourceFormat": "milk",
+      "tags": [
+        "community",
+        "cayadev"
+      ],
+      "thumbnail": ""
+    },
+    {
+      "id": "caustic-floor",
+      "title": "Caustic Floor",
+      "file": "presets/caustic-floor.milk",
+      "sourceFormat": "milk",
+      "tags": [
+        "community",
+        "cayadev"
+      ],
+      "thumbnail": ""
+    },
+    {
+      "id": "constellations",
+      "title": "Constellations",
+      "file": "presets/constellations.milk",
+      "sourceFormat": "milk",
+      "tags": [
+        "community",
+        "cayadev"
+      ],
+      "thumbnail": ""
+    },
+    {
+      "id": "contour-survey",
+      "title": "Contour Survey",
+      "file": "presets/contour-survey.milk",
+      "sourceFormat": "milk",
+      "tags": [
+        "community",
+        "cayadev"
+      ],
+      "thumbnail": ""
+    },
+    {
+      "id": "coral-script",
+      "title": "Coral Script",
+      "file": "presets/coral-script.milk",
+      "sourceFormat": "milk",
+      "tags": [
+        "community",
+        "cayadev"
+      ],
+      "thumbnail": ""
+    },
+    {
+      "id": "crystal-shards",
+      "title": "Crystal Shards",
+      "file": "presets/crystal-shards.milk",
+      "sourceFormat": "milk",
+      "tags": [
+        "community",
+        "cayadev"
+      ],
+      "thumbnail": ""
+    },
+    {
+      "id": "cymatics",
+      "title": "Cymatics",
+      "file": "presets/cymatics.milk",
+      "sourceFormat": "milk",
+      "tags": [
+        "community",
+        "cayadev"
+      ],
+      "thumbnail": ""
+    },
+    {
+      "id": "data-corridor",
+      "title": "Data Corridor",
+      "file": "presets/data-corridor.milk",
+      "sourceFormat": "milk",
+      "tags": [
+        "community",
+        "cayadev"
+      ],
+      "thumbnail": ""
+    },
+    {
+      "id": "ember-storm",
+      "title": "Ember Storm",
+      "file": "presets/ember-storm.milk",
+      "sourceFormat": "milk",
+      "tags": [
+        "community",
+        "cayadev"
+      ],
+      "thumbnail": ""
+    },
+    {
+      "id": "event-horizon",
+      "title": "Event Horizon",
+      "file": "presets/event-horizon.milk",
+      "sourceFormat": "milk",
+      "tags": [
+        "community",
+        "cayadev"
+      ],
+      "thumbnail": ""
+    },
+    {
+      "id": "fern-frond",
+      "title": "Fern Frond",
+      "file": "presets/fern-frond.milk",
+      "sourceFormat": "milk",
+      "tags": [
+        "community",
+        "cayadev"
+      ],
+      "thumbnail": ""
+    },
+    {
+      "id": "firefly-meadow",
+      "title": "Firefly Meadow",
+      "file": "presets/firefly-meadow.milk",
+      "sourceFormat": "milk",
+      "tags": [
+        "community",
+        "cayadev"
+      ],
+      "thumbnail": ""
+    },
+    {
+      "id": "galaxy-spiral",
+      "title": "Galaxy Spiral",
+      "file": "presets/galaxy-spiral.milk",
+      "sourceFormat": "milk",
+      "tags": [
+        "community",
+        "cayadev"
+      ],
+      "thumbnail": ""
+    },
+    {
+      "id": "glitch-pulse",
+      "title": "Glitch Pulse",
+      "file": "presets/glitch-pulse.milk",
+      "sourceFormat": "milk",
+      "tags": [
+        "community",
+        "cayadev"
+      ],
+      "thumbnail": ""
+    },
+    {
+      "id": "halftone-pop",
+      "title": "Halftone Pop",
+      "file": "presets/halftone-pop.milk",
+      "sourceFormat": "milk",
+      "tags": [
+        "community",
+        "cayadev"
+      ],
+      "thumbnail": ""
+    },
+    {
+      "id": "halo-spectrum",
+      "title": "Halo Spectrum",
+      "file": "presets/halo-spectrum.milk",
+      "sourceFormat": "milk",
+      "tags": [
+        "community",
+        "cayadev"
+      ],
+      "thumbnail": ""
+    },
+    {
+      "id": "harmonograph",
+      "title": "Harmonograph",
+      "file": "presets/harmonograph.milk",
+      "sourceFormat": "milk",
+      "tags": [
+        "community",
+        "cayadev"
+      ],
+      "thumbnail": ""
+    },
+    {
+      "id": "harp-strings",
+      "title": "Harp Strings",
+      "file": "presets/harp-strings.milk",
+      "sourceFormat": "milk",
+      "tags": [
+        "community",
+        "cayadev"
+      ],
+      "thumbnail": ""
+    },
+    {
+      "id": "hex-reactor",
+      "title": "Hex Reactor",
+      "file": "presets/hex-reactor.milk",
+      "sourceFormat": "milk",
+      "tags": [
+        "community",
+        "cayadev"
+      ],
+      "thumbnail": ""
+    },
+    {
+      "id": "hyperlane",
+      "title": "Hyperlane",
+      "file": "presets/hyperlane.milk",
+      "sourceFormat": "milk",
+      "tags": [
+        "community",
+        "cayadev"
+      ],
+      "thumbnail": ""
+    },
+    {
+      "id": "infinite-frame",
+      "title": "Infinite Frame",
+      "file": "presets/infinite-frame.milk",
+      "sourceFormat": "milk",
+      "tags": [
+        "community",
+        "cayadev"
+      ],
+      "thumbnail": ""
+    },
+    {
+      "id": "ink-bloom",
+      "title": "Ink Bloom",
+      "file": "presets/ink-bloom.milk",
+      "sourceFormat": "milk",
+      "tags": [
+        "community",
+        "cayadev"
+      ],
+      "thumbnail": ""
+    },
+    {
+      "id": "julia-bloom",
+      "title": "Julia Bloom",
+      "file": "presets/julia-bloom.milk",
+      "sourceFormat": "milk",
+      "tags": [
+        "community",
+        "cayadev"
+      ],
+      "thumbnail": ""
+    },
+    {
+      "id": "kintsugi",
+      "title": "Kintsugi",
+      "file": "presets/kintsugi.milk",
+      "sourceFormat": "milk",
+      "tags": [
+        "community",
+        "cayadev"
+      ],
+      "thumbnail": ""
+    },
+    {
+      "id": "lantern-night",
+      "title": "Lantern Night",
+      "file": "presets/lantern-night.milk",
+      "sourceFormat": "milk",
+      "tags": [
+        "community",
+        "cayadev"
+      ],
+      "thumbnail": ""
+    },
+    {
+      "id": "laser-cathedral",
+      "title": "Laser Cathedral",
+      "file": "presets/laser-cathedral.milk",
+      "sourceFormat": "milk",
+      "tags": [
+        "community",
+        "cayadev"
+      ],
+      "thumbnail": ""
+    },
+    {
+      "id": "mandala-mirror",
+      "title": "Mandala Mirror",
+      "file": "presets/mandala-mirror.milk",
+      "sourceFormat": "milk",
+      "tags": [
+        "community",
+        "cayadev"
+      ],
+      "thumbnail": ""
+    },
+    {
+      "id": "mandelbrot-dive",
+      "title": "Mandelbrot Dive",
+      "file": "presets/mandelbrot-dive.milk",
+      "sourceFormat": "milk",
+      "tags": [
+        "community",
+        "cayadev"
+      ],
+      "thumbnail": ""
+    },
+    {
+      "id": "mercury-rain",
+      "title": "Mercury Rain",
+      "file": "presets/mercury-rain.milk",
+      "sourceFormat": "milk",
+      "tags": [
+        "community",
+        "cayadev"
+      ],
+      "thumbnail": ""
+    },
+    {
+      "id": "mycelium",
+      "title": "Mycelium",
+      "file": "presets/mycelium.milk",
+      "sourceFormat": "milk",
+      "tags": [
+        "community",
+        "cayadev"
+      ],
+      "thumbnail": ""
+    },
+    {
+      "id": "neon-arches",
+      "title": "Neon Arches",
+      "file": "presets/neon-arches.milk",
+      "sourceFormat": "milk",
+      "tags": [
+        "community",
+        "cayadev"
+      ],
+      "thumbnail": ""
+    },
+    {
+      "id": "neon-monsoon",
+      "title": "Neon Monsoon",
+      "file": "presets/neon-monsoon.milk",
+      "sourceFormat": "milk",
+      "tags": [
+        "community",
+        "cayadev"
+      ],
+      "thumbnail": ""
+    },
+    {
+      "id": "night-bloom",
+      "title": "Night Bloom",
+      "file": "presets/night-bloom.milk",
+      "sourceFormat": "milk",
+      "tags": [
+        "community",
+        "cayadev"
+      ],
+      "thumbnail": ""
+    },
+    {
+      "id": "northern-veil",
+      "title": "Northern Veil",
+      "file": "presets/northern-veil.milk",
+      "sourceFormat": "milk",
+      "tags": [
+        "community",
+        "cayadev"
+      ],
+      "thumbnail": ""
+    },
+    {
+      "id": "ocean-sunset",
+      "title": "Ocean Sunset",
+      "file": "presets/ocean-sunset.milk",
+      "sourceFormat": "milk",
+      "tags": [
+        "community",
+        "cayadev"
+      ],
+      "thumbnail": ""
+    },
+    {
+      "id": "oil-slick",
+      "title": "Oil Slick",
+      "file": "presets/oil-slick.milk",
+      "sourceFormat": "milk",
+      "tags": [
+        "community",
+        "cayadev"
+      ],
+      "thumbnail": ""
+    },
+    {
+      "id": "phosphor-scope",
+      "title": "Phosphor Scope",
+      "file": "presets/phosphor-scope.milk",
+      "sourceFormat": "milk",
+      "tags": [
+        "community",
+        "cayadev"
+      ],
+      "thumbnail": ""
+    },
+    {
+      "id": "plasma-globe",
+      "title": "Plasma Globe",
+      "file": "presets/plasma-globe.milk",
+      "sourceFormat": "milk",
+      "tags": [
+        "community",
+        "cayadev"
+      ],
+      "thumbnail": ""
+    },
+    {
+      "id": "prism-lattice",
+      "title": "Prism Lattice",
+      "file": "presets/prism-lattice.milk",
+      "sourceFormat": "milk",
+      "tags": [
+        "community",
+        "cayadev"
+      ],
+      "thumbnail": ""
+    },
+    {
+      "id": "rain-glass",
+      "title": "Rain Glass",
+      "file": "presets/rain-glass.milk",
+      "sourceFormat": "milk",
+      "tags": [
+        "community",
+        "cayadev"
+      ],
+      "thumbnail": ""
+    },
+    {
+      "id": "ribbon-dance",
+      "title": "Ribbon Dance",
+      "file": "presets/ribbon-dance.milk",
+      "sourceFormat": "milk",
+      "tags": [
+        "community",
+        "cayadev"
+      ],
+      "thumbnail": ""
+    },
+    {
+      "id": "smoke-ribbons",
+      "title": "Smoke Ribbons",
+      "file": "presets/smoke-ribbons.milk",
+      "sourceFormat": "milk",
+      "tags": [
+        "community",
+        "cayadev"
+      ],
+      "thumbnail": ""
+    },
+    {
+      "id": "snowy-pines",
+      "title": "Snowy Pines",
+      "file": "presets/snowy-pines.milk",
+      "sourceFormat": "milk",
+      "tags": [
+        "community",
+        "cayadev"
+      ],
+      "thumbnail": ""
+    },
+    {
+      "id": "solar-flare",
+      "title": "Solar Flare",
+      "file": "presets/solar-flare.milk",
+      "sourceFormat": "milk",
+      "tags": [
+        "community",
+        "cayadev"
+      ],
+      "thumbnail": ""
+    },
+    {
+      "id": "spectral-ridges",
+      "title": "Spectral Ridges",
+      "file": "presets/spectral-ridges.milk",
+      "sourceFormat": "milk",
+      "tags": [
+        "community",
+        "cayadev"
+      ],
+      "thumbnail": ""
+    },
+    {
+      "id": "spectrum-city",
+      "title": "Spectrum City",
+      "file": "presets/spectrum-city.milk",
+      "sourceFormat": "milk",
+      "tags": [
+        "community",
+        "cayadev"
+      ],
+      "thumbnail": ""
+    },
+    {
+      "id": "spiral-wormhole",
+      "title": "Spiral Wormhole",
+      "file": "presets/spiral-wormhole.milk",
+      "sourceFormat": "milk",
+      "tags": [
+        "community",
+        "cayadev"
+      ],
+      "thumbnail": ""
+    },
+    {
+      "id": "synthwave-horizon",
+      "title": "Synthwave Horizon",
+      "file": "presets/synthwave-horizon.milk",
+      "sourceFormat": "milk",
+      "tags": [
+        "community",
+        "cayadev"
+      ],
+      "thumbnail": ""
+    },
+    {
+      "id": "tesla-coil",
+      "title": "Tesla Coil",
+      "file": "presets/tesla-coil.milk",
+      "sourceFormat": "milk",
+      "tags": [
+        "community",
+        "cayadev"
+      ],
+      "thumbnail": ""
+    },
+    {
+      "id": "truchet-weave",
+      "title": "Truchet Weave",
+      "file": "presets/truchet-weave.milk",
+      "sourceFormat": "milk",
+      "tags": [
+        "community",
+        "cayadev"
+      ],
+      "thumbnail": ""
+    },
+    {
+      "id": "twelve-moons",
+      "title": "Twelve Moons",
+      "file": "presets/twelve-moons.milk",
+      "sourceFormat": "milk",
+      "tags": [
+        "community",
+        "cayadev"
+      ],
+      "thumbnail": ""
+    },
+    {
+      "id": "vinyl-groove",
+      "title": "Vinyl Groove",
+      "file": "presets/vinyl-groove.milk",
+      "sourceFormat": "milk",
+      "tags": [
+        "community",
+        "cayadev"
+      ],
+      "thumbnail": ""
+    },
+    {
+      "id": "wax-lamp",
+      "title": "Wax Lamp",
+      "file": "presets/wax-lamp.milk",
+      "sourceFormat": "milk",
+      "tags": [
+        "community",
+        "cayadev"
+      ],
+      "thumbnail": ""
+    }
+  ],
+  "assets": [
+    {
+      "path": "presets/apollonian-lace.milk",
+      "kind": "preset",
+      "author": "CaYaDev",
+      "license": "CC-BY-4.0",
+      "licenseFile": "licenses/UPSTREAM-LICENSE.md",
+      "sourceUrl": "https://github.com/CaYatur/SoundVisualizer/blob/2aab1db0458312484d4065013903133b1f49ed0a/presets/cayadev/CaYaDev%20-%20Apollonian%20Lace.milk",
+      "sourceRevision": "2aab1db0458312484d4065013903133b1f49ed0a",
+      "sourceGitBlob": "a347d70a6e34e5ee5ac9d057fd539e6369970f7e",
+      "sha256": "9d37533b636d4568fcb877dc0ff667f377022cf42ba614d486a60940bd80e1e2",
+      "notice": "\"Apollonian Lace\" by CaYaDev, CaYaDev MilkDrop Presets, licensed under CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/). Source unchanged; archive filename normalized."
+    },
+    {
+      "path": "presets/arcade-invaders.milk",
+      "kind": "preset",
+      "author": "CaYaDev",
+      "license": "CC-BY-4.0",
+      "licenseFile": "licenses/UPSTREAM-LICENSE.md",
+      "sourceUrl": "https://github.com/CaYatur/SoundVisualizer/blob/2aab1db0458312484d4065013903133b1f49ed0a/presets/cayadev/CaYaDev%20-%20Arcade%20Invaders.milk",
+      "sourceRevision": "2aab1db0458312484d4065013903133b1f49ed0a",
+      "sourceGitBlob": "86ce0b228606be059aae8a3dad7e1ce10e0bbfd8",
+      "sha256": "3da12da1b756c2d4bf0c27d2ec0be0840304455c3ee0198637930bac8ac08190",
+      "notice": "\"Arcade Invaders\" by CaYaDev, CaYaDev MilkDrop Presets, licensed under CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/). Source unchanged; archive filename normalized."
+    },
+    {
+      "path": "presets/bioluminescence.milk",
+      "kind": "preset",
+      "author": "CaYaDev",
+      "license": "CC-BY-4.0",
+      "licenseFile": "licenses/UPSTREAM-LICENSE.md",
+      "sourceUrl": "https://github.com/CaYatur/SoundVisualizer/blob/2aab1db0458312484d4065013903133b1f49ed0a/presets/cayadev/CaYaDev%20-%20Bioluminescence.milk",
+      "sourceRevision": "2aab1db0458312484d4065013903133b1f49ed0a",
+      "sourceGitBlob": "c832c0105f452ff226fd0e87f0d0c526fae1adcb",
+      "sha256": "49bbfbe3a157c4a6cb5c2514eaffac031a63e5ac4451725e71e8c4639f805494",
+      "notice": "\"Bioluminescence\" by CaYaDev, CaYaDev MilkDrop Presets, licensed under CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/). Source unchanged; archive filename normalized."
+    },
+    {
+      "path": "presets/caustic-floor.milk",
+      "kind": "preset",
+      "author": "CaYaDev",
+      "license": "CC-BY-4.0",
+      "licenseFile": "licenses/UPSTREAM-LICENSE.md",
+      "sourceUrl": "https://github.com/CaYatur/SoundVisualizer/blob/2aab1db0458312484d4065013903133b1f49ed0a/presets/cayadev/CaYaDev%20-%20Caustic%20Floor.milk",
+      "sourceRevision": "2aab1db0458312484d4065013903133b1f49ed0a",
+      "sourceGitBlob": "0d87d244c609fc78a6e6efd3c36c064dbd251a3b",
+      "sha256": "123d74213281ab769aa00fa6c347616565ecba54c05249acfa3a1d72122698b8",
+      "notice": "\"Caustic Floor\" by CaYaDev, CaYaDev MilkDrop Presets, licensed under CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/). Source unchanged; archive filename normalized."
+    },
+    {
+      "path": "presets/constellations.milk",
+      "kind": "preset",
+      "author": "CaYaDev",
+      "license": "CC-BY-4.0",
+      "licenseFile": "licenses/UPSTREAM-LICENSE.md",
+      "sourceUrl": "https://github.com/CaYatur/SoundVisualizer/blob/2aab1db0458312484d4065013903133b1f49ed0a/presets/cayadev/CaYaDev%20-%20Constellations.milk",
+      "sourceRevision": "2aab1db0458312484d4065013903133b1f49ed0a",
+      "sourceGitBlob": "f0ca629bbf6e1f75cbc1a654dff368c93d6bdfc0",
+      "sha256": "969a604f05beff6cbc023fe87b1897abcbd874b1e25aec87df960997497843f5",
+      "notice": "\"Constellations\" by CaYaDev, CaYaDev MilkDrop Presets, licensed under CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/). Source unchanged; archive filename normalized."
+    },
+    {
+      "path": "presets/contour-survey.milk",
+      "kind": "preset",
+      "author": "CaYaDev",
+      "license": "CC-BY-4.0",
+      "licenseFile": "licenses/UPSTREAM-LICENSE.md",
+      "sourceUrl": "https://github.com/CaYatur/SoundVisualizer/blob/2aab1db0458312484d4065013903133b1f49ed0a/presets/cayadev/CaYaDev%20-%20Contour%20Survey.milk",
+      "sourceRevision": "2aab1db0458312484d4065013903133b1f49ed0a",
+      "sourceGitBlob": "ea846916033b6730ec3cc94742ad1e8de6eacbf0",
+      "sha256": "516f6f9192b719c1497968e4d2728dd7c58c7e8a685374dc175d315a3a6d708b",
+      "notice": "\"Contour Survey\" by CaYaDev, CaYaDev MilkDrop Presets, licensed under CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/). Source unchanged; archive filename normalized."
+    },
+    {
+      "path": "presets/coral-script.milk",
+      "kind": "preset",
+      "author": "CaYaDev",
+      "license": "CC-BY-4.0",
+      "licenseFile": "licenses/UPSTREAM-LICENSE.md",
+      "sourceUrl": "https://github.com/CaYatur/SoundVisualizer/blob/2aab1db0458312484d4065013903133b1f49ed0a/presets/cayadev/CaYaDev%20-%20Coral%20Script.milk",
+      "sourceRevision": "2aab1db0458312484d4065013903133b1f49ed0a",
+      "sourceGitBlob": "0d3735c118b8e53406aa52c8475c7eb2abc02383",
+      "sha256": "191a0828bea5bc953b942a0773aa7be058a1b25849211f8ef476188b38224e21",
+      "notice": "\"Coral Script\" by CaYaDev, CaYaDev MilkDrop Presets, licensed under CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/). Source unchanged; archive filename normalized."
+    },
+    {
+      "path": "presets/crystal-shards.milk",
+      "kind": "preset",
+      "author": "CaYaDev",
+      "license": "CC-BY-4.0",
+      "licenseFile": "licenses/UPSTREAM-LICENSE.md",
+      "sourceUrl": "https://github.com/CaYatur/SoundVisualizer/blob/2aab1db0458312484d4065013903133b1f49ed0a/presets/cayadev/CaYaDev%20-%20Crystal%20Shards.milk",
+      "sourceRevision": "2aab1db0458312484d4065013903133b1f49ed0a",
+      "sourceGitBlob": "a8c20eebb024aef2c715f922bbcc59f03daec7fe",
+      "sha256": "37cb3a3b63e8ac87004b452ebd9c62470f0a7c1f64a294af6dd7026e3c1b2967",
+      "notice": "\"Crystal Shards\" by CaYaDev, CaYaDev MilkDrop Presets, licensed under CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/). Source unchanged; archive filename normalized."
+    },
+    {
+      "path": "presets/cymatics.milk",
+      "kind": "preset",
+      "author": "CaYaDev",
+      "license": "CC-BY-4.0",
+      "licenseFile": "licenses/UPSTREAM-LICENSE.md",
+      "sourceUrl": "https://github.com/CaYatur/SoundVisualizer/blob/2aab1db0458312484d4065013903133b1f49ed0a/presets/cayadev/CaYaDev%20-%20Cymatics.milk",
+      "sourceRevision": "2aab1db0458312484d4065013903133b1f49ed0a",
+      "sourceGitBlob": "5dc9ec6ba6bf67c3e073f3d8ecb1ed131b0373a9",
+      "sha256": "6cf4ba1f8a61ecaa0a8230d7c704bd0050e9cf12e579f820d783e8374ab83566",
+      "notice": "\"Cymatics\" by CaYaDev, CaYaDev MilkDrop Presets, licensed under CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/). Source unchanged; archive filename normalized."
+    },
+    {
+      "path": "presets/data-corridor.milk",
+      "kind": "preset",
+      "author": "CaYaDev",
+      "license": "CC-BY-4.0",
+      "licenseFile": "licenses/UPSTREAM-LICENSE.md",
+      "sourceUrl": "https://github.com/CaYatur/SoundVisualizer/blob/2aab1db0458312484d4065013903133b1f49ed0a/presets/cayadev/CaYaDev%20-%20Data%20Corridor.milk",
+      "sourceRevision": "2aab1db0458312484d4065013903133b1f49ed0a",
+      "sourceGitBlob": "f696fab828a969532546458fab110c69bd8c7d53",
+      "sha256": "4dc16b2997257bbccd6c054ce14e88023c75f860d5c47d97dcf1101c240d7e69",
+      "notice": "\"Data Corridor\" by CaYaDev, CaYaDev MilkDrop Presets, licensed under CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/). Source unchanged; archive filename normalized."
+    },
+    {
+      "path": "presets/ember-storm.milk",
+      "kind": "preset",
+      "author": "CaYaDev",
+      "license": "CC-BY-4.0",
+      "licenseFile": "licenses/UPSTREAM-LICENSE.md",
+      "sourceUrl": "https://github.com/CaYatur/SoundVisualizer/blob/2aab1db0458312484d4065013903133b1f49ed0a/presets/cayadev/CaYaDev%20-%20Ember%20Storm.milk",
+      "sourceRevision": "2aab1db0458312484d4065013903133b1f49ed0a",
+      "sourceGitBlob": "eedc31361251082ef50590360478502a552d5d6c",
+      "sha256": "24a8622fcfecf722194b9a113169f82b4128704970534ec651133776751bf24f",
+      "notice": "\"Ember Storm\" by CaYaDev, CaYaDev MilkDrop Presets, licensed under CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/). Source unchanged; archive filename normalized."
+    },
+    {
+      "path": "presets/event-horizon.milk",
+      "kind": "preset",
+      "author": "CaYaDev",
+      "license": "CC-BY-4.0",
+      "licenseFile": "licenses/UPSTREAM-LICENSE.md",
+      "sourceUrl": "https://github.com/CaYatur/SoundVisualizer/blob/2aab1db0458312484d4065013903133b1f49ed0a/presets/cayadev/CaYaDev%20-%20Event%20Horizon.milk",
+      "sourceRevision": "2aab1db0458312484d4065013903133b1f49ed0a",
+      "sourceGitBlob": "43cb45cc904034b7705c6e4902cf655cdfe68420",
+      "sha256": "8a7fa74c156ccf31f819d363fb4041f4f888b794d66381a5ebc175c404953f6c",
+      "notice": "\"Event Horizon\" by CaYaDev, CaYaDev MilkDrop Presets, licensed under CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/). Source unchanged; archive filename normalized."
+    },
+    {
+      "path": "presets/fern-frond.milk",
+      "kind": "preset",
+      "author": "CaYaDev",
+      "license": "CC-BY-4.0",
+      "licenseFile": "licenses/UPSTREAM-LICENSE.md",
+      "sourceUrl": "https://github.com/CaYatur/SoundVisualizer/blob/2aab1db0458312484d4065013903133b1f49ed0a/presets/cayadev/CaYaDev%20-%20Fern%20Frond.milk",
+      "sourceRevision": "2aab1db0458312484d4065013903133b1f49ed0a",
+      "sourceGitBlob": "e54f10e2435021241e5bf2ee6e20463a8f8c680b",
+      "sha256": "bb28887c36eff10170daa6cac86d0e4e0d1df0cc4b62155d4ba201b6d7819393",
+      "notice": "\"Fern Frond\" by CaYaDev, CaYaDev MilkDrop Presets, licensed under CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/). Source unchanged; archive filename normalized."
+    },
+    {
+      "path": "presets/firefly-meadow.milk",
+      "kind": "preset",
+      "author": "CaYaDev",
+      "license": "CC-BY-4.0",
+      "licenseFile": "licenses/UPSTREAM-LICENSE.md",
+      "sourceUrl": "https://github.com/CaYatur/SoundVisualizer/blob/2aab1db0458312484d4065013903133b1f49ed0a/presets/cayadev/CaYaDev%20-%20Firefly%20Meadow.milk",
+      "sourceRevision": "2aab1db0458312484d4065013903133b1f49ed0a",
+      "sourceGitBlob": "6c936bec48c124634d18dd0af80a7083f416e23a",
+      "sha256": "70ac967cf83cd353389480ce8a0f237ed7a58d3c11655cc33de08d507e543ba8",
+      "notice": "\"Firefly Meadow\" by CaYaDev, CaYaDev MilkDrop Presets, licensed under CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/). Source unchanged; archive filename normalized."
+    },
+    {
+      "path": "presets/galaxy-spiral.milk",
+      "kind": "preset",
+      "author": "CaYaDev",
+      "license": "CC-BY-4.0",
+      "licenseFile": "licenses/UPSTREAM-LICENSE.md",
+      "sourceUrl": "https://github.com/CaYatur/SoundVisualizer/blob/2aab1db0458312484d4065013903133b1f49ed0a/presets/cayadev/CaYaDev%20-%20Galaxy%20Spiral.milk",
+      "sourceRevision": "2aab1db0458312484d4065013903133b1f49ed0a",
+      "sourceGitBlob": "f5c31de8ce151b6af97d429871fd020e518ac447",
+      "sha256": "99db22a87d9e338776ab2249cd555b76c8d5a37c54306df7455be1095f624db4",
+      "notice": "\"Galaxy Spiral\" by CaYaDev, CaYaDev MilkDrop Presets, licensed under CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/). Source unchanged; archive filename normalized."
+    },
+    {
+      "path": "presets/glitch-pulse.milk",
+      "kind": "preset",
+      "author": "CaYaDev",
+      "license": "CC-BY-4.0",
+      "licenseFile": "licenses/UPSTREAM-LICENSE.md",
+      "sourceUrl": "https://github.com/CaYatur/SoundVisualizer/blob/2aab1db0458312484d4065013903133b1f49ed0a/presets/cayadev/CaYaDev%20-%20Glitch%20Pulse.milk",
+      "sourceRevision": "2aab1db0458312484d4065013903133b1f49ed0a",
+      "sourceGitBlob": "dd345989466b87d12cf2ded2423600c96fcd593c",
+      "sha256": "6b7e894180ee8fdf651c8ebd6c41fee629fa4b9a4943276d0f43d42a8d1c6984",
+      "notice": "\"Glitch Pulse\" by CaYaDev, CaYaDev MilkDrop Presets, licensed under CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/). Source unchanged; archive filename normalized."
+    },
+    {
+      "path": "presets/halftone-pop.milk",
+      "kind": "preset",
+      "author": "CaYaDev",
+      "license": "CC-BY-4.0",
+      "licenseFile": "licenses/UPSTREAM-LICENSE.md",
+      "sourceUrl": "https://github.com/CaYatur/SoundVisualizer/blob/2aab1db0458312484d4065013903133b1f49ed0a/presets/cayadev/CaYaDev%20-%20Halftone%20Pop.milk",
+      "sourceRevision": "2aab1db0458312484d4065013903133b1f49ed0a",
+      "sourceGitBlob": "d0eb6bae97c398f60765b8f1228347fb4e325085",
+      "sha256": "3512e13872ca01e6f114b41da575cfc5317cd1fc63a4a48a94634fa4c48d7f77",
+      "notice": "\"Halftone Pop\" by CaYaDev, CaYaDev MilkDrop Presets, licensed under CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/). Source unchanged; archive filename normalized."
+    },
+    {
+      "path": "presets/halo-spectrum.milk",
+      "kind": "preset",
+      "author": "CaYaDev",
+      "license": "CC-BY-4.0",
+      "licenseFile": "licenses/UPSTREAM-LICENSE.md",
+      "sourceUrl": "https://github.com/CaYatur/SoundVisualizer/blob/2aab1db0458312484d4065013903133b1f49ed0a/presets/cayadev/CaYaDev%20-%20Halo%20Spectrum.milk",
+      "sourceRevision": "2aab1db0458312484d4065013903133b1f49ed0a",
+      "sourceGitBlob": "f55238adbdd15d6be05fa93cfd88adcab1c9fd28",
+      "sha256": "5351f7ca520683cc3fe576160ed56b352974ad854b99732529fc240ba2126afb",
+      "notice": "\"Halo Spectrum\" by CaYaDev, CaYaDev MilkDrop Presets, licensed under CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/). Source unchanged; archive filename normalized."
+    },
+    {
+      "path": "presets/harmonograph.milk",
+      "kind": "preset",
+      "author": "CaYaDev",
+      "license": "CC-BY-4.0",
+      "licenseFile": "licenses/UPSTREAM-LICENSE.md",
+      "sourceUrl": "https://github.com/CaYatur/SoundVisualizer/blob/2aab1db0458312484d4065013903133b1f49ed0a/presets/cayadev/CaYaDev%20-%20Harmonograph.milk",
+      "sourceRevision": "2aab1db0458312484d4065013903133b1f49ed0a",
+      "sourceGitBlob": "434d8ca81bf1c1bc1b19cdbacaae73742c679a6f",
+      "sha256": "370df057fbf856cc3ed5ac94ec44f7441aad8420acb30958569a5456f2ed592b",
+      "notice": "\"Harmonograph\" by CaYaDev, CaYaDev MilkDrop Presets, licensed under CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/). Source unchanged; archive filename normalized."
+    },
+    {
+      "path": "presets/harp-strings.milk",
+      "kind": "preset",
+      "author": "CaYaDev",
+      "license": "CC-BY-4.0",
+      "licenseFile": "licenses/UPSTREAM-LICENSE.md",
+      "sourceUrl": "https://github.com/CaYatur/SoundVisualizer/blob/2aab1db0458312484d4065013903133b1f49ed0a/presets/cayadev/CaYaDev%20-%20Harp%20Strings.milk",
+      "sourceRevision": "2aab1db0458312484d4065013903133b1f49ed0a",
+      "sourceGitBlob": "37234b6ed4743474b9002983d880985fe7cdf483",
+      "sha256": "c154953b150331f58098e8b66c76eca9d0cddc05f05af52a88498e6ed0a9ecea",
+      "notice": "\"Harp Strings\" by CaYaDev, CaYaDev MilkDrop Presets, licensed under CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/). Source unchanged; archive filename normalized."
+    },
+    {
+      "path": "presets/hex-reactor.milk",
+      "kind": "preset",
+      "author": "CaYaDev",
+      "license": "CC-BY-4.0",
+      "licenseFile": "licenses/UPSTREAM-LICENSE.md",
+      "sourceUrl": "https://github.com/CaYatur/SoundVisualizer/blob/2aab1db0458312484d4065013903133b1f49ed0a/presets/cayadev/CaYaDev%20-%20Hex%20Reactor.milk",
+      "sourceRevision": "2aab1db0458312484d4065013903133b1f49ed0a",
+      "sourceGitBlob": "0c5d6aa451fe25ba97bad28d7eb7dcbdcf449805",
+      "sha256": "712332ba2e1e28f41390dfeed4d530f0d5ea8ba1c353d0434e2c4c64543c278e",
+      "notice": "\"Hex Reactor\" by CaYaDev, CaYaDev MilkDrop Presets, licensed under CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/). Source unchanged; archive filename normalized."
+    },
+    {
+      "path": "presets/hyperlane.milk",
+      "kind": "preset",
+      "author": "CaYaDev",
+      "license": "CC-BY-4.0",
+      "licenseFile": "licenses/UPSTREAM-LICENSE.md",
+      "sourceUrl": "https://github.com/CaYatur/SoundVisualizer/blob/2aab1db0458312484d4065013903133b1f49ed0a/presets/cayadev/CaYaDev%20-%20Hyperlane.milk",
+      "sourceRevision": "2aab1db0458312484d4065013903133b1f49ed0a",
+      "sourceGitBlob": "c2b4e51dcf1b2a47dbb00d87169c4ae0c140e24a",
+      "sha256": "a73b99990cccb3ff49bd4f6376752805e92e0694c43fdc9f59013e54672e9847",
+      "notice": "\"Hyperlane\" by CaYaDev, CaYaDev MilkDrop Presets, licensed under CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/). Source unchanged; archive filename normalized."
+    },
+    {
+      "path": "presets/infinite-frame.milk",
+      "kind": "preset",
+      "author": "CaYaDev",
+      "license": "CC-BY-4.0",
+      "licenseFile": "licenses/UPSTREAM-LICENSE.md",
+      "sourceUrl": "https://github.com/CaYatur/SoundVisualizer/blob/2aab1db0458312484d4065013903133b1f49ed0a/presets/cayadev/CaYaDev%20-%20Infinite%20Frame.milk",
+      "sourceRevision": "2aab1db0458312484d4065013903133b1f49ed0a",
+      "sourceGitBlob": "81a26440355f856827402359ea6a0d10c0a0f390",
+      "sha256": "d256220233b730639221ce5f9b50a5508b82d9a1eeb2dfaecd7d49622b4a5e10",
+      "notice": "\"Infinite Frame\" by CaYaDev, CaYaDev MilkDrop Presets, licensed under CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/). Source unchanged; archive filename normalized."
+    },
+    {
+      "path": "presets/ink-bloom.milk",
+      "kind": "preset",
+      "author": "CaYaDev",
+      "license": "CC-BY-4.0",
+      "licenseFile": "licenses/UPSTREAM-LICENSE.md",
+      "sourceUrl": "https://github.com/CaYatur/SoundVisualizer/blob/2aab1db0458312484d4065013903133b1f49ed0a/presets/cayadev/CaYaDev%20-%20Ink%20Bloom.milk",
+      "sourceRevision": "2aab1db0458312484d4065013903133b1f49ed0a",
+      "sourceGitBlob": "4fb055124a50fb536ec38aa4b8d85bb251e1607b",
+      "sha256": "e0283e21f70c50df5fbcd19b3637dd29339783036539423b1f1b2a09b4bbedfd",
+      "notice": "\"Ink Bloom\" by CaYaDev, CaYaDev MilkDrop Presets, licensed under CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/). Source unchanged; archive filename normalized."
+    },
+    {
+      "path": "presets/julia-bloom.milk",
+      "kind": "preset",
+      "author": "CaYaDev",
+      "license": "CC-BY-4.0",
+      "licenseFile": "licenses/UPSTREAM-LICENSE.md",
+      "sourceUrl": "https://github.com/CaYatur/SoundVisualizer/blob/2aab1db0458312484d4065013903133b1f49ed0a/presets/cayadev/CaYaDev%20-%20Julia%20Bloom.milk",
+      "sourceRevision": "2aab1db0458312484d4065013903133b1f49ed0a",
+      "sourceGitBlob": "7465c0c149dacfc41e7f250a12b2728069eeaa97",
+      "sha256": "99be83c3e58520ac7da227cc69f809b8c54afab94c248e748390ca3099f63ac7",
+      "notice": "\"Julia Bloom\" by CaYaDev, CaYaDev MilkDrop Presets, licensed under CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/). Source unchanged; archive filename normalized."
+    },
+    {
+      "path": "presets/kintsugi.milk",
+      "kind": "preset",
+      "author": "CaYaDev",
+      "license": "CC-BY-4.0",
+      "licenseFile": "licenses/UPSTREAM-LICENSE.md",
+      "sourceUrl": "https://github.com/CaYatur/SoundVisualizer/blob/2aab1db0458312484d4065013903133b1f49ed0a/presets/cayadev/CaYaDev%20-%20Kintsugi.milk",
+      "sourceRevision": "2aab1db0458312484d4065013903133b1f49ed0a",
+      "sourceGitBlob": "297eccb95ad8432a62ad49834da1507dccf1f2ad",
+      "sha256": "697bbf5f4a58a381352e3fa1cbcdeabec795f836662cb2a24c8412e99909b8ff",
+      "notice": "\"Kintsugi\" by CaYaDev, CaYaDev MilkDrop Presets, licensed under CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/). Source unchanged; archive filename normalized."
+    },
+    {
+      "path": "presets/lantern-night.milk",
+      "kind": "preset",
+      "author": "CaYaDev",
+      "license": "CC-BY-4.0",
+      "licenseFile": "licenses/UPSTREAM-LICENSE.md",
+      "sourceUrl": "https://github.com/CaYatur/SoundVisualizer/blob/2aab1db0458312484d4065013903133b1f49ed0a/presets/cayadev/CaYaDev%20-%20Lantern%20Night.milk",
+      "sourceRevision": "2aab1db0458312484d4065013903133b1f49ed0a",
+      "sourceGitBlob": "efa240569ab0fc51080f071efa010c874bf10ff0",
+      "sha256": "164022238f557298eac4bbf83bda838302a943e5137080d9585d858ef878eef4",
+      "notice": "\"Lantern Night\" by CaYaDev, CaYaDev MilkDrop Presets, licensed under CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/). Source unchanged; archive filename normalized."
+    },
+    {
+      "path": "presets/laser-cathedral.milk",
+      "kind": "preset",
+      "author": "CaYaDev",
+      "license": "CC-BY-4.0",
+      "licenseFile": "licenses/UPSTREAM-LICENSE.md",
+      "sourceUrl": "https://github.com/CaYatur/SoundVisualizer/blob/2aab1db0458312484d4065013903133b1f49ed0a/presets/cayadev/CaYaDev%20-%20Laser%20Cathedral.milk",
+      "sourceRevision": "2aab1db0458312484d4065013903133b1f49ed0a",
+      "sourceGitBlob": "8b87fc82dfc55ac8c8e4eaeb463aca85a3d15d06",
+      "sha256": "6337ea428f1592633cd64d6f578d6e7edaad7a93e0041503388d994a9ec31e3b",
+      "notice": "\"Laser Cathedral\" by CaYaDev, CaYaDev MilkDrop Presets, licensed under CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/). Source unchanged; archive filename normalized."
+    },
+    {
+      "path": "presets/mandala-mirror.milk",
+      "kind": "preset",
+      "author": "CaYaDev",
+      "license": "CC-BY-4.0",
+      "licenseFile": "licenses/UPSTREAM-LICENSE.md",
+      "sourceUrl": "https://github.com/CaYatur/SoundVisualizer/blob/2aab1db0458312484d4065013903133b1f49ed0a/presets/cayadev/CaYaDev%20-%20Mandala%20Mirror.milk",
+      "sourceRevision": "2aab1db0458312484d4065013903133b1f49ed0a",
+      "sourceGitBlob": "31328290a1e9daf1dd5178e13f8c7eb433240495",
+      "sha256": "0a5597543c5a669938e4fad4777c2bd608e76eb711153f94549ccf562468f98c",
+      "notice": "\"Mandala Mirror\" by CaYaDev, CaYaDev MilkDrop Presets, licensed under CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/). Source unchanged; archive filename normalized."
+    },
+    {
+      "path": "presets/mandelbrot-dive.milk",
+      "kind": "preset",
+      "author": "CaYaDev",
+      "license": "CC-BY-4.0",
+      "licenseFile": "licenses/UPSTREAM-LICENSE.md",
+      "sourceUrl": "https://github.com/CaYatur/SoundVisualizer/blob/2aab1db0458312484d4065013903133b1f49ed0a/presets/cayadev/CaYaDev%20-%20Mandelbrot%20Dive.milk",
+      "sourceRevision": "2aab1db0458312484d4065013903133b1f49ed0a",
+      "sourceGitBlob": "6bd940f482c9d547948d72a26039a63f5380bb4c",
+      "sha256": "80a4905e33af4d2d6ace93e6c082f1a324fa4ea6119a41855ab5ea11df44566e",
+      "notice": "\"Mandelbrot Dive\" by CaYaDev, CaYaDev MilkDrop Presets, licensed under CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/). Source unchanged; archive filename normalized."
+    },
+    {
+      "path": "presets/mercury-rain.milk",
+      "kind": "preset",
+      "author": "CaYaDev",
+      "license": "CC-BY-4.0",
+      "licenseFile": "licenses/UPSTREAM-LICENSE.md",
+      "sourceUrl": "https://github.com/CaYatur/SoundVisualizer/blob/2aab1db0458312484d4065013903133b1f49ed0a/presets/cayadev/CaYaDev%20-%20Mercury%20Rain.milk",
+      "sourceRevision": "2aab1db0458312484d4065013903133b1f49ed0a",
+      "sourceGitBlob": "174b485e4d6756c3a718dfd7c020cf4907ebf39d",
+      "sha256": "ec1b4253157620a9d14d3965770c5e3f8cbd4412b561785d9576e4e9fbe82ea0",
+      "notice": "\"Mercury Rain\" by CaYaDev, CaYaDev MilkDrop Presets, licensed under CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/). Source unchanged; archive filename normalized."
+    },
+    {
+      "path": "presets/mycelium.milk",
+      "kind": "preset",
+      "author": "CaYaDev",
+      "license": "CC-BY-4.0",
+      "licenseFile": "licenses/UPSTREAM-LICENSE.md",
+      "sourceUrl": "https://github.com/CaYatur/SoundVisualizer/blob/2aab1db0458312484d4065013903133b1f49ed0a/presets/cayadev/CaYaDev%20-%20Mycelium.milk",
+      "sourceRevision": "2aab1db0458312484d4065013903133b1f49ed0a",
+      "sourceGitBlob": "b6319debd599be38f0efd9b44cada99fbd02bdd0",
+      "sha256": "a0c7103c4225cf9cf8c81aa5b4bdbcfcd5f5ec5c2dc340a940cc3d281298c997",
+      "notice": "\"Mycelium\" by CaYaDev, CaYaDev MilkDrop Presets, licensed under CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/). Source unchanged; archive filename normalized."
+    },
+    {
+      "path": "presets/neon-arches.milk",
+      "kind": "preset",
+      "author": "CaYaDev",
+      "license": "CC-BY-4.0",
+      "licenseFile": "licenses/UPSTREAM-LICENSE.md",
+      "sourceUrl": "https://github.com/CaYatur/SoundVisualizer/blob/2aab1db0458312484d4065013903133b1f49ed0a/presets/cayadev/CaYaDev%20-%20Neon%20Arches.milk",
+      "sourceRevision": "2aab1db0458312484d4065013903133b1f49ed0a",
+      "sourceGitBlob": "ab04908289b8779c5302b4cc0a30ee3d2d4012c7",
+      "sha256": "e3a770ed6d9fbb6c8f6b78f2b897e98c31e3ce7ba5bd2e74369104ee954536ec",
+      "notice": "\"Neon Arches\" by CaYaDev, CaYaDev MilkDrop Presets, licensed under CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/). Source unchanged; archive filename normalized."
+    },
+    {
+      "path": "presets/neon-monsoon.milk",
+      "kind": "preset",
+      "author": "CaYaDev",
+      "license": "CC-BY-4.0",
+      "licenseFile": "licenses/UPSTREAM-LICENSE.md",
+      "sourceUrl": "https://github.com/CaYatur/SoundVisualizer/blob/2aab1db0458312484d4065013903133b1f49ed0a/presets/cayadev/CaYaDev%20-%20Neon%20Monsoon.milk",
+      "sourceRevision": "2aab1db0458312484d4065013903133b1f49ed0a",
+      "sourceGitBlob": "95298b37d1cf0dcc31882be9bf9edced5bee4ee7",
+      "sha256": "31cc8b27b6eef9a6d1f6da728e33bf534a9119bdbaef9df2f2d401cf76fc1ec8",
+      "notice": "\"Neon Monsoon\" by CaYaDev, CaYaDev MilkDrop Presets, licensed under CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/). Source unchanged; archive filename normalized."
+    },
+    {
+      "path": "presets/night-bloom.milk",
+      "kind": "preset",
+      "author": "CaYaDev",
+      "license": "CC-BY-4.0",
+      "licenseFile": "licenses/UPSTREAM-LICENSE.md",
+      "sourceUrl": "https://github.com/CaYatur/SoundVisualizer/blob/2aab1db0458312484d4065013903133b1f49ed0a/presets/cayadev/CaYaDev%20-%20Night%20Bloom.milk",
+      "sourceRevision": "2aab1db0458312484d4065013903133b1f49ed0a",
+      "sourceGitBlob": "1991e8ad6903f64b889ec7220fa344d2b3137e14",
+      "sha256": "816a33aea7269021b1a828718cf9bfe300aeb06d6183228ec6db0344cbdfcf54",
+      "notice": "\"Night Bloom\" by CaYaDev, CaYaDev MilkDrop Presets, licensed under CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/). Source unchanged; archive filename normalized."
+    },
+    {
+      "path": "presets/northern-veil.milk",
+      "kind": "preset",
+      "author": "CaYaDev",
+      "license": "CC-BY-4.0",
+      "licenseFile": "licenses/UPSTREAM-LICENSE.md",
+      "sourceUrl": "https://github.com/CaYatur/SoundVisualizer/blob/2aab1db0458312484d4065013903133b1f49ed0a/presets/cayadev/CaYaDev%20-%20Northern%20Veil.milk",
+      "sourceRevision": "2aab1db0458312484d4065013903133b1f49ed0a",
+      "sourceGitBlob": "d03a33dfccc0afb0b26423013bb564883788c590",
+      "sha256": "ff0a958334bfdd6931119535694241c834049cfcc70c23d0e5acfec836b1d3d0",
+      "notice": "\"Northern Veil\" by CaYaDev, CaYaDev MilkDrop Presets, licensed under CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/). Source unchanged; archive filename normalized."
+    },
+    {
+      "path": "presets/ocean-sunset.milk",
+      "kind": "preset",
+      "author": "CaYaDev",
+      "license": "CC-BY-4.0",
+      "licenseFile": "licenses/UPSTREAM-LICENSE.md",
+      "sourceUrl": "https://github.com/CaYatur/SoundVisualizer/blob/2aab1db0458312484d4065013903133b1f49ed0a/presets/cayadev/CaYaDev%20-%20Ocean%20Sunset.milk",
+      "sourceRevision": "2aab1db0458312484d4065013903133b1f49ed0a",
+      "sourceGitBlob": "b7a35cc7c60988d5048e91028b795cd6689d1629",
+      "sha256": "dd6e197696594d46fb8bdd98b3e8d6bf9cfdc1ff883ce8f334eccef958fcb901",
+      "notice": "\"Ocean Sunset\" by CaYaDev, CaYaDev MilkDrop Presets, licensed under CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/). Source unchanged; archive filename normalized."
+    },
+    {
+      "path": "presets/oil-slick.milk",
+      "kind": "preset",
+      "author": "CaYaDev",
+      "license": "CC-BY-4.0",
+      "licenseFile": "licenses/UPSTREAM-LICENSE.md",
+      "sourceUrl": "https://github.com/CaYatur/SoundVisualizer/blob/2aab1db0458312484d4065013903133b1f49ed0a/presets/cayadev/CaYaDev%20-%20Oil%20Slick.milk",
+      "sourceRevision": "2aab1db0458312484d4065013903133b1f49ed0a",
+      "sourceGitBlob": "acf5739ebd213689e1a10b68506e4a0aae1a833f",
+      "sha256": "322ddf7592bb4710fab162818a436dd211153c82bdb66fe23e71e85dbc350605",
+      "notice": "\"Oil Slick\" by CaYaDev, CaYaDev MilkDrop Presets, licensed under CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/). Source unchanged; archive filename normalized."
+    },
+    {
+      "path": "presets/phosphor-scope.milk",
+      "kind": "preset",
+      "author": "CaYaDev",
+      "license": "CC-BY-4.0",
+      "licenseFile": "licenses/UPSTREAM-LICENSE.md",
+      "sourceUrl": "https://github.com/CaYatur/SoundVisualizer/blob/2aab1db0458312484d4065013903133b1f49ed0a/presets/cayadev/CaYaDev%20-%20Phosphor%20Scope.milk",
+      "sourceRevision": "2aab1db0458312484d4065013903133b1f49ed0a",
+      "sourceGitBlob": "bb75a3de975e5d450ea612626762deb5444d46ba",
+      "sha256": "af965c02c844b957d25e24e4972bf8ea3555d6dc59aaef1018d1ab76fd475ccc",
+      "notice": "\"Phosphor Scope\" by CaYaDev, CaYaDev MilkDrop Presets, licensed under CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/). Source unchanged; archive filename normalized."
+    },
+    {
+      "path": "presets/plasma-globe.milk",
+      "kind": "preset",
+      "author": "CaYaDev",
+      "license": "CC-BY-4.0",
+      "licenseFile": "licenses/UPSTREAM-LICENSE.md",
+      "sourceUrl": "https://github.com/CaYatur/SoundVisualizer/blob/2aab1db0458312484d4065013903133b1f49ed0a/presets/cayadev/CaYaDev%20-%20Plasma%20Globe.milk",
+      "sourceRevision": "2aab1db0458312484d4065013903133b1f49ed0a",
+      "sourceGitBlob": "864149b4a93286720e13ea3cbc48f626425ae2ff",
+      "sha256": "690dfa2888678854706010821ace987c2256ca38a32a55f3bebd878b484edbb5",
+      "notice": "\"Plasma Globe\" by CaYaDev, CaYaDev MilkDrop Presets, licensed under CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/). Source unchanged; archive filename normalized."
+    },
+    {
+      "path": "presets/prism-lattice.milk",
+      "kind": "preset",
+      "author": "CaYaDev",
+      "license": "CC-BY-4.0",
+      "licenseFile": "licenses/UPSTREAM-LICENSE.md",
+      "sourceUrl": "https://github.com/CaYatur/SoundVisualizer/blob/2aab1db0458312484d4065013903133b1f49ed0a/presets/cayadev/CaYaDev%20-%20Prism%20Lattice.milk",
+      "sourceRevision": "2aab1db0458312484d4065013903133b1f49ed0a",
+      "sourceGitBlob": "4b0780e953b074fa44624748da1d7b3294bec2b6",
+      "sha256": "b8dd019899e8d78e7e555dca7fd69e79504603bf57c1c73ea78c6a165d6398d0",
+      "notice": "\"Prism Lattice\" by CaYaDev, CaYaDev MilkDrop Presets, licensed under CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/). Source unchanged; archive filename normalized."
+    },
+    {
+      "path": "presets/rain-glass.milk",
+      "kind": "preset",
+      "author": "CaYaDev",
+      "license": "CC-BY-4.0",
+      "licenseFile": "licenses/UPSTREAM-LICENSE.md",
+      "sourceUrl": "https://github.com/CaYatur/SoundVisualizer/blob/2aab1db0458312484d4065013903133b1f49ed0a/presets/cayadev/CaYaDev%20-%20Rain%20Glass.milk",
+      "sourceRevision": "2aab1db0458312484d4065013903133b1f49ed0a",
+      "sourceGitBlob": "7a36bc2396b2c22722798e891db81c9072b17ce4",
+      "sha256": "3dabc59f5d5edf10fa5bc5168c49b5394c53ee4f72f29c7aaf067d8dab4992bb",
+      "notice": "\"Rain Glass\" by CaYaDev, CaYaDev MilkDrop Presets, licensed under CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/). Source unchanged; archive filename normalized."
+    },
+    {
+      "path": "presets/ribbon-dance.milk",
+      "kind": "preset",
+      "author": "CaYaDev",
+      "license": "CC-BY-4.0",
+      "licenseFile": "licenses/UPSTREAM-LICENSE.md",
+      "sourceUrl": "https://github.com/CaYatur/SoundVisualizer/blob/2aab1db0458312484d4065013903133b1f49ed0a/presets/cayadev/CaYaDev%20-%20Ribbon%20Dance.milk",
+      "sourceRevision": "2aab1db0458312484d4065013903133b1f49ed0a",
+      "sourceGitBlob": "9505727d0598a89b10087e1261f9c42a7893f248",
+      "sha256": "44a7f556e38231deb4cdf5c53abba383b6ed7cd8e885e890597a7e30ad4462a9",
+      "notice": "\"Ribbon Dance\" by CaYaDev, CaYaDev MilkDrop Presets, licensed under CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/). Source unchanged; archive filename normalized."
+    },
+    {
+      "path": "presets/smoke-ribbons.milk",
+      "kind": "preset",
+      "author": "CaYaDev",
+      "license": "CC-BY-4.0",
+      "licenseFile": "licenses/UPSTREAM-LICENSE.md",
+      "sourceUrl": "https://github.com/CaYatur/SoundVisualizer/blob/2aab1db0458312484d4065013903133b1f49ed0a/presets/cayadev/CaYaDev%20-%20Smoke%20Ribbons.milk",
+      "sourceRevision": "2aab1db0458312484d4065013903133b1f49ed0a",
+      "sourceGitBlob": "b0d3f43b4e93fbde617c6da2b3122e3c388d50f1",
+      "sha256": "c1d4d6f0babf460a1d2ae049d62a22c298dd74f19ef22a22c7d4eccf0af93a03",
+      "notice": "\"Smoke Ribbons\" by CaYaDev, CaYaDev MilkDrop Presets, licensed under CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/). Source unchanged; archive filename normalized."
+    },
+    {
+      "path": "presets/snowy-pines.milk",
+      "kind": "preset",
+      "author": "CaYaDev",
+      "license": "CC-BY-4.0",
+      "licenseFile": "licenses/UPSTREAM-LICENSE.md",
+      "sourceUrl": "https://github.com/CaYatur/SoundVisualizer/blob/2aab1db0458312484d4065013903133b1f49ed0a/presets/cayadev/CaYaDev%20-%20Snowy%20Pines.milk",
+      "sourceRevision": "2aab1db0458312484d4065013903133b1f49ed0a",
+      "sourceGitBlob": "dbd22881005ddef21e910a58918a77b67e9a173f",
+      "sha256": "a810cb71f0d831414532198fadcd4bb6e03a2e270f80e4182cd8c598b4017c3a",
+      "notice": "\"Snowy Pines\" by CaYaDev, CaYaDev MilkDrop Presets, licensed under CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/). Source unchanged; archive filename normalized."
+    },
+    {
+      "path": "presets/solar-flare.milk",
+      "kind": "preset",
+      "author": "CaYaDev",
+      "license": "CC-BY-4.0",
+      "licenseFile": "licenses/UPSTREAM-LICENSE.md",
+      "sourceUrl": "https://github.com/CaYatur/SoundVisualizer/blob/2aab1db0458312484d4065013903133b1f49ed0a/presets/cayadev/CaYaDev%20-%20Solar%20Flare.milk",
+      "sourceRevision": "2aab1db0458312484d4065013903133b1f49ed0a",
+      "sourceGitBlob": "005c4440079387b32ebe03dc3ee3d4a38723d9b9",
+      "sha256": "11c9a29cfb65366a6873f3c34a70f1061df39649426b775975689f9e76028263",
+      "notice": "\"Solar Flare\" by CaYaDev, CaYaDev MilkDrop Presets, licensed under CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/). Source unchanged; archive filename normalized."
+    },
+    {
+      "path": "presets/spectral-ridges.milk",
+      "kind": "preset",
+      "author": "CaYaDev",
+      "license": "CC-BY-4.0",
+      "licenseFile": "licenses/UPSTREAM-LICENSE.md",
+      "sourceUrl": "https://github.com/CaYatur/SoundVisualizer/blob/2aab1db0458312484d4065013903133b1f49ed0a/presets/cayadev/CaYaDev%20-%20Spectral%20Ridges.milk",
+      "sourceRevision": "2aab1db0458312484d4065013903133b1f49ed0a",
+      "sourceGitBlob": "6ef8392aac6d6353127063bf5822adea663bda74",
+      "sha256": "10c01f60f887ee62d8debc373ad7d4cd4a057b9328679deadb843ef750c94c2d",
+      "notice": "\"Spectral Ridges\" by CaYaDev, CaYaDev MilkDrop Presets, licensed under CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/). Source unchanged; archive filename normalized."
+    },
+    {
+      "path": "presets/spectrum-city.milk",
+      "kind": "preset",
+      "author": "CaYaDev",
+      "license": "CC-BY-4.0",
+      "licenseFile": "licenses/UPSTREAM-LICENSE.md",
+      "sourceUrl": "https://github.com/CaYatur/SoundVisualizer/blob/2aab1db0458312484d4065013903133b1f49ed0a/presets/cayadev/CaYaDev%20-%20Spectrum%20City.milk",
+      "sourceRevision": "2aab1db0458312484d4065013903133b1f49ed0a",
+      "sourceGitBlob": "d526faad00309bca6d9df21a0709491aa469b596",
+      "sha256": "1a3e955b1b56b4651121ddc5cf83f095ef23c50aad4535eef95e8620e1163876",
+      "notice": "\"Spectrum City\" by CaYaDev, CaYaDev MilkDrop Presets, licensed under CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/). Source unchanged; archive filename normalized."
+    },
+    {
+      "path": "presets/spiral-wormhole.milk",
+      "kind": "preset",
+      "author": "CaYaDev",
+      "license": "CC-BY-4.0",
+      "licenseFile": "licenses/UPSTREAM-LICENSE.md",
+      "sourceUrl": "https://github.com/CaYatur/SoundVisualizer/blob/2aab1db0458312484d4065013903133b1f49ed0a/presets/cayadev/CaYaDev%20-%20Spiral%20Wormhole.milk",
+      "sourceRevision": "2aab1db0458312484d4065013903133b1f49ed0a",
+      "sourceGitBlob": "598e2f5b70c9df8f38f4056c8432636e9394aabc",
+      "sha256": "7148d0e6a71da48ac918f87d8e7d6d4e022b3733c2ae163723d5b52c3cc5dca8",
+      "notice": "\"Spiral Wormhole\" by CaYaDev, CaYaDev MilkDrop Presets, licensed under CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/). Source unchanged; archive filename normalized."
+    },
+    {
+      "path": "presets/synthwave-horizon.milk",
+      "kind": "preset",
+      "author": "CaYaDev",
+      "license": "CC-BY-4.0",
+      "licenseFile": "licenses/UPSTREAM-LICENSE.md",
+      "sourceUrl": "https://github.com/CaYatur/SoundVisualizer/blob/2aab1db0458312484d4065013903133b1f49ed0a/presets/cayadev/CaYaDev%20-%20Synthwave%20Horizon.milk",
+      "sourceRevision": "2aab1db0458312484d4065013903133b1f49ed0a",
+      "sourceGitBlob": "0eb53b91ade1bc5b5e617f10e9c4f538e9461665",
+      "sha256": "b4e16805aa5f4470e8e69168165d91a7fd86fc64a7006c0bdb299e964de86709",
+      "notice": "\"Synthwave Horizon\" by CaYaDev, CaYaDev MilkDrop Presets, licensed under CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/). Source unchanged; archive filename normalized."
+    },
+    {
+      "path": "presets/tesla-coil.milk",
+      "kind": "preset",
+      "author": "CaYaDev",
+      "license": "CC-BY-4.0",
+      "licenseFile": "licenses/UPSTREAM-LICENSE.md",
+      "sourceUrl": "https://github.com/CaYatur/SoundVisualizer/blob/2aab1db0458312484d4065013903133b1f49ed0a/presets/cayadev/CaYaDev%20-%20Tesla%20Coil.milk",
+      "sourceRevision": "2aab1db0458312484d4065013903133b1f49ed0a",
+      "sourceGitBlob": "31b5ddc7220ce0b2a826d37026d18d54bbff9893",
+      "sha256": "bb054c4d99bbe91956d270f3acd853fd770907dc6b396ed8086d3db0fe0ab38b",
+      "notice": "\"Tesla Coil\" by CaYaDev, CaYaDev MilkDrop Presets, licensed under CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/). Source unchanged; archive filename normalized."
+    },
+    {
+      "path": "presets/truchet-weave.milk",
+      "kind": "preset",
+      "author": "CaYaDev",
+      "license": "CC-BY-4.0",
+      "licenseFile": "licenses/UPSTREAM-LICENSE.md",
+      "sourceUrl": "https://github.com/CaYatur/SoundVisualizer/blob/2aab1db0458312484d4065013903133b1f49ed0a/presets/cayadev/CaYaDev%20-%20Truchet%20Weave.milk",
+      "sourceRevision": "2aab1db0458312484d4065013903133b1f49ed0a",
+      "sourceGitBlob": "a7d80f3bcc24f9b972de4e5258a16e81306ddf5f",
+      "sha256": "af0b2f5e5456a7418e67eefa625a7a4408cda71c80aadf37c3dc31ca89545162",
+      "notice": "\"Truchet Weave\" by CaYaDev, CaYaDev MilkDrop Presets, licensed under CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/). Source unchanged; archive filename normalized."
+    },
+    {
+      "path": "presets/twelve-moons.milk",
+      "kind": "preset",
+      "author": "CaYaDev",
+      "license": "CC-BY-4.0",
+      "licenseFile": "licenses/UPSTREAM-LICENSE.md",
+      "sourceUrl": "https://github.com/CaYatur/SoundVisualizer/blob/2aab1db0458312484d4065013903133b1f49ed0a/presets/cayadev/CaYaDev%20-%20Twelve%20Moons.milk",
+      "sourceRevision": "2aab1db0458312484d4065013903133b1f49ed0a",
+      "sourceGitBlob": "65c84e87d96ae0b527fcca094c649cbfa774cc73",
+      "sha256": "501969816a010de7dc6c7b99c0af598b7b1e6cd8e8459b08d57704b47783e342",
+      "notice": "\"Twelve Moons\" by CaYaDev, CaYaDev MilkDrop Presets, licensed under CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/). Source unchanged; archive filename normalized."
+    },
+    {
+      "path": "presets/vinyl-groove.milk",
+      "kind": "preset",
+      "author": "CaYaDev",
+      "license": "CC-BY-4.0",
+      "licenseFile": "licenses/UPSTREAM-LICENSE.md",
+      "sourceUrl": "https://github.com/CaYatur/SoundVisualizer/blob/2aab1db0458312484d4065013903133b1f49ed0a/presets/cayadev/CaYaDev%20-%20Vinyl%20Groove.milk",
+      "sourceRevision": "2aab1db0458312484d4065013903133b1f49ed0a",
+      "sourceGitBlob": "d9f0ffeb6d939af6c2854fcd65fbaf6ffb331982",
+      "sha256": "c9fe64cffa27c3fa8b24b0fdb4ac8a76deea4b4a93027b912ea4b58b5b2e66d9",
+      "notice": "\"Vinyl Groove\" by CaYaDev, CaYaDev MilkDrop Presets, licensed under CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/). Source unchanged; archive filename normalized."
+    },
+    {
+      "path": "presets/wax-lamp.milk",
+      "kind": "preset",
+      "author": "CaYaDev",
+      "license": "CC-BY-4.0",
+      "licenseFile": "licenses/UPSTREAM-LICENSE.md",
+      "sourceUrl": "https://github.com/CaYatur/SoundVisualizer/blob/2aab1db0458312484d4065013903133b1f49ed0a/presets/cayadev/CaYaDev%20-%20Wax%20Lamp.milk",
+      "sourceRevision": "2aab1db0458312484d4065013903133b1f49ed0a",
+      "sourceGitBlob": "99e5daaa8d41f820ab2370390b45e53b720f518b",
+      "sha256": "ff4c992613155005c351b27850dc3a480312f027cca45582e8f5602ac6778f79",
+      "notice": "\"Wax Lamp\" by CaYaDev, CaYaDev MilkDrop Presets, licensed under CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/). Source unchanged; archive filename normalized."
+    }
+  ]
+}

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Package original sources and create pending evidence inventories on private JIT.
+"""Package attributed sources and create pending evidence inventories on private JIT.
 
 Does not render, sign, publish, approve rights, or promote a catalog entry.
 """
@@ -16,7 +16,7 @@ import tempfile
 from catalog_qualification import TARGETS
 
 ROOT = Path(__file__).resolve().parents[1]
-SOURCE = "content/original-packs"
+SOURCES = ("content/original-packs", "content/licensed-packs")
 
 
 def git(*args: str) -> bytes:
@@ -27,6 +27,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source-revision", required=True)
     parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument("--source-root", choices=SOURCES, default=SOURCES[0])
     args = parser.parse_args()
     revision = args.source_revision
     if re.fullmatch(r"[a-f0-9]{40}", revision) is None:
@@ -34,7 +35,7 @@ def main() -> int:
     if args.output.exists() or args.output.is_symlink():
         raise ValueError("output must be a new directory")
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    entries = git("ls-tree", "-r", revision, "--", SOURCE).decode().splitlines()
+    entries = git("ls-tree", "-r", revision, "--", args.source_root).decode().splitlines()
     records = {}
     for entry in entries:
         meta, path = entry.split("\t", 1)
@@ -66,9 +67,23 @@ def main() -> int:
             if not re.fullmatch(r"milkrust-[a-z0-9-]+", manifest["id"]):
                 raise ValueError("invalid original pack identity")
             immutable = f"https://github.com/snapetech-org/MilkRust/tree/{revision}/{prefix.rstrip('/')}"
-            manifest["sourceUrls"] = [immutable]
+            original = args.source_root == SOURCES[0]
+            if original:
+                manifest["sourceUrls"] = [immutable]
             for asset in manifest["assets"]:
-                asset["sourceUrl"] = f"https://github.com/snapetech-org/MilkRust/blob/{revision}/{prefix}{asset['path']}"
+                if original:
+                    asset["sourceUrl"] = f"https://github.com/snapetech-org/MilkRust/blob/{revision}/{prefix}{asset['path']}"
+                else:
+                    source_revision = asset.get("sourceRevision", "")
+                    if not re.fullmatch(r"[a-f0-9]{40}", source_revision) or f"/blob/{source_revision}/" not in asset.get("sourceUrl", ""):
+                        raise ValueError("licensed assets require immutable upstream provenance")
+                    relative = asset["path"]
+                    if relative.startswith("/") or ".." in relative.split("/") or "\\" in relative:
+                        raise ValueError("unsafe licensed asset path")
+                    data = (folder / relative).read_bytes()
+                    blob = hashlib.sha1(b"blob " + str(len(data)).encode() + b"\0" + data).hexdigest()
+                    if blob != asset.get("sourceGitBlob") or hashlib.sha256(data).hexdigest() != asset.get("sha256"):
+                        raise ValueError("licensed source differs from its provenance receipt")
             manifest_file.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
             archive = staging / "archives" / f"{manifest['id']}-{manifest['version']}.rmpack"
             run = subprocess.run([sys.executable, str(ROOT / "tools/package-rmpack.py"), str(folder), str(archive)],
@@ -83,7 +98,8 @@ def main() -> int:
                        "pack": {"id": manifest["id"], "version": manifest["version"], "sha256": digest},
                        "sourceRevision": revision,
                        "rightsReview": {"status": "pending", "reviewer": None,
-                           "basis": "Original sources with explicit per-file CC0 dedication; verify scope and provenance before approval.", "evidence": None},
+                           "basis": ("Original sources with explicit per-file CC0 dedication; verify scope and provenance before approval." if original else
+                               "Explicit upstream license notice, immutable source and per-file attribution; review exact archive scope and notices before approval."), "evidence": None},
                        "targets": [{"id": target, "status": "pending", "presets": inventory,
                            "engineRevision": None, "hostRevision": None, "engineArtifactSha256": None,
                            "hostArtifactSha256": None, "device": None, "runUrl": None,
@@ -91,7 +107,7 @@ def main() -> int:
             report_name = f"{manifest['id']}.pending.json"
             (staging / "qualification" / report_name).write_text(json.dumps(pending, indent=2) + "\n", encoding="utf-8")
             packs.append({**summary, "archive": f"archives/{archive.name}", "sourceRevision": revision,
-                          "compatibilityStatus": "authored-unqualified", "publicationEligible": False,
+                          "compatibilityStatus": "authored-unqualified" if original else "upstream-unqualified", "publicationEligible": False,
                           "pendingQualification": f"qualification/{report_name}"})
         (staging / "candidate-index.json").write_text(json.dumps({"schemaVersion": 1, "sourceRevision": revision,
             "publicationEligible": False, "packs": packs, "rendered": 0, "qualified": 0}, indent=2) + "\n", encoding="utf-8")

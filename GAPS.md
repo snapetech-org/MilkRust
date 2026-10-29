@@ -21,6 +21,9 @@ GPU capture or device run was performed for this source-only continuation.
   structures, arrays, matrices, control flow and legacy sampling are implemented
   behind bounded preprocessing/compiler boundaries. See
   [the exact profile and limits](docs/HLSL_COMPATIBILITY.md).
+- All 24 legacy rotation matrices, constant registers `_c0.._c13`, canonical
+  coordinate/roam/mip helpers and matched blur range encoding/decoding are bound
+  in native and WebGL hosts. Regression sources are present but unrun.
 - Three blur levels, deterministic original 2D/3D noise, mipmaps and per-binding
   filtering/wrapping; q registers, frame uniforms, texture sizes and random/roam
   vectors. Missing resources and compiler/driver errors do not become a placeholder.
@@ -32,6 +35,9 @@ GPU capture or device run was performed for this source-only continuation.
   a signed catalog publisher, quorum/sequence/expiry/revocation handling,
   qualification gates, protected-environment signing configuration and public
   trust-root tooling. No production credentials are committed.
+- A pinned CaYaDev collection adds 55 unchanged upstream presets with explicit
+  CC BY 4.0 terms, per-file attribution and verified SHA-256/Git blob provenance.
+  Its builder preserves those origins and creates pending qualification records.
 - Two new original CC0 study collections contain 24 presets across eight families.
   The candidate builder pins source URLs and creates pending per-preset/target
   evidence inventories. It does not create passing reports or promote downloads.
