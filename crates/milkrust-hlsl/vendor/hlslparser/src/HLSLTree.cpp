@@ -27,6 +27,10 @@ const HLSLTypeDimension BaseTypeDimension[HLSLBaseType_Count] =
     HLSLTypeDimension_Matrix4x4,// HLSLBaseType_Float4x4,
     HLSLTypeDimension_Matrix4x3,// HLSLBaseType_Float4x3,
     HLSLTypeDimension_Matrix4x2,// HLSLBaseType_Float4x2,
+    HLSLTypeDimension_Matrix2x3, // HLSLBaseType_Float2x3
+    HLSLTypeDimension_Matrix2x4, // HLSLBaseType_Float2x4
+    HLSLTypeDimension_Matrix3x2, // HLSLBaseType_Float3x2
+    HLSLTypeDimension_Matrix3x4, // HLSLBaseType_Float3x4
     HLSLTypeDimension_Scalar,   // HLSLBaseType_Half,
     HLSLTypeDimension_Vector2,  // HLSLBaseType_Half2,
     HLSLTypeDimension_Vector3,  // HLSLBaseType_Half3,
@@ -36,6 +40,10 @@ const HLSLTypeDimension BaseTypeDimension[HLSLBaseType_Count] =
     HLSLTypeDimension_Matrix4x4,// HLSLBaseType_Half4x4,
     HLSLTypeDimension_Matrix4x3,// HLSLBaseType_Half4x3,
     HLSLTypeDimension_Matrix4x2,// HLSLBaseType_Half4x2,
+    HLSLTypeDimension_Matrix2x3, // HLSLBaseType_Half2x3
+    HLSLTypeDimension_Matrix2x4, // HLSLBaseType_Half2x4
+    HLSLTypeDimension_Matrix3x2, // HLSLBaseType_Half3x2
+    HLSLTypeDimension_Matrix3x4, // HLSLBaseType_Half3x4
     HLSLTypeDimension_Scalar,   // HLSLBaseType_Bool,
     HLSLTypeDimension_Vector2,  // HLSLBaseType_Bool2,
     HLSLTypeDimension_Vector3,  // HLSLBaseType_Bool3,
@@ -73,6 +81,10 @@ const HLSLBaseType ScalarBaseType[HLSLBaseType_Count] = {
     HLSLBaseType_Float,         // HLSLBaseType_Float4x4,
     HLSLBaseType_Float,         // HLSLBaseType_Float4x3,
     HLSLBaseType_Float,         // HLSLBaseType_Float4x2,
+    HLSLBaseType_Float, // HLSLBaseType_Float2x3
+    HLSLBaseType_Float, // HLSLBaseType_Float2x4
+    HLSLBaseType_Float, // HLSLBaseType_Float3x2
+    HLSLBaseType_Float, // HLSLBaseType_Float3x4
     HLSLBaseType_Half,          // HLSLBaseType_Half,
     HLSLBaseType_Half,          // HLSLBaseType_Half2,
     HLSLBaseType_Half,          // HLSLBaseType_Half3,
@@ -82,6 +94,10 @@ const HLSLBaseType ScalarBaseType[HLSLBaseType_Count] = {
     HLSLBaseType_Half,          // HLSLBaseType_Half4x4,
     HLSLBaseType_Half,          // HLSLBaseType_Half4x3,
     HLSLBaseType_Half,          // HLSLBaseType_Half4x2,
+    HLSLBaseType_Half, // HLSLBaseType_Half2x3
+    HLSLBaseType_Half, // HLSLBaseType_Half2x4
+    HLSLBaseType_Half, // HLSLBaseType_Half3x2
+    HLSLBaseType_Half, // HLSLBaseType_Half3x4
     HLSLBaseType_Bool,          // HLSLBaseType_Bool,
     HLSLBaseType_Bool,          // HLSLBaseType_Bool2,
     HLSLBaseType_Bool,          // HLSLBaseType_Bool3,

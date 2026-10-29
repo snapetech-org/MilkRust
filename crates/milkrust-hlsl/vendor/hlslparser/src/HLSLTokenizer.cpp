@@ -25,6 +25,11 @@ static const char* _reservedWords[] =
         "float4x4",
         "float4x3",
         "float4x2",
+        "float2x3",
+        "float2x4",
+        "float3x2",
+        "float3x4",
+
         "half",
         "half2",
         "half3",
@@ -34,6 +39,11 @@ static const char* _reservedWords[] =
         "half4x4",
         "half4x3",
         "half4x2",
+        "half2x3",
+        "half2x4",
+        "half3x2",
+        "half3x4",
+
         "bool",
 		"bool2",
 		"bool3",

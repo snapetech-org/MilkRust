@@ -60,7 +60,11 @@ enum HLSLTypeDimension
     HLSLTypeDimension_Matrix3x3,
     HLSLTypeDimension_Matrix4x4,
     HLSLTypeDimension_Matrix4x3,
-    HLSLTypeDimension_Matrix4x2
+    HLSLTypeDimension_Matrix4x2,
+    HLSLTypeDimension_Matrix2x3,
+    HLSLTypeDimension_Matrix2x4,
+    HLSLTypeDimension_Matrix3x2,
+    HLSLTypeDimension_Matrix3x4,
 };
 
 enum HLSLBaseType
@@ -77,6 +81,11 @@ enum HLSLBaseType
     HLSLBaseType_Float4x4,
     HLSLBaseType_Float4x3,
     HLSLBaseType_Float4x2,
+    HLSLBaseType_Float2x3,
+    HLSLBaseType_Float2x4,
+    HLSLBaseType_Float3x2,
+    HLSLBaseType_Float3x4,
+
     HLSLBaseType_Half,
     HLSLBaseType_Half2,
     HLSLBaseType_Half3,
@@ -86,6 +95,11 @@ enum HLSLBaseType
     HLSLBaseType_Half4x4,
     HLSLBaseType_Half4x3,
     HLSLBaseType_Half4x2,
+    HLSLBaseType_Half2x3,
+    HLSLBaseType_Half2x4,
+    HLSLBaseType_Half3x2,
+    HLSLBaseType_Half3x4,
+
     HLSLBaseType_Bool,
     HLSLBaseType_FirstInteger = HLSLBaseType_Bool,
 	HLSLBaseType_Bool2,
@@ -141,8 +155,8 @@ inline bool IsSamplerType(HLSLBaseType baseType)
 
 inline bool IsMatrixType(HLSLBaseType baseType)
 {
-    return baseType == HLSLBaseType_Float3x3 || baseType == HLSLBaseType_Float4x4 || baseType == HLSLBaseType_Float4x3 || baseType == HLSLBaseType_Float4x2 ||
-        baseType == HLSLBaseType_Half3x3 || baseType == HLSLBaseType_Half4x4 || baseType == HLSLBaseType_Half4x3 || baseType == HLSLBaseType_Half4x2;
+    return (baseType >= HLSLBaseType_Float2x2 && baseType <= HLSLBaseType_Float3x4) ||
+        (baseType >= HLSLBaseType_Half2x2 && baseType <= HLSLBaseType_Half3x4);
 }
 
 inline bool IsScalarType( HLSLBaseType baseType )

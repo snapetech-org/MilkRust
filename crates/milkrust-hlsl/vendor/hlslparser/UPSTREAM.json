@@ -19,6 +19,10 @@
     "Assertions return bounded errors through the C ABI",
     "Checked constant arithmetic and bounded array declarations",
     "Exception-safe temporary formatted-string ownership",
-    "MilkDrop user globals initialize per fragment after host bindings; preserve const declaration bounds"
+    "MilkDrop user globals initialize per fragment after host bindings; preserve const declaration bounds",
+    "Shared numeric promotion/truncation rules and corrected rectangular dimensions",
+    "HLSL row-major constructors, matrix splats, component multiplication, selection reads/writes and mul dot semantics",
+    "Function-local temporaries for matrix/converting out and inout arguments with single-evaluation indices",
+    "Typed vector comparison, logical and conditional lowering; correct unary bitwise complement"
   ]
 }

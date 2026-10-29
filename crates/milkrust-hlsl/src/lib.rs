@@ -67,6 +67,28 @@ mod tests {
     use super::compile;
 
     #[test]
+    fn numeric_language_contract_compiles() {
+        let source = include_str!("../tests/fixtures/numeric.hlsl");
+        compile(source, "main").expect("numeric control must reach GLSL generation");
+        // GPU assertions live in smoke-hlsl.mjs; source acceptance alone is
+        // deliberately not treated as evidence of numeric/render correctness.
+    }
+
+    #[test]
+    fn invalid_component_selections_are_rejected() {
+        for statement in [
+            "float2 v=0; float x=v.z;",
+            "float4 v=0; float2 x=v.xr;",
+            "float2x2 m=0; float x=m._00;",
+            "float2x2 m=0; float2 x=m._11_m01;",
+            "float2x2 m=0; m._11_11=float2(1,2);",
+        ] {
+            let source = format!("float4 main(float2 uv:TEXCOORD0):COLOR0 {{ {statement} return 1; }}");
+            assert!(compile(&source, "main").is_err(), "invalid selection accepted: {statement}");
+        }
+    }
+
+    #[test]
     fn constant_failures_do_not_cross_the_abi() {
         for bound in ["1 / 0", "2147483647 + 1", "65536 * 65536"] {
             let source = format!("float4 main(float2 uv:TEXCOORD0):COLOR0 {{ float data[{bound}]; return float4(uv,0,1); }}");

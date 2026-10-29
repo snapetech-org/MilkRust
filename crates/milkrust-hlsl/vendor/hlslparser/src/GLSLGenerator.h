@@ -13,6 +13,8 @@
 #include "CodeWriter.h"
 #include "HLSLTree.h"
 #include <vector>
+#include <map>
+#include <string>
 
 namespace M4
 {
@@ -71,6 +73,14 @@ private:
 
     void OutputExpressionList(HLSLExpression* expression, HLSLArgument* argument = NULL);
     void OutputExpression(HLSLExpression* expression, const HLSLType* dstType = NULL);
+    void OutputConversion(HLSLExpression* expression, const HLSLType& type);
+    bool OutputMatrixSelection(HLSLExpression* expression, HLSLExpression* value = NULL, const char* operation = NULL, bool postfix = false);
+    void OutputMatrixConstructor(HLSLConstructorExpression* expression);
+    bool OutputCallWithCopyOut(HLSLFunctionCall* expression);
+    HLSLIdentifierExpression* LocalTemporary(const HLSLType& type);
+    HLSLExpression* FreezeLvalue(HLSLExpression* expression);
+    void InsertLocalTemporaries(size_t offset);
+    std::string NumericHelper(const std::string& key, const std::string& type, const std::string& parameters, const std::string& body);
     void OutputIdentifier(const char* name);
     void OutputArguments(HLSLArgument* argument);
 
@@ -125,6 +135,12 @@ private:
     static const char*  s_reservedWord[s_numReservedWords];
 
     CodeWriter          m_writer;
+    CodeWriter          m_numericHelpers;
+    std::map<std::string, std::string> m_numericHelperNames;
+    std::string m_result;
+    std::vector<HLSLDeclaration*> m_localTemporaries;
+    bool m_insideFunction = false;
+    size_t m_temporaryCount = 0;
     bool m_milkdropGlobals = false;
     std::vector<HLSLDeclaration*> m_globalInitializers;
 

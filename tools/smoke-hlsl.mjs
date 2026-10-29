@@ -7,6 +7,7 @@ import { chromium } from '@playwright/test';
 
 const root = resolve('pkg');
 const cases = [
+  { id: 'numeric-contract', shader: await readFile('crates/milkrust-hlsl/tests/fixtures/numeric.hlsl', 'utf8'), expected: [64,128,191] },
   { id: 'typed-loop-matrix', shader: `#define N 3
 struct Tint { float3 value; };
 float3 tint(float x) { float3x3 m=float3x3(1,0,0,0,1,0,0,0,1); return mul(m,float3(x,0.2,0.4)); }
@@ -70,7 +71,10 @@ try {
           const sum = pixels[i] + pixels[i+1] + pixels[i+2];
           if (sum > 12) lit++; min = Math.min(min, sum); max = Math.max(max, sum);
         }
-        if (lit < canvas.width * canvas.height / 20 || max - min < 10) throw new Error(`${test.id}: blank or uniform output`);
+        if (test.expected) {
+          const center = 4 * (Math.floor(canvas.height/2) * canvas.width + Math.floor(canvas.width/2));
+          if (test.expected.some((v,i) => Math.abs(v-pixels[center+i])>2)) throw new Error(`${test.id}: numeric result ${pixels.slice(center,center+4)}`);
+        } else if (lit < canvas.width * canvas.height / 20 || max - min < 10) throw new Error(`${test.id}: blank or uniform output`);
         rows.push({ id: test.id, status: 'pass', litPixels: lit, range: max-min });
       }
       const classicSource = 'name=Classic controls\nwave_a=0\nwarp_shader_1=shader_body { ret=float3(0.2,0.3,0.4); }\nfGammaAdj=2\nbInvert=1\n';

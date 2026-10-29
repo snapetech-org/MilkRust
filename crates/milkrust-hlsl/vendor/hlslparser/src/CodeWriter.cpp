@@ -153,6 +153,15 @@ const char* CodeWriter::GetResult() const
 void CodeWriter::Reset()
 {
     m_buffer.clear();
+    m_currentLine = 1;
+    m_currentFileName = NULL;
+}
+
+void CodeWriter::Insert(size_t offset, const std::string& text)
+{
+    CheckBudget();
+    if (m_buffer.size() + text.size() > 1024 * 1024) throw std::length_error("GLSL output limit exceeded");
+    m_buffer.insert(offset, text);
 }
 
 }

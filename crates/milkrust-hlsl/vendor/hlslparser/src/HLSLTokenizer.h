@@ -18,6 +18,11 @@ enum HLSLToken
     HLSLToken_Float4x4,
     HLSLToken_Float4x3,
     HLSLToken_Float4x2,
+    HLSLToken_Float2x3,
+    HLSLToken_Float2x4,
+    HLSLToken_Float3x2,
+    HLSLToken_Float3x4,
+
     HLSLToken_Half,
     HLSLToken_Half2,
     HLSLToken_Half3,
@@ -27,6 +32,11 @@ enum HLSLToken
     HLSLToken_Half4x4,
     HLSLToken_Half4x3,
     HLSLToken_Half4x2,
+    HLSLToken_Half2x3,
+    HLSLToken_Half2x4,
+    HLSLToken_Half3x2,
+    HLSLToken_Half3x4,
+
     HLSLToken_Bool,
 	HLSLToken_Bool2,
 	HLSLToken_Bool3,

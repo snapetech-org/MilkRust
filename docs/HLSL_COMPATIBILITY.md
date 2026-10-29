@@ -153,3 +153,32 @@ initializers and unbound custom variables. Provable integer constants retain
 constant array-bound semantics; ordinary HLSL local readonly values are not
 incorrectly forced into GLSL compile-time constants. The additional compiler and
 browser regression sources have not been executed.
+
+## Numeric lowering checkpoint
+
+The typed parser and both renderer compiler builds now share numeric shape
+rules. Vector comparisons truncate to the common width and convert component
+types; vector logical operations and integer/unsigned/Boolean conditionals use
+component selection. `~` is bitwise complement. Matrix constructors consume
+HLSL row order, scalar-to-matrix conversion fills every component, `*`/`*=` are
+componentwise, and `mul(vector, vector)` is a dot product. All float/half matrix shapes from 2×2 through 4×4 have
+typed constructors, indexing, transpose and dimension-compatible `mul` overloads.
+Rectangular row and column bounds are distinct.
+
+Matrix element masks and indexed rows support reads, assignments, compound
+updates and prefix/postfix increments. Generated helpers evaluate the matrix
+and indices once; repeated write destinations and invalid/mixed naming sets
+are rejected. Function `out`/`inout` arguments use local copy-in/copy-out
+storage when a matrix selection or type conversion requires it. Index values
+are retained across the call, and disjoint outputs into the same matrix are
+written back individually.
+
+The authored `tests/fixtures/numeric.hlsl` control checks numerical results
+through the browser integration entrypoint, including non-symmetric matrices,
+swizzle writes, side effects, aliased matrix outputs and converting `inout`
+arguments. Compiler rejection cases accompany it. These sources have **not
+been compiled or executed** in the source-only continuation. The checkpoint
+closes these specific emitter gaps; it is not a claim of all HLSL models or
+reference conformance. Rules were checked against Microsoft's
+[per-component math documentation](https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl/dx-graphics-hlsl-per-component-math)
+and [conversion specification](https://microsoft.github.io/hlsl-specs/specs/4-Conv.html).
