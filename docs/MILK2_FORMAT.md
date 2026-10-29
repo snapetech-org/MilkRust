@@ -53,3 +53,14 @@ The inspected [MilkDrop3 source snapshot at `6b39088`](https://github.com/milkdr
 The saved sprite records are interpreted independently in `sprites.rs`. Unknown
 fields and malformed blocks fail import; the source checkpoint includes runtime,
 GPU passes and regression sources, not executed conformance evidence.
+
+
+The 2026-10-29 reference recheck still points to the same official commit. Its
+classic `RandomizeBlendPattern` routine is not the saved-pattern implementation.
+The official README also describes version-specific changes to `corner`,
+`patches`, `stars2` and `arrow`, and a `cross2` exception to normal completion.
+MilkRust's current independently authored masks, including their common endpoint
+rules, have not been replaced with those exact semantics. Pattern names alone
+do not specify formulas. The checked foo_vis_milk2 source contains the classic
+transition helper, and the MIT SoundVisualizer candidate likewise does not
+supply this missing MD3 renderer. None is a basis for declaring the gap closed.

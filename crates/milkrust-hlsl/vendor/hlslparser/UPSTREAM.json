@@ -27,6 +27,13 @@
     "Remainder, shifts and compound bit operators; unsigned literals and cast/conditional precedence",
     "Legacy math, matrix component intrinsics, typed output parameters and IEEE-754 reinterpretation",
     "Bounded identifiers/numeric literals and locale-independent round-trip float serialization",
-    "Legacy volume project/bias/gradient sampling, size/fetch helpers and constant LOD offsets"
+    "Legacy volume project/bias/gradient sampling, size/fetch helpers and constant LOD offsets",
+    "Scoped typedefs, numeric template spellings, grouped declarators and bounded unroll arguments",
+    "Lexical typed constant evaluation including aggregate selections, overflow and index diagnostics",
+    "GLSL-safe user identifiers without changing intrinsic function identity",
+    "Indexed matrix scalar swizzles and Boolean scalar replication",
+    "Readonly initializers lowered to per-fragment storage when GLSL constant rules require it",
+    "Legacy flattened aggregate initialization, inferred arrays, scalar splats and aggregate casts with bounded single-evaluation temporaries",
+    "Readonly destination validation for assignments, increments and function output parameters"
   ]
 }

@@ -37,6 +37,15 @@ GPU capture or device run was performed for this source-only continuation.
   rectangular linear algebra, writable selections, converting function outputs,
   vector logic and legacy intrinsics. Bounded numeric/identifier parsing and
   round-trip float output have authored numerical controls; execution is unrun.
+- Scoped typedefs, generic numeric spellings, grouped/brace/inferred declarations,
+  flattened aggregate initialization/casts and lexical typed constant evaluation
+  now cover arrays within structs, matrix/vector selections and arithmetic within
+  the profile. User names are isolated from GLSL keywords/intrinsics. Readonly
+  initializers use valid GLSL storage, and writes to readonly values fail.
+- Classic sprite modes 0–3 preserve image RGB independently of image alpha;
+  mode 4 combines alphas. ARGB color keys clear matching opaque texels before
+  filtering, and vertex colors follow legacy byte quantization. Rotation remains
+  unwrapped for equations; scripted selectors convert/clamp as documented.
 - All 24 legacy rotation matrices, constant registers `_c0.._c13`, canonical
   coordinate/roam/mip helpers and matched blur range encoding/decoding are bound
   in native and WebGL hosts. Regression sources are present but unrun.
@@ -76,7 +85,10 @@ GPU capture or device run was performed for this source-only continuation.
   and reference-image comparisons. Source acceptance or a nonempty frame is not
   visual conformance. None of the new platform/preset cells is qualified.
 - Exact MilkDrop HLSL environment and noise/blur/reference semantics, remaining
-  legacy emitter gaps and shader-model coverage. Modern DirectX resources are
+  legacy emitter gaps and shader-model coverage. Known source limits include
+  integer/Boolean and one-row/one-column matrices, arrays of arrays, macro
+  stringification, resource-bearing structs and the separate WGSL translator.
+  Modern DirectX resources are
   outside the legacy pixel-shader profile; the separate WGSL path remains limited.
 - Reference-equivalent `.milk2` masks and remaining sprite-field/layer semantics. The
   available upstream source snapshot does not implement the saved wrapper; the
