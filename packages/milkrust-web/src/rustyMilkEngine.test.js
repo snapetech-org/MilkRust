@@ -74,6 +74,26 @@ describe('createMilkRustEngine', () => {
     };
   });
 
+  it('initializes injected compiler modules and permits a failed download to retry', async () => {
+    let attempts = 0;
+    globalThis.__milkrustModule.initializeHlslCompiler = async (url) => {
+      assert.equal(url, 'https://example.test/engine/milkrust_hlsl.js');
+      if (++attempts === 1) throw new Error('compiler download interrupted');
+    };
+    const options = {
+      modulePath: 'https://example.test/engine/milkrust_wasm.js',
+      audioContext: { createAnalyser },
+      audioNode: { connect() {}, disconnect() {} },
+      canvas: {},
+    };
+    await assert.rejects(createMilkRustEngine(options), /download interrupted/);
+    const first = await createMilkRustEngine(options);
+    const second = await createMilkRustEngine(options);
+    assert.equal(attempts, 2);
+    first.dispose();
+    second.dispose();
+  });
+
   it('eases transition progress between renderer sets', () => {
     assert.equal(getMilkRustTransitionProgress(10, 2, 10), 0);
     assert.equal(getMilkRustTransitionProgress(10, 2, 11), 0.5);

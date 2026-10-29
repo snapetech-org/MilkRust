@@ -7,6 +7,20 @@
 #include <string>
 #include <exception>
 
+class ValidateArrayBounds : public M4::HLSLTreeVisitor {
+    M4::HLSLTree& tree;
+public:
+    explicit ValidateArrayBounds(M4::HLSLTree& value) : tree(value) {}
+    void VisitType(M4::HLSLType& type) override {
+        M4::CheckBudget();
+        if (type.array) {
+            int count = 0;
+            if (!type.arraySize || !tree.GetExpressionValue(type.arraySize, count) || count < 1 || count > 4096)
+                throw std::length_error("HLSL array must have a constant bound between 1 and 4096");
+        }
+    }
+};
+
 static void copy_error(char* target, size_t capacity, const char* message) {
     if (!target || capacity == 0) return;
     const size_t size = std::strlen(message);
@@ -34,6 +48,8 @@ extern "C" int milkrust_hlsl_compile(const char* source, size_t size,
             copy_error(error, error_capacity, M4::Diagnostics());
             return -1;
         }
+        ValidateArrayBounds bounds(tree);
+        bounds.VisitRoot(tree.GetRoot());
         M4::GLSLGenerator generator;
         const M4::GLSLGenerator::Options options;
         if (!generator.Generate(&tree, M4::GLSLGenerator::Target_FragmentShader,

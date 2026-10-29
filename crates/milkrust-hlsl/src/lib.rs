@@ -62,6 +62,20 @@ fn platform_compile(source: &str, entry: &str) -> Result<String, String> {
     String::from_utf8(output).map_err(|_| "Compiler produced invalid UTF-8".into())
 }
 
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests {
+    use super::compile;
+
+    #[test]
+    fn constant_failures_do_not_cross_the_abi() {
+        for bound in ["1 / 0", "2147483647 + 1", "65536 * 65536"] {
+            let source = format!("float4 main(float2 uv:TEXCOORD0):COLOR0 {{ float data[{bound}]; return float4(uv,0,1); }}");
+            assert!(compile(&source, "main").is_err(), "unsafe bound was accepted: {bound}");
+        }
+        assert!(compile("float4 main(float2 uv:TEXCOORD0):COLOR0 { return float4(uv,0,1); }", "main").is_ok());
+    }
+}
+
 #[cfg(target_arch = "wasm32")]
 mod browser {
     use wasm_bindgen::prelude::*;

@@ -987,4 +987,3 @@ extern void FlattenExpressions(HLSLTree* tree);
 } // M4
 
 #endif
-

@@ -37,3 +37,11 @@ Release builds must not silently bundle `content/community-unlicensed`. Distribu
 The local app server follows the same default posture: community-unlicensed content is not served unless `MILKRUST_INCLUDE_COMMUNITY_CONTENT=1` is set or the server is constructed with `includeCommunityContent: true`.
 
 Downstream pack authors should set explicit licenses in their pack `manifest.json`. If a pack has mixed licensing, each asset should carry its own notice under the pack's `licenses/` directory.
+
+## Typed HLSL compiler
+
+`crates/milkrust-hlsl/vendor/hlslparser/` contains Thekla HLSLParser under its
+MIT license, pinned and locally modified as recorded in `UPSTREAM.json`. Its
+license remains in that directory and is copied into browser/app notice bundles.
+The browser compiler also distributes Emscripten and libc++ runtime notices.
+MilkRust integration code remains AGPL-3.0-only.

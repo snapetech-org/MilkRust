@@ -15,6 +15,9 @@
     "Per-fragment loop iteration budget",
     "Const global declarations and empty returns",
     "GLSL ES integer and 3D sampler precision declarations",
-    "Trailing whitespace normalization"
+    "Trailing whitespace normalization",
+    "Assertions return bounded errors through the C ABI",
+    "Checked constant arithmetic and bounded array declarations",
+    "Exception-safe temporary formatted-string ownership"
   ]
 }

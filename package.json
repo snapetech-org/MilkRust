@@ -51,7 +51,8 @@
     "dev:web-component": "node ./tools/serve-rustymilk-app.mjs web-component",
     "desktop:plugin-report": "node ./tools/report-rustymilk-desktop-plugin-discovery.mjs",
     "desktop:plugin-report:catalog": "node ./tools/report-rustymilk-desktop-plugin-discovery.mjs --catalog --include-community --include-no-assertion --write-markdown",
-    "desktop:plugin-report:ci": "node ./tools/report-rustymilk-desktop-plugin-discovery.mjs --pack examples/sample-pack --frames 4"
+    "desktop:plugin-report:ci": "node ./tools/report-rustymilk-desktop-plugin-discovery.mjs --pack examples/sample-pack --frames 4",
+    "test:hlsl": "node ./tools/smoke-hlsl.mjs"
   },
   "devDependencies": {
     "@playwright/test": "^1.52.0"

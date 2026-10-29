@@ -2,9 +2,17 @@
 #include "Engine.h"
 
 #include "HLSLTree.h"
+#include <limits>
+#include <cstdint>
 
 namespace M4
 {
+static int CheckedConstant(std::int64_t value) {
+    if (value < std::numeric_limits<int>::min() || value > std::numeric_limits<int>::max())
+        throw std::range_error("HLSL integer constant overflow");
+    return static_cast<int>(value);
+}
+
 
 const HLSLTypeDimension BaseTypeDimension[HLSLBaseType_Count] =
 {
@@ -372,16 +380,17 @@ bool HLSLTree::GetExpressionValue(HLSLExpression * expression, int & value)
                 value = value1 || value2;
                 return true;
             case HLSLBinaryOp_Add:
-                value = value1 + value2;
+                value = CheckedConstant(std::int64_t(value1) + value2);
                 return true;
             case HLSLBinaryOp_Sub:
-                value = value1 - value2;
+                value = CheckedConstant(std::int64_t(value1) - value2);
                 return true;
             case HLSLBinaryOp_Mul:
-                value = value1 * value2;
+                value = CheckedConstant(std::int64_t(value1) * value2);
                 return true;
             case HLSLBinaryOp_Div:
-                value = value1 / value2;
+                if (value2 == 0) throw std::range_error("HLSL integer division by zero");
+                value = CheckedConstant(std::int64_t(value1) / value2);
                 return true;
             case HLSLBinaryOp_Less:
                 value = value1 < value2;
@@ -431,7 +440,7 @@ bool HLSLTree::GetExpressionValue(HLSLExpression * expression, int & value)
         switch(unaryExpression->unaryOp)
         {
             case HLSLUnaryOp_Negative:
-                value = -value;
+                value = CheckedConstant(-std::int64_t(value));
                 return true;
             case HLSLUnaryOp_Positive:
                 // nop.
@@ -572,6 +581,7 @@ int HLSLTree::GetExpressionValue(HLSLExpression * expression, float values[4])
     {
         HLSLBinaryExpression * binaryExpression = (HLSLBinaryExpression *)expression;
         int dim = GetVectorDimension(binaryExpression->expressionType);
+        if (dim < 1 || dim > 4) return 0;
 
         float values1[4], values2[4];
         int dim1 = GetExpressionValue(binaryExpression->expression1, values1);
@@ -624,6 +634,7 @@ int HLSLTree::GetExpressionValue(HLSLExpression * expression, float values[4])
     {
         HLSLUnaryExpression * unaryExpression = (HLSLUnaryExpression *)expression;
         int dim = GetVectorDimension(unaryExpression->expressionType);
+        if (dim < 1 || dim > 4) return 0;
 
         int dim1 = GetExpressionValue(unaryExpression->expression, values);
         if (dim1 == 0)
@@ -649,6 +660,7 @@ int HLSLTree::GetExpressionValue(HLSLExpression * expression, float values[4])
         HLSLConstructorExpression * constructor = (HLSLConstructorExpression *)expression;
 
         int dim = GetVectorDimension(constructor->expressionType);
+        if (dim < 1 || dim > 4) return 0;
 
         int idx = 0;
         HLSLExpression * arg = constructor->argument;
@@ -656,6 +668,7 @@ int HLSLTree::GetExpressionValue(HLSLExpression * expression, float values[4])
         {
             float tmp[4];
             int n = GetExpressionValue(arg, tmp);
+            if (n < 1 || n > 4 - idx) return 0;
             for (int i = 0; i < n; i++) values[idx + i] = tmp[i];
             idx += n;
 
@@ -2017,5 +2030,3 @@ void FlattenExpressions(HLSLTree* tree) {
 }
 
 } // M4
-
-

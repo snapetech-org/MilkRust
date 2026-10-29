@@ -3903,4 +3903,3 @@ bool HLSLParser::GetMemberType(const HLSLType& objectType, HLSLMemberAccess * me
 }
 
 }
-

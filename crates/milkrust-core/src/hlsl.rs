@@ -6,9 +6,54 @@ pub(crate) fn sampler_names(source: &str) -> Result<Vec<String>, String> {
     let source = milkrust_hlsl::preprocess(source)?;
     let tokens = milkrust_hlsl::tokenize(&source)?;
     let mut names = Vec::new();
-    for name in &tokens {
-        if name.starts_with("sampler_") && !crate::is_milkrust_main_sampler(&name) && !names.contains(name) {
-            names.push(name.clone());
+    let mut sampler_parameters = Vec::new();
+    let mut parens = 0i32;
+    let mut braces = 0i32;
+    let mut functions = Vec::new();
+    let structures: Vec<&String> = tokens.windows(2).filter(|pair| pair[0] == "struct")
+        .map(|pair| &pair[1]).collect();
+    let is_return_type = |name: &String| {
+        structures.contains(&name) || ["void", "float", "half", "int", "uint", "bool", "double"]
+            .iter().any(|base| name.strip_prefix(base).is_some_and(|suffix|
+                suffix.is_empty() || (suffix.len() <= 3 && suffix.bytes().all(|b| matches!(b, b'1'..=b'4' | b'x')))))
+    };
+    for (index, token) in tokens.iter().enumerate() {
+        if token == "(" && parens == 0 && braces == 0 && index >= 2
+            && is_return_type(&tokens[index - 2]) {
+            functions.push(tokens[index - 1].clone());
+        }
+        if token == "(" { parens += 1; }
+        if token == ")" { parens -= 1; }
+        if token == "{" { braces += 1; }
+        if token == "}" { braces -= 1; }
+        if parens > 0 && matches!(token.as_str(), "sampler" | "sampler2D" | "sampler3D") {
+            if let Some(name) = tokens.get(index + 1) { sampler_parameters.push(name); }
+        } else if parens == 0 && braces == 0 && matches!(token.as_str(), "sampler" | "sampler2D" | "sampler3D") {
+            if let Some(name) = tokens.get(index + 1).filter(|n| !crate::is_milkrust_main_sampler(n)) {
+                if !names.contains(name) { names.push(name.clone()); }
+            }
+        }
+    }
+    // Only referenced resources are reflected, never arbitrary identifiers in
+    // unknown function calls. Sampler parameters belong to their function.
+    for call in tokens.windows(4) {
+        if ["tex", "tex2D", "tex2Dlod", "tex2Dbias", "tex2Dgrad", "tex2Dproj", "tex3D", "tex3Dlod", "tex3Dbias"].contains(&call[0].as_str())
+            && call[1] == "(" && call[3] == "," && !crate::is_milkrust_main_sampler(&call[2])
+            && !sampler_parameters.contains(&&call[2]) && !names.contains(&call[2]) {
+            names.push(call[2].clone());
+        }
+    }
+    for (index, token) in tokens.iter().enumerate() {
+        if functions.contains(token) && tokens.get(index + 1).map(String::as_str) == Some("(") {
+            let mut depth = 1;
+            for argument in tokens.iter().skip(index + 2) {
+                if argument == "(" { depth += 1; }
+                if argument == ")" { depth -= 1; if depth == 0 { break; } }
+                if argument.starts_with("sampler_") && !sampler_parameters.contains(&argument)
+                    && !crate::is_milkrust_main_sampler(argument) && !names.contains(argument) {
+                    names.push(argument.clone());
+                }
+            }
         }
     }
     for level in 1..=3 {
@@ -44,6 +89,33 @@ pub(crate) fn compile(source: &str, legacy_feedback: bool) -> Result<String, Str
         return Err("Shader uses a reserved compiler identifier".into());
     }
     for token in &mut tokens { if let Some(alias) = aliases.get(token) { *token = alias.clone(); } }
+    // Sampler declarations saved in a preamble are represented by the exact
+    // host binding below. Remove only complete, top-level bound declarations.
+    let mut clean = Vec::new();
+    let mut index = 0;
+    let mut depth = 0i32;
+    let mut parens = 0i32;
+    while index < tokens.len() {
+        let token = &tokens[index];
+        if depth == 0 && parens == 0 && matches!(token.as_str(), "sampler" | "sampler2D" | "sampler3D")
+            && tokens.get(index + 1).is_some_and(|name| name == "previousFrame" || name.starts_with("shaderTexture")) {
+            let name = &tokens[index + 1];
+            let expected_volume = name.strip_prefix("shaderTexture").and_then(|n| n.parse::<usize>().ok())
+                .and_then(|n| samplers.get(n)).is_some_and(|n| crate::resources::texture_kind(n).is_volume());
+            if (token == "sampler3D") != expected_volume && token != "sampler" { return Err("Sampler dimension disagrees with its bound texture".into()); }
+            index += 2;
+            while index < tokens.len() && tokens[index] != ";" {
+                if tokens[index] == "{" || tokens[index] == "=" || tokens[index] == "," { return Err("Custom sampler state declarations are unsupported".into()); }
+                index += 1;
+            }
+            if index == tokens.len() { return Err("Unterminated sampler declaration".into()); }
+            index += 1; continue;
+        }
+        if token == "{" { depth += 1; } else if token == "}" { depth -= 1; }
+        if token == "(" { parens += 1; } else if token == ")" { parens -= 1; }
+        clean.push(token.clone()); index += 1;
+    }
+    tokens = clean;
     let explicit_entry = tokens.iter().any(|t| t == "milkrust_user_entry");
     let mut preamble = String::from("float3 color; sampler2D previousFrame; float feedback; float outputAlpha; float time; float sampleRate; float fftBins[64]; float waveformBins[64]; float2 resolution; float2 pixelSize; float4 hlslAspect; float4 texsize;\n");
     for name in ["bass", "bass_att", "mid", "mid_att", "treb", "treb_att"] { preamble.push_str(&format!("float {name};\n")); }
@@ -107,7 +179,7 @@ fn adapt_output(glsl: &str, feedback: bool) -> Result<String, String> {
         let trimmed = line.trim();
         if trimmed.starts_with("in ") {
             if trimmed == "in vec2 frag_TEXCOORD0;" {
-                output.push_str("in vec2 uv;\n#define frag_TEXCOORD0 uv\n");
+                output.push_str("in vec2 uv;\nvec2 milkrust_input_uv() { return uv; }\n#define frag_TEXCOORD0 milkrust_input_uv()\n");
                 has_uv = true; continue;
             }
             return Err(format!("Unsupported pixel shader input: {trimmed}"));
@@ -146,11 +218,13 @@ mod tests {
     }
     #[test]
     fn preserves_entry_input_and_rejects_unbound_semantics() {
-        assert!(compile("float4 main(float2 p:TEXCOORD0):COLOR0 { return float4(p,0,1); }", false).is_ok());
+        assert!(compile("float4 main(float2 uv:TEXCOORD0):COLOR0 { return float4(uv,0,1); }", false).is_ok());
         assert!(compile("float4 main(float3 p:NORMAL):COLOR0 { return float4(p,1); }", false).is_err());
     }
     #[test]
     fn discovers_expanded_sampler_bindings() {
         assert_eq!(sampler_names("#define T sampler_cloud\nshader_body { ret=tex2D(T,uv).rgb; }").unwrap(), vec!["sampler_cloud"]);
+        assert!(sampler_names("ret=mytex2D(sampler_ignored,uv);").unwrap().is_empty());
+        assert_eq!(sampler_names("float3 sample(sampler2D s,float2 p){return tex2D(s,p).rgb;} shader_body {ret=sample(sampler_cloud,uv);}").unwrap(), vec!["sampler_cloud"]);
     }
 }

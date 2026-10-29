@@ -27,3 +27,6 @@ done
   -o "$out_dir/milkrust_hlsl.js"
 cp "$vendor/LICENSE" "$out_dir/HLSLParser-LICENSE.txt"
 cp "$vendor/UPSTREAM.json" "$out_dir/HLSLParser-UPSTREAM.json"
+emscripten_root="$(cd "$(dirname "$(command -v "$emxx")")" && pwd)"
+cp "$emscripten_root/LICENSE" "$out_dir/Emscripten-LICENSE.txt"
+cp "$emscripten_root/system/lib/libcxx/LICENSE.TXT" "$out_dir/libcxx-LICENSE.txt"

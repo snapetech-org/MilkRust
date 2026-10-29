@@ -634,4 +634,3 @@ void HLSLTokenizer::GetTokenName(int token, char buffer[s_maxIdentifier])
 }
 
 }
-

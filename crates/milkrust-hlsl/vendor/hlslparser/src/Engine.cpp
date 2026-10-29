@@ -7,6 +7,7 @@
 #include <chrono>
 #include <algorithm>
 #include <string>
+#include <memory>
 
 
 namespace M4 {
@@ -183,18 +184,19 @@ static char *mprintf_valist(int size, const char *fmt, va_list args) {
 const char * StringPool::AddStringFormatList(const char * format, va_list args) {
     va_list tmp;
     va_copy(tmp, args);
-    const char * string = mprintf_valist(256, format, tmp);
+    std::unique_ptr<char, void(*)(void*)> owned(mprintf_valist(256, format, tmp), free);
+    const char * string = owned.get();
     va_end(tmp);
 
     for (int i = 0; i < stringArray.GetSize(); i++) {
         CheckBudget();
         if (String_Equal(stringArray[i], string)) {
-            free((void*)string);
             return stringArray[i];
         }
     }
 
-    try { stringArray.PushBack(string); } catch (...) { free((void*)string); throw; }
+    stringArray.PushBack(string);
+    owned.release();
     return string;
 }
 
@@ -216,4 +218,3 @@ bool StringPool::GetContainsString(const char * string) const {
 }
 
 } // M4 namespace
-

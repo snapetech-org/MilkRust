@@ -2433,7 +2433,8 @@ pub fn get_milkrust_texture_name_aliases(value: &str) -> Vec<String> {
         .map(|(stem, _)| stem.to_string())
         .unwrap_or_else(|| basename.clone());
     let mut aliases = Vec::new();
-    for alias in [normalized, basename, stem] {
+    let resource_name = resources::base_name(&stem).to_string();
+    for alias in [normalized, basename, stem, resource_name] {
         if !alias.is_empty() && !aliases.contains(&alias) {
             aliases.push(alias);
         }
@@ -4107,7 +4108,12 @@ pub fn analyze_milkrust_preset_compatibility(
     ] {
         if source.trim().is_empty() { continue; }
         let analysis = analyze_milkrust_shader_compatibility(source);
-        if !analysis.supported { shader_sections.push(section.to_string()); }
+        if !analysis.supported {
+            shader_sections.push(section.to_string());
+            if let Some(error) = milkrust_shader_compiler_error(source) {
+                shader_diagnostics.push(format!("{section}:compiler:{}", error.replace(['\n', '\r'], " ")));
+            }
+        }
         shader_diagnostics.extend(analysis.issues.into_iter()
             .map(|issue| format!("{section}:{}", issue.code())));
     }
@@ -5173,6 +5179,9 @@ fn create_translated_milkrust_fragment_shader_with_output(source: &str, legacy_f
     let Some(program) = parse_milkrust_shader_program(source) else {
         return hlsl::compile(source, legacy_feedback).unwrap_or_default();
     };
+    if program.texture_samplers.iter().any(|name| resources::texture_kind(name).is_volume()) {
+        return hlsl::compile(source, legacy_feedback).unwrap_or_default();
+    }
     let uniforms = (1..=64)
         .map(|index| format!("uniform float q{index};"))
         .chain(
@@ -5526,6 +5535,12 @@ pub fn analyze_milkrust_shader_compatibility(source: &str) -> MilkRustShaderAnal
         }
         MilkRustShaderAnalysis { supported: false, issues }
     }
+}
+
+/// Bounded compiler diagnostics for the actual native/WebGL fallback path.
+pub fn milkrust_shader_compiler_error(source: &str) -> Option<String> {
+    if source.trim().is_empty() || parse_milkrust_shader_program(source).is_some() { return None; }
+    hlsl::compile(source, false).err()
 }
 
 pub fn analyze_milkrust_shader_support(source: &str) -> MilkRustShaderSupport {

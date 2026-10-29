@@ -23,9 +23,22 @@ jobs:
           python3 tools/build_cleared_pack_candidates.py
           --source-revision "$SOURCE_REVISION"
           --output "$RUNNER_TEMP/preset-pack-review-candidates"
+      - name: Package original CC0 studies and pending qualification inventories
+        env:
+          SOURCE_REVISION: ${{ github.sha }}
+        run: >-
+          python3 tools/build_original_pack_candidates.py
+          --source-revision "$SOURCE_REVISION"
+          --output "$RUNNER_TEMP/original-pack-candidates"
       - uses: actions/upload-artifact@v7
         with:
           name: preset-pack-review-candidates-${{ github.sha }}
           path: ${{ runner.temp }}/preset-pack-review-candidates/
+          if-no-files-found: error
+          retention-days: 14
+      - uses: actions/upload-artifact@v7
+        with:
+          name: original-pack-candidates-${{ github.sha }}
+          path: ${{ runner.temp }}/original-pack-candidates/
           if-no-files-found: error
           retention-days: 14

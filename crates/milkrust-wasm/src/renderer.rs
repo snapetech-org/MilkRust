@@ -447,10 +447,10 @@ impl MilkRustWebGlRenderer {
         );
         self.gl.disable(web_sys::WebGl2RenderingContext::BLEND);
         if frame.warp_mesh.is_some() {
-            self.draw_warp_mesh(frame, drawing_width, drawing_height, warp_program.as_ref(), time);
+            self.draw_warp_mesh(frame, drawing_width, drawing_height, warp_program.as_ref(), time)?;
         } else if let Some(program) = warp_program {
             self.draw_translated_quad(&program, frame, &frame.shader_stages.warp,
-                time, drawing_width, drawing_height, true, 1.0, TransitionUniforms::fade());
+                time, drawing_width, drawing_height, true, 1.0, TransitionUniforms::fade())?;
         } else {
             self.draw_feedback_quad(frame, time, drawing_width, drawing_height, false, 1.0, TransitionUniforms::fade());
         }
@@ -480,7 +480,7 @@ impl MilkRustWebGlRenderer {
         }
         if let Some(program) = composite_program {
             self.draw_translated_quad(&program, frame, &frame.shader_stages.composite,
-                time, drawing_width, drawing_height, false, output_alpha, transition);
+                time, drawing_width, drawing_height, false, output_alpha, transition)?;
         } else { self.draw_feedback_quad(
             frame,
             time,
@@ -501,12 +501,12 @@ impl MilkRustWebGlRenderer {
     }
 
     fn draw_warp_mesh(&self, frame: &MilkRustFrame, drawing_width: i32, drawing_height: i32,
-        translated: Option<&web_sys::WebGlProgram>, time: f64) {
+        translated: Option<&web_sys::WebGlProgram>, time: f64) -> Result<(), JsValue> {
         let Some(mesh) = frame.warp_mesh.as_ref() else {
-            return;
+            return Err(JsValue::from_str("Invalid or absent warp mesh"));
         };
         if mesh.positions.len() < 6 || mesh.positions.len() != mesh.source_uvs.len() {
-            return;
+            return Err(JsValue::from_str("Invalid or absent warp mesh"));
         }
         let program = translated.unwrap_or(&self.warp_program);
         self.gl.use_program(Some(program));
@@ -570,7 +570,7 @@ impl MilkRustWebGlRenderer {
         }
         if translated.is_some() {
             self.set_translated_uniforms(program, frame, &frame.shader_stages.warp,
-                time, drawing_width, drawing_height, true, 1.0, TransitionUniforms::fade());
+                time, drawing_width, drawing_height, true, 1.0, TransitionUniforms::fade())?;
         } else {
         let (r, g, b) = frame.wave_color;
         self.gl.uniform3f(
@@ -591,12 +591,13 @@ impl MilkRustWebGlRenderer {
             0,
             (positions.len() / 2) as i32,
         );
+        Ok(())
     }
 
     fn prepare_stages(&self, frame: &MilkRustFrame) -> Result<(Option<web_sys::WebGlProgram>, Option<web_sys::WebGlProgram>), JsValue> {
         let units = self.max_texture_units;
-        if frame.shader_stages.warp.texture_samplers.len() + 2 > units ||
-            frame.shader_stages.composite.texture_samplers.len() + 2 > units {
+        if frame.shader_stages.warp.texture_samplers.len() + 1 > units ||
+            frame.shader_stages.composite.texture_samplers.len() + 1 > units {
             return Err(JsValue::from_str("Preset exceeds the GPU texture-unit limit"));
         }
         let warp = self.translated_program_for(&frame.shader_stages.warp, &self.translated_warp_program,
@@ -649,7 +650,7 @@ impl MilkRustWebGlRenderer {
         warp: bool,
         output_alpha: f32,
         transition: TransitionUniforms,
-    ) {
+    ) -> Result<(), JsValue> {
         let (r, g, b) = frame.wave_color;
         let feedback = (1.0 - frame.background_alpha).clamp(0.0, 1.0) as f32;
         let uniform = |name: &str| self.gl.get_uniform_location(program, name);
@@ -665,14 +666,17 @@ impl MilkRustWebGlRenderer {
             self.gl.uniform4f(uniform(name).as_ref(), v[0], v[1], v[2], v[3]);
         }
         for index in 0..stage.texture_samplers.len() {
-            let texture_unit = index + 2;
+            let texture_unit = index + 1;
             self.gl
                 .active_texture(web_sys::WebGl2RenderingContext::TEXTURE0 + texture_unit as u32);
             let name = &stage.texture_samplers[index];
-            let (texture, target) = self.shader_resources.borrow().texture(name)
-                .or_else(|| self.named_texture_for(name).ok().flatten()
-                    .map(|t| (t, web_sys::WebGl2RenderingContext::TEXTURE_2D)))
-                .unwrap_or_else(|| (self.placeholder_texture.clone(), web_sys::WebGl2RenderingContext::TEXTURE_2D));
+            let builtin = self.shader_resources.borrow().texture(name);
+            let (texture, target) = match builtin {
+                Some(binding) => binding,
+                None => (self.named_texture_for(name)?.ok_or_else(||
+                    JsValue::from_str(&format!("Missing shader texture: {name}")))?,
+                    web_sys::WebGl2RenderingContext::TEXTURE_2D),
+            };
             self.gl.bind_texture(target, Some(&texture));
             if !milkrust_core::resources::texture_kind(name).is_builtin() { self.gl.generate_mipmap(target); }
             self.shader_resources.borrow().bind_sampler(texture_unit as u32, name);
@@ -745,6 +749,7 @@ impl MilkRustWebGlRenderer {
             if name != "preset_seed" { self.gl.uniform1f(uniform(name).as_ref(), *value as f32); }
         }
 
+        Ok(())
     }
 
     fn draw_translated_quad(
@@ -758,7 +763,7 @@ impl MilkRustWebGlRenderer {
         warp: bool,
         output_alpha: f32,
         transition: TransitionUniforms,
-    ) {
+    ) -> Result<(), JsValue> {
         self.gl.use_program(Some(program));
         self.gl.bind_buffer(
             web_sys::WebGl2RenderingContext::ARRAY_BUFFER,
@@ -781,9 +786,10 @@ impl MilkRustWebGlRenderer {
             self.gl.clear_color(0.0, 0.0, 0.0, 1.0);
             self.gl.clear(web_sys::WebGl2RenderingContext::COLOR_BUFFER_BIT);
         }
-        self.set_translated_uniforms(program, frame, stage, time, drawing_width, drawing_height, warp, output_alpha, transition);
+        self.set_translated_uniforms(program, frame, stage, time, drawing_width, drawing_height, warp, output_alpha, transition)?;
         self.gl
             .draw_arrays(web_sys::WebGl2RenderingContext::TRIANGLE_STRIP, 0, 4);
+        Ok(())
     }
 
     fn draw_feedback_quad(

@@ -50,6 +50,8 @@ static const char* GetTypeName(const HLSLType& type)
 	case HLSLBaseType_Float2x2:     return "mat2";
     case HLSLBaseType_Float3x3:     return "mat3";
     case HLSLBaseType_Float4x4:     return "mat4";
+    case HLSLBaseType_Float4x3:     return "mat3x4";
+    case HLSLBaseType_Float4x2:     return "mat2x4";
     case HLSLBaseType_Half:         return "float";
     case HLSLBaseType_Half2:        return "vec2";
     case HLSLBaseType_Half3:        return "vec3";
@@ -57,6 +59,8 @@ static const char* GetTypeName(const HLSLType& type)
 	case HLSLBaseType_Half2x2:      return "mat2";
     case HLSLBaseType_Half3x3:      return "mat3";
     case HLSLBaseType_Half4x4:      return "mat4";
+    case HLSLBaseType_Half4x3:      return "mat3x4";
+    case HLSLBaseType_Half4x2:      return "mat2x4";
     case HLSLBaseType_Bool:         return "bool";
 	case HLSLBaseType_Bool2:        return "bvec2";
 	case HLSLBaseType_Bool3:        return "bvec3";
@@ -77,7 +81,7 @@ static const char* GetTypeName(const HLSLType& type)
     case HLSLBaseType_Sampler2DMS:  return "sampler2DMS";
     case HLSLBaseType_Sampler2DArray:  return "sampler2DArray";
     case HLSLBaseType_UserDefined:  return type.typeName;
-    default: return "?";
+    default: throw std::invalid_argument("Unsupported HLSL output type");
     }
 }
 
@@ -1974,4 +1978,3 @@ const char* GLSLGenerator::GetBuiltInSemantic(const char* semantic, AttributeMod
 }
 
 }
-

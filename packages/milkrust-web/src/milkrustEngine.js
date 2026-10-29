@@ -319,29 +319,36 @@ export const loadMilkRustPackPlugins = async (
 
 let rustModulePromise;
 let rustModuleInitPromise;
-let hlslInitPromise;
+const hlslInitializations = new WeakMap();
 
 const loadMilkRustModule = async (modulePath = globalThis.__milkrustModulePath || '/milkrust_wasm.js') => {
-  if (globalThis.__milkrustModule) {
-    return globalThis.__milkrustModule;
+  let rustModule = globalThis.__milkrustModule;
+  if (!rustModule) {
+    if (!rustModulePromise) {
+      rustModulePromise = import(/* @vite-ignore */ modulePath).catch((error) => {
+        rustModulePromise = undefined;
+        throw error;
+      });
+    }
+    rustModule = await rustModulePromise;
+    if (typeof rustModule.default === 'function' && !rustModuleInitPromise) {
+      const wasmPath = modulePath.replace(/\.js(?:\?.*)?$/, '_bg.wasm');
+      rustModuleInitPromise = Promise.resolve(rustModule.default({ module_or_path: wasmPath })).catch((error) => {
+        rustModuleInitPromise = undefined;
+        throw error;
+      });
+    }
+    await rustModuleInitPromise;
   }
-  if (!rustModulePromise) {
-    rustModulePromise = import(/* @vite-ignore */ modulePath);
-  }
-  const rustModule = await rustModulePromise;
-  if (typeof rustModule.default === 'function' && !rustModuleInitPromise) {
-    const wasmPath = modulePath.replace(/\.js(?:\?.*)?$/, '_bg.wasm');
-    rustModuleInitPromise = rustModule.default({ module_or_path: wasmPath });
-  }
-  await rustModuleInitPromise;
-  if (typeof rustModule.initializeHlslCompiler === 'function' && !hlslInitPromise) {
+  if (typeof rustModule.initializeHlslCompiler === 'function' && !hlslInitializations.has(rustModule)) {
     const compilerUrl = new URL('milkrust_hlsl.js', absoluteMilkRustUrl(modulePath)).href;
-    hlslInitPromise = rustModule.initializeHlslCompiler(compilerUrl).catch((error) => {
-      hlslInitPromise = undefined;
+    const ready = Promise.resolve().then(() => rustModule.initializeHlslCompiler(compilerUrl)).catch((error) => {
+      hlslInitializations.delete(rustModule);
       throw error;
     });
+    hlslInitializations.set(rustModule, ready);
   }
-  await hlslInitPromise;
+  await hlslInitializations.get(rustModule);
   return rustModule;
 };
 

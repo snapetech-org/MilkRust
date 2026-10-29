@@ -35,7 +35,9 @@ community-preset compatibility result.
 
 Source is bounded to 128 KiB at import, 256 KiB after preprocessing; tokens,
 macro expansions, conditional depth, compiler recursion, cumulative allocation,
-operations and elapsed compilation time are bounded. Diagnostics are capped at
+operations and elapsed compilation time are bounded. Array declarations require
+constant bounds of 1–4096 elements; integer overflow and division by zero in
+constant evaluation return errors across the ABI. Diagnostics are capped at
 8 KiB and compiler output at 1 MiB (renderer input remains 256 KiB). A bounded
 per-thread cache avoids repeat native compilation. GPU loop execution shares a
 16,384-iteration counter per fragment and discards fragments exceeding it.
@@ -51,7 +53,8 @@ parity for noise, blur, uniforms and `.milk2` patterns remains unqualified.
 
 No build or test was executed during this source-only implementation. Run the
 crate tests, native host/GL corpus and browser WASM compiler corpus on approved
-private ephemeral JIT runners. Native cross builds now require a target C++11
+private ephemeral JIT runners. Desktop contexts require OpenGL 3.3 (macOS selects 4.1); GLES hosts require ES 3.
+Native cross builds now require a target C++11
 compiler and runtime in addition to Rust. Browser runners require Emscripten
 3.1.64. Preserve every parser, driver, black-frame and image-difference failure
 in the qualification report. Do not promote broader packs based only on source

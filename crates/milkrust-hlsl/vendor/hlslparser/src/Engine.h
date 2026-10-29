@@ -21,8 +21,8 @@
 
 // Engine/Assert.h
 
-#define ASSERT(...)
-#define assert(...)
+#define ASSERT(condition) do { if (!(condition)) throw std::runtime_error("Unsupported or inconsistent HLSL syntax"); } while (false)
+#define assert(condition) ASSERT(condition)
 
 namespace M4 {
 
@@ -217,4 +217,3 @@ struct StringPool {
 } // M4 namespace
 
 #endif // ENGINE_H
-

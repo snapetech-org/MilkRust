@@ -11,8 +11,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
-    runs-on: ${{ matrix.os == 'ubuntu-latest' && fromJSON(format('{{"group":"ng-shared-main-jit","labels":["self-hosted","linux","x64","ng-shared-main-milkrust","ng-main-run-{0}","gha-{0}-{1}-test"]}}', github.run_id, strategy.job-index)) || fromJSON(format('{{"group":"ng-shared-main-jit","labels":["self-hosted","macOS","ARM64","ng-shared-main-milkrust","ng-main-run-{0}","gha-{0}-{1}-test"]}}', github.run_id, strategy.job-index)) }}
+        os: [linux-x64, macos-arm64]
+    runs-on: ${{ matrix.os == 'linux-x64' && fromJSON(format('{{"group":"ng-shared-main-jit","labels":["self-hosted","linux","x64","ng-shared-main-milkrust","ng-main-run-{0}","gha-{0}-{1}-test"]}}', github.run_id, strategy.job-index)) || fromJSON(format('{{"group":"ng-shared-main-jit","labels":["self-hosted","macOS","ARM64","ng-shared-main-milkrust","ng-main-run-{0}","gha-{0}-{1}-test"]}}', github.run_id, strategy.job-index)) }}
     steps:
       - uses: actions/checkout@v6
 
@@ -31,11 +31,15 @@ jobs:
       - name: Install wasm-bindgen CLI
         run: cargo install wasm-bindgen-cli --version 0.2.120 --locked
 
+      - name: Install pinned HLSL browser toolchain
+        shell: bash
+        run: bash tools/setup-hlsl-toolchain.sh
+
       - name: Build browser WASM package
         run: npm run build:wasm
 
       - name: Install Playwright browser (Linux only)
-        if: matrix.os == 'ubuntu-latest'
+        if: matrix.os == 'linux-x64'
         run: npx playwright install --with-deps chromium
 
       - name: Run compliance audit
@@ -48,11 +52,12 @@ jobs:
         run: cargo check -p milkrust-wasm --target wasm32-unknown-unknown
 
       - name: Run MilkRust tool checks
-        if: matrix.os == 'ubuntu-latest'
+        if: matrix.os == 'linux-x64'
         run: |
           npm run test:compatibility
           npm run test:performance
           npm run test:smoke
+          npm run test:hlsl
           npm run desktop:probe:ci
           npm run desktop:plugin-report:ci
 
@@ -89,6 +94,9 @@ jobs:
           cache: npm
       - name: Install wasm-bindgen CLI
         run: cargo install wasm-bindgen-cli --version 0.2.120 --locked
+      - name: Install pinned HLSL browser toolchain
+        shell: bash
+        run: bash tools/setup-hlsl-toolchain.sh
       - name: Build WASM package
         run: npm run build:wasm
       - name: Check WASM size budget (1.0 MB)
@@ -161,6 +169,10 @@ jobs:
 
       - name: Install wasm-bindgen CLI
         run: cargo install wasm-bindgen-cli --version 0.2.120 --locked
+
+      - name: Install pinned HLSL browser toolchain
+        shell: bash
+        run: bash tools/setup-hlsl-toolchain.sh
 
       - name: Build browser WASM package
         run: npm run build:wasm
