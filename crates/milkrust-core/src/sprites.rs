@@ -128,6 +128,9 @@ fn definition(index: u32, records: &BTreeMap<String, String>) -> Result<Definiti
         };
         if !values.contains_key(variable) { return Err(format!("Unsupported embedded sprite field: {key}")); }
         let number = value.parse::<f64>().ok().filter(|v| v.is_finite() && v.abs() <= 1.0e9).ok_or("Non-finite or oversized sprite value")?;
+        // A saved SpriteRot=1 is the UI's neutral default, not one radian.
+        // Explicit script `rot` still uses radians and overrides this seed.
+        let number = if key == "spriterot" && number == 1.0 { 0.0 } else { number };
         values.insert(variable.into(), MilkRustValue::Number(number));
     }
     let join = |lines: BTreeMap<u32, &str>| lines.into_values().collect::<Vec<_>>().join("\n");
@@ -220,6 +223,7 @@ impl Runtime {
             for key in ["x", "y", "sx", "sy", "rot", "speed", "repeatx", "repeaty", "r", "g", "b", "a", "burn", "done", "flipx", "flipy"] {
                 if !value(key).is_finite() { return Err(format!("Non-finite sprite variable: {key}")); }
             }
+            let rotation = (value("rot") + value("speed").clamp(-1000.0, 1000.0) / fps).rem_euclid(std::f64::consts::TAU);
             frames.push(Frame {
                 texture: definition.texture.clone(), color_key: definition.color_key,
                 blend_mode: value("blendmode") as i32, layer: value("layer") as usize, burn: value("burn") != 0.0,
@@ -229,12 +233,11 @@ impl Runtime {
                 scale: [(value("sx") + definition.size_offset[0]).clamp(-1000.0, 1000.0) * if value("flipx") == 0.0 { 1.0 } else { -1.0 },
                     (value("sy") + definition.size_offset[1]).clamp(-1000.0, 1000.0) * if value("flipy") == 0.0 { 1.0 } else { -1.0 }],
                 repeat: [value("repeatx").clamp(0.01, 100.0), value("repeaty").clamp(0.01, 100.0)],
-                rotation: value("rot").rem_euclid(std::f64::consts::TAU),
+                rotation,
             });
             // The final frame may burn before the instance is retired.
             instance.dead = value("done") != 0.0;
-            let rotation = value("rot") + value("speed").clamp(-1000.0, 1000.0) / fps;
-            instance.scope.insert("rot".into(), MilkRustValue::Number(rotation.rem_euclid(std::f64::consts::TAU)));
+            instance.scope.insert("rot".into(), MilkRustValue::Number(rotation));
         }
         frames.sort_by_key(|frame| frame.layer);
         self.frame = self.frame.saturating_add(1);
@@ -255,11 +258,27 @@ uniform vec3 spriteColorKey;
 uniform int spriteBlend;
 in vec2 uv;
 out vec4 outColor;
+vec4 sprite_texel(ivec2 point, ivec2 size) {
+    point = ((point % size) + size) % size;
+    vec4 color = texelFetch(spriteImage, point, 0);
+    if (all(lessThanEqual(abs(color.rgb - spriteColorKey), vec3(0.5 / 255.0)))) color.a = 0.0;
+    return color;
+}
+vec4 sprite_sample(vec2 coordinate) {
+    // Apply the key to source texels before linear filtering, as at decode.
+    // Keep ordinary RGBA interpolation, including the source's hidden RGB.
+    ivec2 size = textureSize(spriteImage, 0);
+    vec2 position = coordinate * vec2(size) - vec2(0.5);
+    ivec2 origin = ivec2(floor(position));
+    vec2 weight = fract(position);
+    return mix(mix(sprite_texel(origin,size), sprite_texel(origin+ivec2(1,0),size), weight.x),
+        mix(sprite_texel(origin+ivec2(0,1),size), sprite_texel(origin+ivec2(1,1),size), weight.x), weight.y);
+}
 void main() {
-    vec4 sampleColor = texture(spriteImage, uv);
+    vec4 sampleColor = sprite_sample(uv);
     vec4 background = texture(spriteBackground, gl_FragCoord.xy / spriteResolution);
     vec3 raw = sampleColor.rgb;
-    if (sampleColor.a <= 0.0 || all(lessThanEqual(abs(raw - spriteColorKey), vec3(0.5 / 255.0)))) discard;
+    if (sampleColor.a <= 0.0) discard;
     vec3 src = raw * spriteTint.rgb;
     vec3 dst = background.rgb;
     float alpha = sampleColor.a * spriteTint.a;
@@ -268,7 +287,6 @@ void main() {
     else if (spriteBlend == 2) result = dst + src * spriteTint.a;
     else if (spriteBlend == 3) result = raw * raw + dst * (vec3(1.0) - raw);
     else if (spriteBlend == 4) {
-        if (all(lessThanEqual(abs(raw - spriteColorKey), vec3(0.5 / 255.0)))) discard;
         result = mix(dst, src, alpha);
     }
     else if (spriteBlend == 5) result = dst * src;
@@ -289,6 +307,15 @@ mod tests {
         format!("[SPRITE2_BEGIN]\nSpriteName=sprites/burst.png\n{records}\n[SPRITE2_END]\n")
     }
 
+    #[test]
+    fn neutral_saved_rotation_and_speed_do_not_accumulate_elapsed_twice() {
+        let definitions=extract(&block("SpriteRot=1\nSpriteSpeed=1"),true).unwrap().definitions;
+        let mut runtime=Runtime::default();
+        let first=runtime.render(&definitions,&BTreeMap::new(),0.0,0.0).unwrap();
+        let second=runtime.render(&definitions,&BTreeMap::new(),0.5,0.0).unwrap();
+        assert!((first[0].rotation-1.0/60.0).abs()<1.0e-9);
+        assert!((second[0].rotation-1.0/60.0-0.5).abs()<1.0e-9);
+    }
     #[test]
     fn blocks_do_not_leak_into_preset_equations_and_last_index_wins() {
         let source = format!("name=Host\n{}{}zoom=1\n", block("init_1=x=0;"), block("init_1=x=1;"));

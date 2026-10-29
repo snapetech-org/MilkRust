@@ -19,9 +19,10 @@ load, preventing short-lived sprites from expiring before their first draw.
 Saved image offsets and scale offsets remain separate from script `x/y/sx/sy`,
 so a script assignment does not erase them. Signed scales and flip variables
 mirror the quad. Image aspect, rotation, display aspect and repeated UVs are
-shared Rust geometry. SpriteSpeed supplies angular motion. SpriteRot is currently
-interpreted as an initial angle; MilkDrop3's UI rotation field needs reference
-comparison, particularly files that store the UI default value 1.
+shared Rust geometry. SpriteSpeed advances script rotation once by speed/fps
+before each draw. Saved SpriteRot=1 is treated as the observed neutral UI default;
+other saved values retain the initial-angle mapping. Non-default UI rotation
+semantics still need a MilkDrop3 reference comparison.
 
 Both GPU hosts use the same fragment source, sampling a distinct destination
 snapshot for each sprite. They never sample the current draw attachment. Keyed
@@ -29,8 +30,10 @@ or fully transparent pixels preserve the destination. The saved blend IDs have
 explicit arithmetic: alpha, decal, additive, source-color, color-key,
 multiplicative, destination times inverse source, inverted source, cut-off,
 darken and double-additive vivid. The six extended names do not all have their
-conventional image-editor meaning. Filtering at color-key boundaries still
-requires reference comparison against keyed-at-decode implementations.
+conventional image-editor meaning. Color keys apply to each source texel before the shared manual bilinear sample,
+with normal RGBA interpolation and repeated coordinates. This removes key-color
+bleed caused by comparing only the already filtered sample. Alpha/filter raster
+parity still requires reference comparison.
 
 Burning layers 1–4 enter each preset's feedback before its composite shader.
 Burning layer 0 stamps feedback after composite, becoming visible through the

@@ -10,6 +10,18 @@ GPU capture or device run was performed for this source-only continuation.
 - Standard numbered `warp_N`/`comp_N` shaders, initialization ordering, indexed
   shape/wave/sprite keys, bounded input and explicit read/encoding/parse failures.
   The corpus denominator retains unreadable and unsupported files.
+- Saved sprites have bounded independent equations/lifetimes, relative texture
+  dependencies, transforms, eleven blend modes, burn/display layers and keyed
+  texels before linear filtering. WebGL retains frames during image admission.
+  See [sprite semantics and reference limits](docs/EMBEDDED_SPRITES.md).
+- Classic display controls and full feedback-coordinate transforms reach both
+  hosts. All nine classic wave modes, stereo PCM, bounded custom point inputs,
+  point colors, portable dots/thick strokes and source regressions are present.
+  See [waveforms](docs/WAVEFORMS.md) and [classic controls](docs/CLASSIC_RENDERING.md).
+- Custom-object frame/point state is isolated; init t registers, private variables,
+  q inputs/global memory, shape instancing and texture gradients have explicit
+  paths. Ordered drawing and feedback-derived motion vectors are shared across
+  native/WebGL. See [state and drawing](docs/SCENE_STATE.md).
 - Stateful EEL execution with shared work/depth budgets, lazy branches, checked
   failure propagation, one-time assignment target resolution and non-panicking
   integer remainders. CLI, desktop and browser callers consume checked frames.
@@ -62,11 +74,11 @@ GPU capture or device run was performed for this source-only continuation.
 - Exact MilkDrop HLSL environment and noise/blur/reference semantics, remaining
   legacy emitter gaps and shader-model coverage. Modern DirectX resources are
   outside the legacy pixel-shader profile; the separate WGSL path remains limited.
-- Reference-equivalent `.milk2` masks and embedded executable extensions. The
+- Reference-equivalent `.milk2` masks and remaining sprite-field/layer semantics. The
   available upstream source snapshot does not implement the saved wrapper; the
   independent masks are not a port of its unavailable saved-pattern renderer.
 - Complete format/EEL/texture behavior for every corpus file, including other legacy
-  encodings, sprite extensions and unsupported formats. UTF-8, BOM-marked UTF-16
+  encodings, other executable extensions and unsupported formats. UTF-8, BOM-marked UTF-16
   and Windows-1252 now have bounded decoders; preserve every remaining exception.
 - Compiler/driver hang containment, browser decoder allocation isolation,
   recovery qualification, long-run resource/performance and accessibility evidence.
