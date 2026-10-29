@@ -1,9 +1,9 @@
 //! Legacy feedback coordinate transform and unique-vertex equation evaluation.
 use std::collections::BTreeMap;
-use crate::{MilkRustValue, MilkRustWarpMesh, milkrust_scope_number, evaluate_milkrust_equations};
+use crate::{MilkRustValue, MilkRustWarpMesh, evaluate_milkrust_equations};
 
 fn number(scope: &BTreeMap<String, MilkRustValue>, key: &str, fallback: f64) -> Result<f64, String> {
-    let value = milkrust_scope_number(scope, key, fallback);
+    let value = scope.get(key).and_then(MilkRustValue::as_number).unwrap_or(fallback);
     if value.is_finite() { Ok(value) } else { Err(format!("Non-finite warp variable: {key}")) }
 }
 fn divisor(value: f64) -> f64 {
@@ -103,6 +103,11 @@ mod tests {
         assert!((stretched.source_uvs[0] - 0.125).abs() < 1.0e-12);
         let warped = mesh(&scope(&[("warp", 2.0), ("time", 1.0)]), "").unwrap();
         assert_ne!(warped.source_uvs, mesh(&scope(&[]), "").unwrap().source_uvs);
+    }
+    #[test]
+    fn nonfinite_equation_outputs_are_rejected_before_geometry() {
+        assert!(mesh(&scope(&[("dx", f64::NAN)]), "").is_err());
+        assert!(mesh(&scope(&[("zoom", f64::INFINITY)]), "").is_err());
     }
     #[test]
     fn equations_receive_downward_y_and_corner_normalized_radius() {

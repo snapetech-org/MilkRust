@@ -10,6 +10,8 @@ mod hlsl;
 pub mod resources;
 pub mod classic_keys;
 pub mod classic;
+pub mod audio;
+mod waveform;
 mod warp;
 use input_limits::validate_preset_source;
 
@@ -689,6 +691,7 @@ fn build_milkrust_frame_from_scope(
         mid,
         treble,
         waveform,
+        spectrum,
         [wave_r, wave_g, wave_b],
     );
     let textured_primitives = create_milkrust_frame_textured_primitives(
@@ -759,6 +762,7 @@ fn build_milkrust_frame_from_runtime_scope(
      treble: f64,
      waveform: &[f64],
      spectrum: &[f64],
+     stereo: Option<&audio::Stereo>,
  ) -> MilkRustFrame {
      let preset = milkrust_preset_from_document(preset_document);
      let wave_r = clamp_unit(milkrust_scope_number(scope, "wave_r", preset.wave_r));
@@ -784,6 +788,7 @@ fn build_milkrust_frame_from_runtime_scope(
          treble,
          waveform,
          spectrum,
+         stereo,
          [wave_r, wave_g, wave_b],
      );
      let q_registers = milkrust_q_registers(scope);
@@ -1223,6 +1228,7 @@ impl MilkRustRuntime {
             treble,
             waveform,
             spectrum,
+            None,
         );
         self.preset_document = Some(preset_document);
         frame
@@ -1231,6 +1237,7 @@ impl MilkRustRuntime {
 
 #[derive(Clone, Debug, Default)]
 pub struct MilkRustFrameSetRuntime {
+    stereo_audio: Option<audio::Stereo>,
     previous_time: Option<f64>,
     viewport: Option<(u32, u32)>,
     sprite_runtime: sprites::Runtime,
@@ -1244,6 +1251,17 @@ pub struct MilkRustFrameSetRuntime {
  }
 
 impl MilkRustFrameSetRuntime {
+    /// Optional stereo detail for the next frame only. The bounded shared
+    /// analyzer produces this data; legacy mono callers use the mono argument
+    /// for both channels, never stale data from a previous PCM frame.
+    pub fn set_stereo_audio(&mut self, audio: audio::Stereo) -> Result<(), String> {
+        if audio.left.iter().chain(&audio.right).chain(&audio.spectrum_left)
+            .chain(&audio.spectrum_right).any(|value| !value.is_finite()) {
+            return Err("Non-finite stereo audio".into());
+        }
+        self.stereo_audio = Some(audio);
+        Ok(())
+    }
     pub fn set_viewport(&mut self, width: u32, height: u32) -> Result<(), String> {
         if width == 0 || height == 0 || width > 4096 || height > 4096 || u64::from(width) * u64::from(height) > 8 * 1024 * 1024 {
             return Err("Runtime viewport exceeds its dimensions budget".into());
@@ -1386,6 +1404,7 @@ if self.source != source || self.preset_documents.is_empty() {
          let fps = self.previous_time.filter(|previous| time_seconds > *previous)
              .map_or(60.0, |previous| (1.0 / (time_seconds - previous)).clamp(1.0, 1000.0));
          self.previous_time = Some(time_seconds);
+         let stereo = self.stereo_audio.take();
          let preset_set = self.cached_preset_set.as_ref().unwrap();
          let title = milkrust_preset_set_title(preset_set);
          let transition_mode = milkrust_transition_mode(preset_set);
@@ -1458,6 +1477,7 @@ if self.source != source || self.preset_documents.is_empty() {
                  treble,
                  waveform,
                  spectrum,
+                 stereo.as_ref(),
              );
             entries.push(MilkRustCompositeFrame {
                 blend_alpha,
@@ -2232,6 +2252,9 @@ const MILKRUST_WAVE_VALUE_KEYS: &[&str] = &[
     "r",
     "samples",
     "scaling",
+    "sep",
+    "smoothing",
+    "usedots",
     "spectrum",
     "thick",
 ];
@@ -2341,42 +2364,10 @@ pub fn create_milkrust_custom_wave_vertices(
     samples: &[f64],
     frame_scope: &BTreeMap<String, MilkRustValue>,
 ) -> Vec<f64> {
-    let sample_count = milkrust_entry_number(wave, &["samples", "nsamples"], samples.len() as f64)
-        .floor()
-        .max(1.0) as usize;
-    let mut vertices = Vec::with_capacity(sample_count * 2);
-    for index in 0..sample_count {
-        let sample_index = if sample_count <= 1 {
-            0
-        } else {
-            (index * samples.len().saturating_sub(1)) / sample_count.saturating_sub(1)
-        };
-        let mut sample = samples.get(sample_index).copied().unwrap_or_default();
-        if sample > 1.0 {
-            sample /= 255.0;
-        }
-        let i = if sample_count <= 1 {
-            0.0
-        } else {
-            index as f64 / (sample_count - 1) as f64
-        };
-        let mut point_scope = frame_scope.clone();
-        point_scope.extend(classic_keys::scope(&wave.base_values));
-        point_scope.insert("i".to_string(), MilkRustValue::Number(i));
-        point_scope.insert("sample".to_string(), MilkRustValue::Number(sample));
-        if !wave.equations.point.trim().is_empty() {
-            if let Ok(next_scope) =
-                evaluate_milkrust_equations(&wave.equations.point, &point_scope)
-            {
-                point_scope = next_scope;
-            }
-        }
-        let x = milkrust_scope_number(&point_scope, "x", i) * 2.0 - 1.0;
-        let y = milkrust_scope_number(&point_scope, "y", sample) * 2.0 - 1.0;
-        vertices.push(x);
-        vertices.push(y);
+    match waveform::custom_geometry(wave, samples, samples, frame_scope, [1.0; 3]) {
+        Ok((vertices, _)) => vertices,
+        Err(error) => { milkrust_expr::limits::record_frame_error(&error); Vec::new() }
     }
-    vertices
 }
 
 pub fn create_milkrust_shape_vertices(shape: &MilkRustIndexedEntry) -> Vec<f64> {
@@ -3380,53 +3371,7 @@ pub fn create_milkrust_waveform_vertices(
     samples: &[f64],
     frame_scope: &BTreeMap<String, MilkRustValue>,
 ) -> Vec<f64> {
-    let count = samples.len();
-    if count < 2 {
-        return Vec::new();
-    }
-    let mode = milkrust_scope_number(frame_scope, "wave_mode", 0.0).floor() as i64;
-    let scale = milkrust_scope_number(frame_scope, "wave_scale", 1.0);
-    let scale = if scale == 0.0 { 1.0 } else { scale };
-    let smoothing = clamp_unit(milkrust_scope_number(frame_scope, "wave_smoothing", 0.0));
-    let center_x = milkrust_scope_number(frame_scope, "wave_x", 0.5) * 2.0 - 1.0;
-    let center_y = milkrust_scope_number(frame_scope, "wave_y", 0.5) * 2.0 - 1.0;
-    let mut vertices = Vec::with_capacity(count * 2);
-    for index in 0..count {
-        let sample = samples.get(index).copied().unwrap_or_default();
-        let smoothed = if smoothing > 0.0 && index > 0 {
-            samples.get(index - 1).copied().unwrap_or_default() * smoothing
-                + sample * (1.0 - smoothing)
-        } else {
-            sample
-        };
-        let progress = if count <= 1 {
-            0.0
-        } else {
-            index as f64 / (count - 1) as f64
-        };
-        let value = smoothed * scale;
-        match mode {
-            2 => {
-                vertices.push((center_x + value).clamp(-1.0, 1.0));
-                vertices.push(progress * 2.0 - 1.0);
-            }
-            3 => {
-                let angle = progress * std::f64::consts::TAU;
-                let radius = (0.35 + value * 0.18).clamp(0.0, 1.0);
-                vertices.push((center_x + angle.cos() * radius).clamp(-1.0, 1.0));
-                vertices.push((center_y + angle.sin() * radius).clamp(-1.0, 1.0));
-            }
-            1 => {
-                vertices.push(progress * 2.0 - 1.0);
-                vertices.push((center_y + value).clamp(-1.0, 1.0));
-            }
-            _ => {
-                vertices.push(progress * 2.0 - 1.0);
-                vertices.push((0.5 + value * 0.5).clamp(0.0, 1.0) * 2.0 - 1.0);
-            }
-        }
-    }
-    vertices
+    waveform::classic_vertices(samples, frame_scope)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -3438,6 +3383,7 @@ fn create_milkrust_frame_primitives(
     mid: f64,
     treble: f64,
     waveform: &[f64],
+    spectrum: &[f64],
     fallback_color: [f64; 3],
 ) -> Vec<MilkRustPrimitive> {
     let generated_samples = create_milkrust_audio_samples(time_seconds, bass, mid, treble, 192);
@@ -3447,24 +3393,7 @@ fn create_milkrust_frame_primitives(
         waveform
     };
     let mut primitives = classic::darken_center(frame_scope).into_iter().collect::<Vec<_>>();
-    let waveform_vertices = create_milkrust_waveform_vertices(samples, frame_scope);
-    let waveform_alpha = clamp_unit(milkrust_scope_number(frame_scope, "wave_a", 1.0));
-    if waveform_vertices.len() >= 4 && waveform_alpha > 0.0 {
-        primitives.push(MilkRustPrimitive {
-            additive: milkrust_scope_number(frame_scope, "wave_additive", milkrust_scope_number(frame_scope, "additivewave", 0.0)) != 0.0,
-            color: [
-                fallback_color[0],
-                fallback_color[1],
-                fallback_color[2],
-                waveform_alpha,
-            ],
-            mode: if milkrust_scope_number(frame_scope, "wave_usedots", milkrust_scope_number(frame_scope, "wave_dots", 0.0)) != 0.0 {
-                MilkRustPrimitiveMode::Points
-            } else { MilkRustPrimitiveMode::LineStrip },
-            vertex_colors: Vec::new(),
-            vertices: waveform_vertices,
-        });
-    }
+    primitives.extend(waveform::classic(samples, spectrum, None, frame_scope, fallback_color));
     for (prefix, inset, fallback_alpha) in [
         ("ob", 0.0, 0.0),
         (
@@ -3540,39 +3469,9 @@ fn create_milkrust_frame_primitives(
         if !milkrust_entry_flag(&evaluated, &["enabled", "benabled"]) {
             continue;
         }
-        let vertices = create_milkrust_custom_wave_vertices(&evaluated, samples, frame_scope);
-        if vertices.len() < 4 {
-            continue;
-        }
-        primitives.push(MilkRustPrimitive {
-            additive: milkrust_entry_flag(&evaluated, &["additive", "badditive"]),
-            color: [
-                clamp_unit(milkrust_entry_number(
-                    &evaluated,
-                    &["r"],
-                    fallback_color[0],
-                )),
-                clamp_unit(milkrust_entry_number(
-                    &evaluated,
-                    &["g"],
-                    fallback_color[1],
-                )),
-                clamp_unit(milkrust_entry_number(
-                    &evaluated,
-                    &["b"],
-                    fallback_color[2],
-                )),
-                clamp_unit(milkrust_entry_number(&evaluated, &["a"], 1.0)),
-            ],
-            mode: if milkrust_entry_flag(&evaluated, &["dots", "busedots"]) {
-                MilkRustPrimitiveMode::Points
-            } else {
-                MilkRustPrimitiveMode::LineStrip
-            },
-            vertex_colors: Vec::new(),
-            vertices,
-        });
+        primitives.extend(waveform::custom(&evaluated, samples, spectrum, None, frame_scope, fallback_color));
     }
+
     for shape in &preset.shapes {
         let evaluated = evaluate_milkrust_shape_state(shape, frame_scope);
         if !milkrust_entry_flag(&evaluated, &["enabled", "benabled"]) {
@@ -3722,6 +3621,7 @@ fn create_milkrust_frame_primitives_and_textures_stateful(
     treble: f64,
     waveform: &[f64],
     spectrum: &[f64],
+    stereo: Option<&audio::Stereo>,
     fallback_color: [f64; 3],
 ) -> (Vec<MilkRustPrimitive>, Vec<MilkRustTexturedPrimitive>) {
     let generated_samples = create_milkrust_audio_samples(time_seconds, bass, mid, treble, 192);
@@ -3730,31 +3630,9 @@ fn create_milkrust_frame_primitives_and_textures_stateful(
     } else {
         waveform
     };
-    let spectrum_samples = if spectrum.is_empty() {
-        waveform_samples
-    } else {
-        spectrum
-    };
     let mut primitives = classic::darken_center(frame_scope).into_iter().collect::<Vec<_>>();
     let mut textured_primitives = Vec::new();
-    let waveform_vertices = create_milkrust_waveform_vertices(waveform_samples, frame_scope);
-    let waveform_alpha = clamp_unit(milkrust_scope_number(frame_scope, "wave_a", 1.0));
-    if waveform_vertices.len() >= 4 && waveform_alpha > 0.0 {
-        primitives.push(MilkRustPrimitive {
-            additive: milkrust_scope_number(frame_scope, "wave_additive", milkrust_scope_number(frame_scope, "additivewave", 0.0)) != 0.0,
-            color: [
-                fallback_color[0],
-                fallback_color[1],
-                fallback_color[2],
-                waveform_alpha,
-            ],
-            mode: if milkrust_scope_number(frame_scope, "wave_usedots", milkrust_scope_number(frame_scope, "wave_dots", 0.0)) != 0.0 {
-                MilkRustPrimitiveMode::Points
-            } else { MilkRustPrimitiveMode::LineStrip },
-            vertex_colors: Vec::new(),
-            vertices: waveform_vertices,
-        });
-    }
+    primitives.extend(waveform::classic(waveform_samples, spectrum, stereo, frame_scope, fallback_color));
 
     for (prefix, inset, fallback_alpha) in [
         ("ob", 0.0, 0.0),
@@ -3835,43 +3713,7 @@ fn create_milkrust_frame_primitives_and_textures_stateful(
         if !milkrust_entry_flag(&evaluated, &["enabled", "benabled"]) {
             continue;
         }
-        let samples = if milkrust_entry_flag(&evaluated, &["spectrum", "bspectrum"]) {
-            spectrum_samples
-        } else {
-            waveform_samples
-        };
-        let vertices = create_milkrust_custom_wave_vertices(&evaluated, samples, frame_scope);
-        if vertices.len() < 4 {
-            continue;
-        }
-        primitives.push(MilkRustPrimitive {
-            additive: milkrust_entry_flag(&evaluated, &["additive", "badditive"]),
-            color: [
-                clamp_unit(milkrust_entry_number(
-                    &evaluated,
-                    &["r"],
-                    fallback_color[0],
-                )),
-                clamp_unit(milkrust_entry_number(
-                    &evaluated,
-                    &["g"],
-                    fallback_color[1],
-                )),
-                clamp_unit(milkrust_entry_number(
-                    &evaluated,
-                    &["b"],
-                    fallback_color[2],
-                )),
-                clamp_unit(milkrust_entry_number(&evaluated, &["a"], 1.0)),
-            ],
-            mode: if milkrust_entry_flag(&evaluated, &["dots", "busedots"]) {
-                MilkRustPrimitiveMode::Points
-            } else {
-                MilkRustPrimitiveMode::LineStrip
-            },
-            vertex_colors: Vec::new(),
-            vertices,
-        });
+        primitives.extend(waveform::custom(&evaluated, waveform_samples, spectrum, stereo, frame_scope, fallback_color));
     }
 
     for shape in &mut preset.shapes {
@@ -7832,39 +7674,13 @@ comp_shader_2=ret = vec3(shifted, energy * bass_att);
 
     #[test]
     fn milkrust_core_matches_imported_renderer_neutral_waveform_and_primitive_geometry() {
-        assert_eq!(
-            create_milkrust_waveform_vertices(&[-1.0, 0.0, 1.0], &BTreeMap::new()),
-            vec![-1.0, -1.0, 0.0, 0.0, 1.0, 1.0]
-        );
-        assert_eq!(
-            create_milkrust_waveform_vertices(&[2.0, -2.0], &BTreeMap::new()),
-            vec![-1.0, 1.0, 1.0, -1.0]
-        );
+        let circle = create_milkrust_waveform_vertices(&[0.0; 512], &BTreeMap::new());
+        assert_eq!(circle.len(), 482);
+        assert_eq!(&circle[..2], &circle[circle.len() - 2..]);
+        assert!((circle[0] - 0.5).abs() < 0.00001);
+        let horizontal = create_milkrust_waveform_vertices(&[0.0; 512], &number_scope(&[("wave_mode", 4.0)]));
+        assert!(horizontal.chunks_exact(2).all(|xy| xy[1] == 0.0));
         assert!(create_milkrust_waveform_vertices(&[0.0], &BTreeMap::new()).is_empty());
-
-        let centered = create_milkrust_waveform_vertices(
-            &[-0.5, 0.0, 0.5],
-            &number_scope(&[("wave_mode", 1.0), ("wave_scale", 0.5), ("wave_y", 0.25)]),
-        );
-        assert_eq!(rounded(&centered), vec![-1.0, -0.75, 0.0, -0.5, 1.0, -0.25]);
-
-        let vertical = create_milkrust_waveform_vertices(
-            &[-0.5, 0.5],
-            &number_scope(&[("wave_mode", 2.0), ("wave_x", 0.25)]),
-        );
-        assert_eq!(rounded(&vertical), vec![-1.0, -1.0, 0.0, 1.0]);
-
-        let circular = create_milkrust_waveform_vertices(
-            &[0.0, 0.0],
-            &number_scope(&[("wave_mode", 3.0), ("wave_x", 0.5), ("wave_y", 0.5)]),
-        );
-        assert_eq!(rounded(&circular), vec![0.35, 0.0, 0.35, -0.0]);
-
-        let smoothed = create_milkrust_waveform_vertices(
-            &[0.0, 1.0],
-            &number_scope(&[("wave_mode", 1.0), ("wave_smoothing", 0.5)]),
-        );
-        assert_eq!(rounded(&smoothed), vec![-1.0, 0.0, 1.0, 0.5]);
 
         let motion = create_milkrust_motion_vector_vertices(&number_scope(&[
             ("mv_dx", 0.5),

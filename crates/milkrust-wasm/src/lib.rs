@@ -45,6 +45,8 @@ pub struct WasmMilkRustEngine {
     renderer: MilkRustRenderer,
     runtime: MilkRustFrameSetRuntime,
     pending_frame: Option<milkrust_core::MilkRustFrameSet>,
+    audio: milkrust_core::audio::Analyzer,
+    pcm_frame: Option<milkrust_core::audio::Features>,
     source: String,
     texture_assets: Rc<RefCell<BTreeMap<String, String>>>,
     title: String,
@@ -94,6 +96,8 @@ impl WasmMilkRustEngine {
             renderer,
             runtime: MilkRustFrameSetRuntime::default(),
             pending_frame: None,
+            audio: milkrust_core::audio::Analyzer::default(),
+            pcm_frame: None,
             source,
             texture_assets,
             title,
@@ -375,6 +379,18 @@ impl WasmMilkRustEngine {
         .to_string()
     }
 
+    /// Stereo PCM is analyzed with exactly the native FFT and channel policy.
+    /// It applies to the next render only; mono callers need not call this.
+    #[wasm_bindgen(js_name = setPcmStereo)]
+    pub fn set_pcm_stereo(&mut self, samples: &[f32], time_seconds: f64) -> Result<(), JsValue> {
+        if !time_seconds.is_finite() || time_seconds < 0.0 {
+            return Err(JsValue::from_str("PCM time must be finite and nonnegative"));
+        }
+        self.audio.push(samples, 0).map_err(|error| JsValue::from_str(&error))?;
+        self.pcm_frame = Some(self.audio.analyze(time_seconds));
+        Ok(())
+    }
+
     #[allow(clippy::too_many_arguments)]
     #[wasm_bindgen(js_name = render)]
     pub fn render(
@@ -417,8 +433,18 @@ impl WasmMilkRustEngine {
             mouse_x,
             mouse_y,
         };
-        let waveform = parse_milkrust_sample_csv(waveform_csv);
-        let spectrum = parse_milkrust_sample_csv(spectrum_csv);
+        let mono_waveform = parse_milkrust_sample_csv(waveform_csv);
+        let mono_spectrum = parse_milkrust_sample_csv(spectrum_csv);
+        let pcm = self.pcm_frame.take();
+        let (waveform, spectrum, bass, mid, treble) = match &pcm {
+            Some(audio) => (audio.waveform.as_slice(), audio.spectrum.as_slice(), audio.bands[0], audio.bands[1], audio.bands[2]),
+            None => (mono_waveform.as_slice(), mono_spectrum.as_slice(), bass, mid, treble),
+        };
+        if let Some(audio) = pcm.as_ref().filter(|_| self.pending_frame.is_none()) {
+            if let Err(error) = self.runtime.set_stereo_audio(audio.stereo.clone()) {
+                self.render_error = Some(error); return;
+            }
+        }
         // Hold the evaluated frame while image codecs are loading. Advancing
         // again could retire a one-frame sprite before it ever reaches the GPU.
         let frame_set = if let Some(frame) = self.pending_frame.take() { Ok(frame) } else { self.runtime.try_render_source_with_audio_and_input(
@@ -427,8 +453,8 @@ impl WasmMilkRustEngine {
             bass,
             mid,
             treble,
-            &waveform,
-            &spectrum,
+            waveform,
+            spectrum,
             input,
         ) };
         let frame_set = match frame_set {

@@ -347,6 +347,35 @@ describe('createMilkRustEngine', () => {
     assert.deepEqual(rustEngine.resize.mock.calls[0].arguments, [320, 180]);
   });
 
+  it('keeps anti-phase stereo through the PCM bridge and disconnects its own graph', async () => {
+    rustEngine.setPcmStereo = mock.fn();
+    const mono = createAnalyser();
+    const left = { ...createAnalyser(), getFloatTimeDomainData: (data) => data.fill(0.25) };
+    const right = { ...createAnalyser(), getFloatTimeDomainData: (data) => data.fill(-0.25) };
+    const analysers = [mono, left, right];
+    const node = () => ({ connect: mock.fn(), disconnect: mock.fn() });
+    const input = node();
+    const splitter = node();
+    const source = node();
+    const engine = await createMilkRustEngine({
+      audioContext: { currentTime: 2, sampleRate: 48000, createAnalyser: () => analysers.shift(),
+        createChannelSplitter: () => splitter, createGain: () => input },
+      audioNode: source, canvas: {},
+    });
+    engine.render();
+    const [pcm, time] = rustEngine.setPcmStereo.mock.calls[0].arguments;
+    assert.equal(pcm.length, 1024);
+    assert.equal(time, 2);
+    assert.equal(pcm[0], 0.25);
+    assert.equal(pcm[1], -0.25);
+    assert.equal(input.channelCount, 2);
+    assert.equal(input.channelCountMode, 'explicit');
+    assert.deepEqual(splitter.connect.mock.calls.map((call) => call.arguments[1]), [0, 1]);
+    engine.dispose();
+    assert.equal(source.disconnect.mock.calls.length, 2);
+    assert.equal(splitter.disconnect.mock.calls.length, 2);
+  });
+
   it('exposes renderer failures and clears the texture-loading state after upload', async () => {
     let status = { state: 'failed', error: 'Composite shader failed' };
     rustEngine.renderStatusJson = () => JSON.stringify(status);

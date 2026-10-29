@@ -353,16 +353,49 @@ const loadMilkRustModule = async (modulePath = globalThis.__milkrustModulePath |
   return rustModule;
 };
 
-const createFrameReader = (audioContext, audioNode) => {
+const createFrameReader = (audioContext, audioNode, enableStereo = false) => {
   const analyser = audioContext.createAnalyser();
   analyser.fftSize = 2048;
   audioNode.connect(analyser);
 
   const waveform = new Uint8Array(analyser.fftSize);
   const frequency = new Uint8Array(analyser.frequencyBinCount);
+  const stereoConnections = [];
+  let stereoAnalysers = null;
+  let channelData = null;
+  if (enableStereo && typeof audioContext.createChannelSplitter === 'function' &&
+      typeof audioContext.createGain === 'function') {
+    try {
+      const channels = [audioContext.createAnalyser(), audioContext.createAnalyser()];
+      if (channels.every((channel) => typeof channel.getFloatTimeDomainData === 'function')) {
+        const input = audioContext.createGain();
+        // Upmix mono and downmix multichannel to the native stereo contract.
+        // The splitter itself stays discrete; the gain node performs the mix.
+        input.channelCount = 2;
+        input.channelCountMode = 'explicit';
+        input.channelInterpretation = 'speakers';
+        const splitter = audioContext.createChannelSplitter(2);
+        channels.forEach((channel) => { channel.fftSize = 4096; });
+        const connect = (from, to, output = 0) => {
+          from.connect(to, output, 0);
+          stereoConnections.push([from, to]);
+        };
+        connect(audioNode, input);
+        connect(input, splitter);
+        channels.forEach((channel, index) => connect(splitter, channel, index));
+        stereoAnalysers = channels;
+        channelData = channels.map((channel) => new Float32Array(channel.fftSize));
+      }
+    } catch (error) {
+      stereoConnections.forEach(([from, to]) => { try { from.disconnect(to); } catch {} });
+      try { audioNode.disconnect(analyser); } catch {}
+      throw error;
+    }
+  }
 
   return {
     disconnect: () => {
+      stereoConnections.forEach(([from, to]) => { try { from.disconnect(to); } catch {} });
       try {
         audioNode.disconnect(analyser);
       } catch {
@@ -373,7 +406,23 @@ const createFrameReader = (audioContext, audioNode) => {
       analyser.getByteTimeDomainData(waveform);
       analyser.getByteFrequencyData(frequency);
       const spectrum = Array.from(frequency);
+      let pcmStereo;
+      if (stereoAnalysers) {
+        pcmStereo = new Float32Array(1024);
+        const ratio = (Number(audioContext.sampleRate) || 44100) / 44100;
+        stereoAnalysers.forEach((channel, index) => {
+          const data = channelData[index];
+          channel.getFloatTimeDomainData(data);
+          for (let frame = 0; frame < 512; frame += 1) {
+            const position = Math.max(0, data.length - 1 - (511 - frame) * ratio);
+            const lower = Math.floor(position);
+            const upper = Math.min(lower + 1, data.length - 1);
+            pcmStereo[frame * 2 + index] = data[lower] + (data[upper] - data[lower]) * (position - lower);
+          }
+        });
+      }
       return {
+        pcmStereo,
         bands: getAudioBands(spectrum),
         samples: Array.from(waveform, (value) => (value - 128) / 128),
         spectrum,
@@ -528,7 +577,7 @@ export const createMilkRustEngine = async ({
 }) => {
   const rustModule = await loadMilkRustModule(modulePath);
   const rustEngine = new rustModule.MilkRustEngine(canvas);
-  const frameReader = createFrameReader(audioContext, audioNode);
+  const frameReader = createFrameReader(audioContext, audioNode, typeof rustEngine.setPcmStereo === 'function');
   const webGpuStatus = getWebGpuStatus(rendererBackend);
   let presetIndex = 0;
   let wasWaitingForTextures = false;
@@ -864,6 +913,7 @@ export const createMilkRustEngine = async ({
       const frame = frameReader.read();
       runFrameHooks(now, frame);
       const automatedPresetName = maybeAdvanceAutomatedPreset(frame, now);
+      if (frame.pcmStereo) rustEngine.setPcmStereo(frame.pcmStereo, now);
       rustEngine.render(
         now,
         frame.bands.bass,

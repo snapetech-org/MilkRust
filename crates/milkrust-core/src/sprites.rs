@@ -140,7 +140,7 @@ fn definition(index: u32, records: &BTreeMap<String, String>) -> Result<Definiti
 
 fn validate_mode(scope: &BTreeMap<String, MilkRustValue>) -> Result<(), String> {
     for (key, maximum) in [("blendmode", 10.0), ("layer", 4.0)] {
-        let value = milkrust_scope_number(scope, key, 0.0);
+        let value = scope.get(key).and_then(MilkRustValue::as_number).unwrap_or(0.0);
         if !value.is_finite() || value != value.floor() || !(0.0..=maximum).contains(&value) {
             return Err(format!("Unsupported sprite {key}: {value}"));
         }
@@ -216,8 +216,8 @@ impl Runtime {
             }
             instance.scope = evaluate_milkrust_equations(&definition.code, &instance.scope)?;
             validate_mode(&instance.scope)?;
-            let value = |key: &str| milkrust_scope_number(&instance.scope, key, 0.0);
-            for key in ["x", "y", "sx", "sy", "rot", "speed", "repeatx", "repeaty", "r", "g", "b", "a", "burn", "done"] {
+            let value = |key: &str| instance.scope.get(key).and_then(MilkRustValue::as_number).unwrap_or(0.0);
+            for key in ["x", "y", "sx", "sy", "rot", "speed", "repeatx", "repeaty", "r", "g", "b", "a", "burn", "done", "flipx", "flipy"] {
                 if !value(key).is_finite() { return Err(format!("Non-finite sprite variable: {key}")); }
             }
             frames.push(Frame {
@@ -229,10 +229,12 @@ impl Runtime {
                 scale: [(value("sx") + definition.size_offset[0]).clamp(-1000.0, 1000.0) * if value("flipx") == 0.0 { 1.0 } else { -1.0 },
                     (value("sy") + definition.size_offset[1]).clamp(-1000.0, 1000.0) * if value("flipy") == 0.0 { 1.0 } else { -1.0 }],
                 repeat: [value("repeatx").clamp(0.01, 100.0), value("repeaty").clamp(0.01, 100.0)],
-                rotation: (value("rot") + value("speed").clamp(-1000.0, 1000.0) * elapsed).rem_euclid(std::f64::consts::TAU),
+                rotation: value("rot").rem_euclid(std::f64::consts::TAU),
             });
             // The final frame may burn before the instance is retired.
             instance.dead = value("done") != 0.0;
+            let rotation = value("rot") + value("speed").clamp(-1000.0, 1000.0) / fps;
+            instance.scope.insert("rot".into(), MilkRustValue::Number(rotation.rem_euclid(std::f64::consts::TAU)));
         }
         frames.sort_by_key(|frame| frame.layer);
         self.frame = self.frame.saturating_add(1);
