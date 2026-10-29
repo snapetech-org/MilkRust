@@ -19,7 +19,15 @@ shader_body { float values[3]; values[0]=uv.x; values[1]=uv.y; values[2]=0.2; Ti
   { id: 'entry-semantics', shader: 'float4 main(float2 uv:TEXCOORD0):COLOR0 { return float4(uv,0.25,1); }' },
   { id: 'while-do-switch', shader: 'shader_body { int i=0; float v=0; while(i<2) { v+=0.1; i++; } do { v+=0.1; i--; } while(i>0); switch(i) { case 0: v+=0.1; break; default: v=0; } ret=float3(uv.x,v,uv.y); }' },
   { id: 'noise-volume', shader: 'shader_body { ret=0.5*tex3D(sampler_noisevol_hq,float3(uv,0.3)).rgb+0.5*tex2D(sampler_pw_noise_lq,uv).rgb; }' },
+  { id: 'volume-project-bias', shader: 'shader_body { ret=0.25*tex3Dproj(sampler_noisevol_hq,float4(uv,0.3,1)).rgb+0.25*tex3Dbias(sampler_noisevol_lq,float4(uv,0.2,0)).rgb+0.5*float3(uv,0.5); }' },
+  { id: 'size-only-binding', shader: 'shader_body { ret=float3(uv,float(tex2Dsize(sampler_noise_lq).x)/256); }' },
+  { id: 'constant-lod-offset', shader: 'shader_body { ret=0.1*tex2Dlod(sampler_main,float4(uv,0,0),int2(0,0)).rgb+0.9*float3(uv,0.5); }' },
   { id: 'blur-sampler-alias', shader: 'shader_body { ret=GetBlur1(uv)*0.2+tex2D(sampler_fc_main,uv).rgb*0.1+float3(uv.x,0.2,uv.y)*0.7; }' },
+  { id: 'rescan-sampling', shader: `#pragma pack_matrix(row_major)
+#define APPLY SAMPLE
+#define SAMPLE(p) tex3Dgrad(sampler_noisevol_hq,float3(p,0.5),float3(0.01,0,0),float3(0,0.01,0))
+#define CAT(a,b) a ## b
+shader_body { float3 color=APPLY(CAT(,uv)).rgb; ret=0.5*color+0.5*float3(uv,0.5); }` },
 ];
 const invalid = [
   '#include "private.h"\nshader_body { ret=1; }',

@@ -1,6 +1,6 @@
 //! Token-based, bounded shader preprocessing. File inclusion is deliberately
 //! unavailable: preset text cannot read files or fetch network resources.
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 const MAX_TOKENS: usize = 65536;
 const MAX_EXPANSIONS: usize = 16384;
@@ -34,8 +34,10 @@ pub fn tokens(source: &str) -> Result<Vec<String>, String> {
             i += 1;
         } else {
             i += 1;
-            if i + 1 < bytes.len() && ["<<=", ">>="].contains(&&source[start..i + 2]) { i += 2; }
-            else if i < bytes.len() && ["##", "&&", "||", "<<", ">>", "<=", ">=", "==", "!=", "++", "--", "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^="].contains(&&source[start..i + 1]) { i += 1; }
+            if bytes[start..].starts_with(b"<<=") || bytes[start..].starts_with(b">>=") { i += 2; }
+            else if bytes.get(start..start + 2).is_some_and(|pair|
+                [b"##", b"&&", b"||", b"<<", b">>", b"<=", b">=", b"==", b"!=", b"++", b"--", b"+=", b"-=", b"*=", b"/=", b"%=", b"&=", b"|=", b"^="]
+                    .iter().any(|op| pair == op.as_slice())) { i += 1; }
         }
         if i - start > 1023 { return Err("HLSL token length limit exceeded".into()); }
         out.push(source[start..i].to_string());
@@ -79,67 +81,107 @@ fn identifier(s: &str) -> bool {
         && s.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'_')
 }
 
+// Keep the suppression set on each token while rescanning replacement tokens
+// together with the remaining input. A global disabled set loses the boundary
+// between an object-like alias and a following function invocation.
+#[derive(Clone)]
+struct ExpansionToken { text: String, hidden: [u64; 8], depth: u8 }
+impl ExpansionToken {
+    fn plain(text: String) -> Self { Self { text, hidden: [0; 8], depth: 0 } }
+    fn suppress(&mut self, hidden: &[u64; 8], depth: u8) {
+        for (value, added) in self.hidden.iter_mut().zip(hidden) { *value |= added; }
+        self.depth = self.depth.max(depth);
+    }
+}
+
+fn expand_stream(input: Vec<ExpansionToken>, macros: &BTreeMap<String, Macro>,
+    ids: &BTreeMap<&str, usize>, nesting: u8, budget: &mut usize) -> Result<Vec<ExpansionToken>, String> {
+    if nesting > 64 { return Err("Macro expansion depth exceeded".into()); }
+    let mut queue: VecDeque<_> = input.into();
+    let mut out = Vec::new();
+    while let Some(token) = queue.pop_front() {
+        let Some((&id, definition)) = ids.get(token.text.as_str()).zip(macros.get(&token.text)) else {
+            out.push(token); continue;
+        };
+        if token.hidden[id / 64] & (1u64 << (id % 64)) != 0 ||
+            (definition.parameters.is_some() && queue.front().map(|t| t.text.as_str()) != Some("(")) {
+            out.push(token); continue;
+        }
+        let depth = token.depth.max(nesting).checked_add(1).ok_or("Macro expansion depth exceeded")?;
+        if depth > 64 { return Err("Macro expansion depth exceeded".into()); }
+        *budget += 1;
+        if *budget > MAX_EXPANSIONS { return Err("Macro expansion budget exceeded".into()); }
+        let mut hidden = token.hidden;
+        let mut arguments = Vec::new();
+        if let Some(parameters) = &definition.parameters {
+            queue.pop_front(); // opening parenthesis
+            arguments.push(Vec::new());
+            let mut level = 1usize;
+            loop {
+                let next = queue.pop_front().ok_or("Unclosed macro invocation")?;
+                if next.text == ")" {
+                    level -= 1;
+                    if level == 0 {
+                        // Function-like expansion hides only names suppressed
+                        // at both ends of the invocation, then its own name.
+                        for (value, closing) in hidden.iter_mut().zip(next.hidden) { *value &= closing; }
+                        break;
+                    }
+                } else if next.text == "(" {
+                    level += 1;
+                    if level > 128 { return Err("Macro argument nesting exceeded".into()); }
+                }
+                if next.text == "," && level == 1 { arguments.push(Vec::new()); }
+                else { arguments.last_mut().expect("argument exists").push(next); }
+            }
+            if parameters.is_empty() && arguments.len() == 1 && arguments[0].is_empty() { arguments.clear(); }
+            if arguments.len() != parameters.len() { return Err(format!("Wrong argument count for macro {}", token.text)); }
+        }
+        hidden[id / 64] |= 1u64 << (id % 64);
+        let mut expanded_arguments: Vec<Option<Vec<ExpansionToken>>> = vec![None; arguments.len()];
+        let mut replacement = Vec::new();
+        for (j, body_token) in definition.body.iter().enumerate() {
+            if body_token == "#" { return Err("Stringifying shader macros is unsupported".into()); }
+            let parameter = definition.parameters.as_ref().and_then(|p| p.iter().position(|p| p == body_token));
+            if let Some(index) = parameter {
+                let paste = j > 0 && definition.body[j - 1] == "##" || definition.body.get(j + 1).map(String::as_str) == Some("##");
+                if !paste && expanded_arguments[index].is_none() {
+                    expanded_arguments[index] = Some(expand_stream(arguments[index].clone(), macros, ids, nesting + 1, budget)?);
+                }
+                let values = if paste { &arguments[index] } else { expanded_arguments[index].as_ref().expect("expanded argument") };
+                if paste && values.is_empty() { replacement.push(ExpansionToken::plain(String::new())); }
+                else { replacement.extend(values.iter().cloned()); }
+            } else { replacement.push(ExpansionToken::plain(body_token.clone())); }
+            if replacement.len() > MAX_TOKENS { return Err("Macro replacement token limit exceeded".into()); }
+        }
+        let mut pasted: Vec<ExpansionToken> = Vec::new();
+        let mut replacement = replacement.into_iter();
+        while let Some(next) = replacement.next() {
+            if next.text == "##" {
+                let mut left = pasted.pop().ok_or("Missing left token for ##")?;
+                let right = replacement.next().ok_or("Missing right token for ##")?;
+                left.text.push_str(&right.text);
+                if !left.text.is_empty() && tokens(&left.text)?.len() != 1 { return Err("Invalid pasted token".into()); }
+                for (value, right) in left.hidden.iter_mut().zip(right.hidden) { *value &= right; }
+                left.depth = left.depth.max(right.depth);
+                pasted.push(left);
+            } else { pasted.push(next); }
+        }
+        pasted.retain(|t| !t.text.is_empty()); // Empty pasted arguments are placemarkers.
+        if out.len() + queue.len() + pasted.len() > MAX_TOKENS { return Err("Macro output limit exceeded".into()); }
+        for mut next in pasted.into_iter().rev() { next.suppress(&hidden, depth); queue.push_front(next); }
+    }
+    Ok(out)
+}
+
 fn expand(input: &[String], macros: &BTreeMap<String, Macro>, disabled: &mut BTreeSet<String>,
     depth: usize, budget: &mut usize) -> Result<Vec<String>, String> {
     if depth > 64 { return Err("Macro expansion depth exceeded".into()); }
-    let mut out = Vec::new();
-    let mut i = 0;
-    while i < input.len() {
-        let name = &input[i];
-        let Some(definition) = macros.get(name).filter(|_| !disabled.contains(name)) else {
-            out.push(name.clone()); i += 1;
-            if out.len() > MAX_TOKENS { return Err("Macro output limit exceeded".into()); }
-            continue;
-        };
-        let mut replacement = definition.body.clone();
-        if let Some(parameters) = &definition.parameters {
-            if input.get(i + 1).map(String::as_str) != Some("(") { out.push(name.clone()); i += 1; continue; }
-            let mut arguments = vec![Vec::new()];
-            let mut level = 1usize;
-            i += 2;
-            while i < input.len() {
-                let t = &input[i];
-                if t == ")" { level -= 1; if level == 0 { break; } }
-                if t == "(" { level += 1; if level > 128 { return Err("Macro argument nesting exceeded".into()); } }
-                if t == "," && level == 1 { arguments.push(Vec::new()); }
-                else { arguments.last_mut().expect("argument exists").push(t.clone()); }
-                i += 1;
-            }
-            if level != 0 { return Err("Unclosed macro invocation".into()); }
-            if parameters.is_empty() && arguments.len() == 1 && arguments[0].is_empty() { arguments.clear(); }
-            if arguments.len() != parameters.len() { return Err(format!("Wrong argument count for macro {name}")); }
-            let expanded = arguments.iter().map(|a| expand(a, macros, disabled, depth + 1, budget)).collect::<Result<Vec<_>, _>>()?;
-            replacement.clear();
-            for (j, t) in definition.body.iter().enumerate() {
-                if let Some(index) = parameters.iter().position(|p| p == t) {
-                    let paste = j > 0 && definition.body[j - 1] == "##" || definition.body.get(j + 1).map(String::as_str) == Some("##");
-                    replacement.extend(if paste { &arguments[index] } else { &expanded[index] }.iter().cloned());
-                } else { replacement.push(t.clone()); }
-            }
-        }
-        i += 1;
-        *budget += 1;
-        if *budget > MAX_EXPANSIONS { return Err("Macro expansion budget exceeded".into()); }
-        let mut pasted: Vec<String> = Vec::new();
-        let mut j = 0;
-        while j < replacement.len() {
-            if replacement[j] == "##" {
-                let left = pasted.pop().ok_or("Missing left token for ##")?;
-                j += 1;
-                let right = replacement.get(j).ok_or("Missing right token for ##")?;
-                let joined = format!("{left}{right}");
-                if tokens(&joined)?.len() != 1 { return Err("Invalid pasted token".into()); }
-                pasted.push(joined);
-            } else if replacement[j] == "#" { return Err("Stringifying shader macros is unsupported".into()); }
-            else { pasted.push(replacement[j].clone()); }
-            j += 1;
-        }
-        disabled.insert(name.clone());
-        out.extend(expand(&pasted, macros, disabled, depth + 1, budget)?);
-        disabled.remove(name);
-        if out.len() > MAX_TOKENS { return Err("Macro output limit exceeded".into()); }
-    }
-    Ok(out)
+    let ids: BTreeMap<&str, usize> = macros.keys().enumerate().map(|(i, name)| (name.as_str(), i)).collect();
+    let mut hidden = [0u64; 8];
+    for name in disabled.iter() { if let Some(&id) = ids.get(name.as_str()) { hidden[id / 64] |= 1u64 << (id % 64); } }
+    let input = input.iter().map(|text| ExpansionToken { text: text.clone(), hidden, depth: depth as u8 }).collect();
+    Ok(expand_stream(input, macros, &ids, depth as u8, budget)?.into_iter().map(|t| t.text).collect())
 }
 
 fn condition(input: &[String], macros: &BTreeMap<String, Macro>, budget: &mut usize) -> Result<bool, String> {
@@ -286,6 +328,11 @@ pub fn preprocess(source: &str) -> Result<String, String> {
                 "undef" => { if t.len() != 1 { return Err("Invalid #undef".into()); } macros.remove(&t[0]); }
                 "error" => return Err(format!("Shader #error on line {}: {}", line_number + 1, argument)),
                 "line" => {}, // Source cannot alter file access or the bounded diagnostic sink.
+                "pragma" if t.as_slice() == ["once"] ||
+                    (t.len() == 4 && t[0] == "pack_matrix" && t[1] == "(" && t[3] == ")" && matches!(t[2].as_str(), "row_major" | "column_major")) => {
+                    // Includes are disabled and host matrices use logical values,
+                    // not user-controlled constant-buffer packing.
+                },
                 "" => {},
                 _ => return Err(format!("Unsupported shader directive #{name}")),
             }
@@ -306,6 +353,25 @@ mod tests {
     #[test]
     fn compound_shifts_keep_their_token_identity() {
         assert_eq!(tokens("x<<=2;y>>=1;").unwrap(), ["x", "<<=", "2", ";", "y", ">>=", "1", ";"]);
+    }
+    #[test]
+    fn rescan_follows_aliases_without_reexpanding_recursive_tokens() {
+        assert_eq!(preprocess("#define ALIAS SCALE\n#define SCALE(x) ((x)*2)\nALIAS(3)").unwrap(), "( ( 3 ) * 2 )");
+        assert_eq!(preprocess("#define PICK() SCALE\n#define SCALE(x) (x+1)\nPICK()(4)").unwrap(), "( 4 + 1 )");
+        assert_eq!(preprocess("#define F(x) x\nF(F(1))").unwrap(), "1");
+        assert_eq!(preprocess("#define A B\n#define B A\nA").unwrap(), "A");
+        assert_eq!(preprocess("#define F(x) x F\nF(1)(2)").unwrap(), "1 F ( 2 )");
+    }
+    #[test]
+    fn empty_paste_arguments_are_placemarkers() {
+        assert_eq!(preprocess("#define CAT(a,b) a ## b\nCAT(,uv) CAT(uv,) CAT(,) ").unwrap(), "uv uv");
+        assert_eq!(preprocess("#define UNUSED(x) 2\n#define BAD(x) x\nUNUSED(BAD(1,2))").unwrap(), "2");
+    }
+    #[test]
+    fn non_ascii_adjacent_to_an_operator_returns_a_diagnostic() {
+        for source in ["+é", "&é", "<<é", "!=水"] { assert!(tokens(source).is_err()); }
+        assert_eq!(preprocess("#pragma pack_matrix(row_major)\nret=1;").unwrap(), "ret = 1 ;");
+        assert!(preprocess("#pragma unknown_option\nret=1;").is_err());
     }
     #[test]
     fn macros_conditions_and_paste() {

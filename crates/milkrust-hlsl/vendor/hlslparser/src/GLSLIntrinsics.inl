@@ -8,6 +8,20 @@ bool GLSLGenerator::OutputLegacyIntrinsic(HLSLFunctionCall* expression) {
     const int rows = MatrixRows(base), width = NumericWidth(base);
     const std::string type = GetTypeName(first->type);
     const std::string resultType = GetTypeName(expression->expressionType);
+    if (function == "tex2Dlod" && expression->function->numArguments == 3) {
+        auto* sampler = expression->argument;
+        auto* coordinate = sampler->nextExpression;
+        auto* offset = coordinate->nextExpression;
+        auto* temporary = LocalTemporary(first->nextArgument->type);
+        m_writer.Write("(%s = ", temporary->name);
+        OutputExpression(coordinate, &temporary->expressionType);
+        m_writer.Write(", textureLodOffset("); OutputExpression(sampler);
+        m_writer.Write(", %s.xy, %s.w, ", temporary->name, temporary->name);
+        // GLSL requires the offset to remain a constant expression. A helper
+        // parameter would destroy constness, so emit the original expression.
+        OutputExpression(offset, &first->nextArgument->nextArgument->type);
+        m_writer.Write("))"); return true;
+    }
     std::string parameters;
     int count = 0;
     for (auto* formal = first; formal; formal = formal->nextArgument, ++count) {
@@ -17,7 +31,13 @@ bool GLSLGenerator::OutputLegacyIntrinsic(HLSLFunctionCall* expression) {
         parameters += std::string(GetTypeName(formal->type)) + " " + char('a' + count);
     }
     std::string body;
-    if (function == "all" || function == "any") {
+    if ((function == "tex2D" || function == "tex3D") && count == 4) body = "return textureGrad(a,b,c,d);";
+    else if (function == "tex3Dgrad") body = "return textureGrad(a,b,c,d);";
+    else if (function == "tex3Dbias") body = "return texture(a,b.xyz,b.w);";
+    else if (function == "tex3Dproj") body = "return textureProj(a,b);";
+    else if (function == "tex2Dsize" || function == "tex3Dsize") body = "return textureSize(a,0);";
+    else if (function == "tex2Dfetch") body = "return texelFetch(a,b.xy,b.z);";
+    else if (function == "all" || function == "any") {
         const bool all = function == "all";
         body = "return ";
         if (rows) {

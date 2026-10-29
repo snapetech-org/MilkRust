@@ -204,3 +204,21 @@ committed but unrun. Driver handling of subnormals remains target-dependent;
 these implementations do not turn the source-only checkpoint into executed
 conformance evidence. Microsoft's intrinsic index and individual function
 contracts are the semantic references, not another renderer's source code.
+
+## Rescan and sampling checkpoint
+
+Macro suppression now travels with individual tokens, and replacement tokens
+rescan together with the remaining input. Object aliases and returned function
+macros can consume the following invocation without re-expanding recursive
+names. Unused arguments are not expanded, and empty pasted arguments use
+placemarkers. Token lookahead uses byte slices so non-ASCII input adjacent to
+operators returns a diagnostic instead of slicing inside UTF-8. The known
+`pack_matrix` pragma is accepted because matrices use logical values and no
+user-provided raw constant-buffer layout; unknown pragmas still fail.
+
+Legacy volume projected/bias/gradient samples, explicit gradient overloads,
+texture dimensions and texel fetch have GLSL ES paths. Constant 2D LOD offsets
+are emitted at the call site, retaining the offset's constant-expression status
+and evaluating coordinates once. Dimension-only sampler references are included
+in resource discovery. Native compiler, preprocessor and browser source cases
+are added; no execution is claimed.

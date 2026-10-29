@@ -37,8 +37,8 @@ pub(crate) fn sampler_names(source: &str) -> Result<Vec<String>, String> {
     // Only referenced resources are reflected, never arbitrary identifiers in
     // unknown function calls. Sampler parameters belong to their function.
     for call in tokens.windows(4) {
-        if ["tex", "tex2d", "tex3d", "tex2D", "tex2Dlod", "tex2Dbias", "tex2Dgrad", "tex2Dproj", "tex3D", "tex3Dlod", "tex3Dbias"].contains(&call[0].as_str())
-            && call[1] == "(" && call[3] == "," && !crate::is_milkrust_main_sampler(&call[2])
+        if ["tex", "tex2d", "tex3d", "tex2D", "tex2Dlod", "tex2Dbias", "tex2Dgrad", "tex2Dproj", "tex3D", "tex3Dlod", "tex3Dbias", "tex3Dgrad", "tex3Dproj", "tex2Dfetch", "tex2Dsize", "tex3Dsize"].contains(&call[0].as_str())
+            && call[1] == "(" && (call[3] == "," || (matches!(call[0].as_str(), "tex2Dsize" | "tex3Dsize") && call[3] == ")")) && !crate::is_milkrust_main_sampler(&call[2])
             && !sampler_parameters.contains(&&call[2]) && !names.contains(&call[2]) {
             names.push(call[2].clone());
         }
@@ -318,6 +318,15 @@ mod tests {
         assert!(result.contains("milkrust_generated_main"));
         assert!(result.contains("milkrust_transition_mask"));
         assert!(result.contains("for ("));
+    }
+    #[test]
+    fn discovers_size_only_and_volume_sampling_bindings() {
+        assert_eq!(sampler_names("shader_body { ret=float3(tex2Dsize(sampler_art),0); }").unwrap(), vec!["sampler_art"]);
+        let source = "shader_body { ret=tex3Dproj(sampler_noisevol_hq,float4(uv,0.5,1)).rgb + tex3Dbias(sampler_noisevol_lq,float4(uv,0.5,0)).rgb; }";
+        assert_eq!(sampler_names(source).unwrap(), vec!["sampler_noisevol_hq", "sampler_noisevol_lq"]);
+        compile(source, false).expect("volume sampling overloads must compile");
+        compile("shader_body { ret=tex2Dlod(sampler_main,float4(uv,0,0),int2(0,0)).rgb; }", false)
+            .expect("constant offsets must remain constant after lowering");
     }
     #[test]
     fn preserves_entry_input_and_rejects_unbound_semantics() {

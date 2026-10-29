@@ -532,6 +532,7 @@ const Intrinsic _intrinsic[] =
 
 
         SAMPLER_INTRINSIC_FUNCTION("tex2D", HLSLBaseType_Sampler2D, HLSLBaseType_Float2),
+        Intrinsic("tex2D", HLSLBaseType_Float4, HLSLBaseType_Sampler2D, HLSLBaseType_Float2, HLSLBaseType_Float2, HLSLBaseType_Float2),
 
         Intrinsic("tex2Dproj", HLSLBaseType_Float4, HLSLBaseType_Sampler2D, HLSLBaseType_Float4),
 
@@ -555,6 +556,9 @@ const Intrinsic _intrinsic[] =
         Intrinsic("tex2DArray", HLSLBaseType_Float4, HLSLBaseType_Sampler2DArray, HLSLBaseType_Float3),
 
         Intrinsic("tex3D",     HLSLBaseType_Float4, HLSLBaseType_Sampler3D, HLSLBaseType_Float3),
+        Intrinsic("tex3D", HLSLBaseType_Float4, HLSLBaseType_Sampler3D, HLSLBaseType_Float3, HLSLBaseType_Float3, HLSLBaseType_Float3),
+        Intrinsic("tex3Dgrad", HLSLBaseType_Float4, HLSLBaseType_Sampler3D, HLSLBaseType_Float3, HLSLBaseType_Float3, HLSLBaseType_Float3),
+        Intrinsic("tex3Dproj", HLSLBaseType_Float4, HLSLBaseType_Sampler3D, HLSLBaseType_Float4),
         Intrinsic("tex3Dlod",  HLSLBaseType_Float4, HLSLBaseType_Sampler3D, HLSLBaseType_Float4),
         Intrinsic("tex3Dbias", HLSLBaseType_Float4, HLSLBaseType_Sampler3D, HLSLBaseType_Float4),
         Intrinsic("tex3Dsize", HLSLBaseType_Int3, HLSLBaseType_Sampler3D),

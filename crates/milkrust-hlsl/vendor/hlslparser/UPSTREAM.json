@@ -26,6 +26,7 @@
     "Typed vector comparison, logical and conditional lowering; correct unary bitwise complement",
     "Remainder, shifts and compound bit operators; unsigned literals and cast/conditional precedence",
     "Legacy math, matrix component intrinsics, typed output parameters and IEEE-754 reinterpretation",
-    "Bounded identifiers/numeric literals and locale-independent round-trip float serialization"
+    "Bounded identifiers/numeric literals and locale-independent round-trip float serialization",
+    "Legacy volume project/bias/gradient sampling, size/fetch helpers and constant LOD offsets"
   ]
 }
