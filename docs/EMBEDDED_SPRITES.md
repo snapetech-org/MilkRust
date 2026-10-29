@@ -2,7 +2,9 @@
 
 The `.milk`/`.milk2` importer now separates `[SPRITEn_BEGIN]`/`[SPRITEn_END]`
 records from preset equations. It retains the original records for export and
-selects the last definition of an index. Ordinary `.milk` files execute blocks
+selects the last definition of an index. Within a block, the first occurrence
+of each saved field wins except that the last `SpriteName` wins. Ordinary
+`.milk` files execute blocks
 by default; a trailing `.milk2` sprite block executes only when its envelope
 contains `sprite=1`. `sprite=0` and an omitted flag preserve trailing blocks
 without executing them or admitting their image dependencies.
@@ -34,23 +36,31 @@ and other values follow EEL `burn`; when the field is absent, EEL `burn`
 controls feedback and starts at one.
 Invalid layers skip both sprite code and drawing. The EEL `blendmode` register
 starts from `SpriteBlend` (default 0), is read each frame, truncated to an
-integer and clamped to modes 0–4.
+integer and clamped to the five supported modes, 0–4.
 `SpriteAlpha` multiplies script alpha before legacy 8-bit packing without
 clamping the multiplied alpha, including byte wrap outside 0–1.
 
+Sprite image payloads currently contain one decoded RGBA frame. Animated GIF
+frame decoding, per-frame delays and elapsed-time frame selection are outside
+this source profile; animated GIFs are rejected by texture admission rather
+than silently treated as complete sprite animation.
+
 Both GPU hosts use the same fragment source, sampling a distinct destination
 snapshot for each sprite. They never sample the current draw attachment. The
-five modes reproduce the MilkDrop 3 texture-stage and blend-factor table:
-alpha (0), decal (1), additive (2), source-color (3), and color-key (4). Mode 0
-uses diffuse alpha; mode 4 also multiplies by image alpha. Modes 1 and 2
-pre-multiply diffuse RGB by alpha before byte conversion; mode 3 uses white
-diffuse color. Image alpha is otherwise ignored. Color keys match opaque source
+five modes follow MilkDrop 3's `DrawUserSprites` table: alpha (0), decal (1),
+additive (2), source-color (3), and color-key (4). Mode 0 blends modulated RGB
+using diffuse alpha and ignores image alpha. Mode 1 replaces the destination
+with modulated RGB. Mode 2 adds modulated RGB; modes 1 and 2 premultiply diffuse
+RGB by alpha before byte conversion. Mode 3 uses texture RGB as both the source
+color and the source-color blend factor, with white diffuse color. Mode 4
+modulates RGB and multiplies diffuse alpha by image alpha. Image alpha is
+otherwise ignored. Color keys match opaque source
 texels (ARGB, not RGB alone) before the shared
 manual bilinear sample and replace the whole matching texel with transparent
 black. Other texels retain their RGBA values. The saved RGB key is promoted to
 opaque ARGB, matching MilkDrop's `0xff000000 | ck` texture-loader argument. This
 follows D3DX texture-loading semantics; it corrects the earlier alpha-only key
-replacement. Out-of-range blend IDs clamp to the nearest classic mode.
+replacement. Out-of-range per-frame blend IDs clamp to mode 0 or 4.
 Alpha/filter raster parity
 remains unqualified.
 
@@ -71,9 +81,9 @@ geometry and GL code are independent implementations.
 
 No build, tests, GPU capture or device run was performed in this source-only
 continuation. Core regression source covers bounds, round trips, disabled blocks,
-private state, final-frame lifetime, signed transforms, all five classic modes and
+private state, final-frame lifetime, signed transforms, all five modes and
 error recovery. The private browser gate has authored pixel checks for all five
-modes, thirty alpha/key combinations and the one-frame loading case. These
+modes, 30 alpha/key combinations and the one-frame loading case. These
 controls validate implementation arithmetic when run; they are not MilkDrop3
 reference captures. Saved sprite fields, UV flips, alpha byte conversion and
 source-level layer/burn ordering are implemented; their pixel behavior and
@@ -88,7 +98,7 @@ MilkDrop3's published `code/vis_milk2/milkdropfs.cpp` (`DrawUserSprites`) at
 ARGB key to `D3DXCreateTextureFromFileEx`, whose
 [documented behavior](https://learn.microsoft.com/en-us/windows/win32/direct3d9/d3dxcreatetexturefromfileex)
 replaces matching pixels with transparent black and includes alpha in the
-match. The browser source now checks 30 combinations of sprite blend mode,
-transparent/partial/opaque image alpha and matching/nonmatching color keys.
+match. The browser source checks all five modes and 30 combinations of sprite
+blend mode, transparent/partial/opaque image alpha and matching/nonmatching color keys.
 Core source checks unwrapped rotation lifetime and scripted numeric selectors.
 These are authored controls, not executed results or MD3 captures.

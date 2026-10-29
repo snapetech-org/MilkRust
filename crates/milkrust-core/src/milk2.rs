@@ -45,8 +45,11 @@ impl SavedBlend {
             "blending_pattern" => value.eq_ignore_ascii_case(&self.pattern),
             "blending_progress" => value.parse::<f64>()
                 .is_ok_and(|number| number.is_finite() && (0.0..=1.0).contains(&number)),
-            "blending_direction" => value.parse::<f64>()
-                .is_ok_and(|number| number.is_finite() && (number == -1.0 || number == 1.0)),
+            // The saved header stores direction as a signed integer. The
+            // renderer's direction-sensitive patterns test exactly `-1`;
+            // other integer values are valid and behave like the default
+            // orientation.
+            "blending_direction" => value.parse::<i32>().is_ok(),
             "random_1" | "random_2" | "random_3" | "random_4" | "random_5" => value.parse::<f64>()
                 .is_ok_and(|number| number.is_finite() && (0.0..=1.0).contains(&number)),
             "sprite" => matches!(value.as_str(), "0" | "1"),
@@ -232,8 +235,10 @@ pub fn parse(source: &str) -> Result<(SavedBlend, [String; 2]), String> {
     };
     let progress = number("blending_progress", 0.5)?;
     if !(0.0..=1.0).contains(&progress) { return Err("milk2 progress is outside 0..1".into()); }
-    let direction = number("blending_direction", 1.0)?;
-    if direction != -1.0 && direction != 1.0 { return Err("milk2 direction must be -1 or 1".into()); }
+    let direction = match header.get("blending_direction") {
+        Some(value) => value.parse::<i32>().map_err(|_| "invalid milk2 blending_direction")?,
+        None => 1,
+    };
     let mut random = [None; 5];
     for (index, value) in random.iter_mut().enumerate() {
         let key = format!("random_{}", index + 1);
@@ -243,7 +248,7 @@ pub fn parse(source: &str) -> Result<(SavedBlend, [String; 2]), String> {
             *value = Some(parsed);
         }
     }
-    Ok((SavedBlend { pattern, progress, direction: direction as i32, random, header, trailer }, presets))
+    Ok((SavedBlend { pattern, progress, direction, random, header, trailer }, presets))
 }
 
 #[cfg(test)]
@@ -258,6 +263,21 @@ mod tests {
         assert_eq!(blend.random[0], Some(0.123));
         assert_eq!(blend.direction, -1);
         assert_eq!(parse(&blend.serialize(&presets)).unwrap(), (blend, presets));
+    }
+
+    #[test]
+    fn direction_accepts_signed_integer_values_and_preserves_them() {
+        for direction in [-17, -1, 0, 1, 23] {
+            let source = PAIR.replace("blending_direction=-1", &format!("blending_direction={direction}"));
+            let (blend, presets) = parse(&source).unwrap();
+            assert_eq!(blend.direction, direction);
+            assert!(blend.supports_rendered_pattern());
+            assert_eq!(parse(&blend.serialize(&presets)).unwrap(), (blend, presets));
+        }
+        for invalid in ["0.5", "NaN", "2147483648"] {
+            let source = PAIR.replace("blending_direction=-1", &format!("blending_direction={invalid}"));
+            assert!(parse(&source).is_err());
+        }
     }
     #[test]
     fn unknown_patterns_and_extensions_survive_but_do_not_claim_render_support() {
@@ -305,7 +325,7 @@ mod tests {
     fn malformed_blocks_and_nonfinite_metadata_fail() {
         for source in [PAIR.replace("[PRESET1_END]", ""), PAIR.replace("[PRESET2_BEGIN]", "[PRESET1_BEGIN]"),
             PAIR.replace("progress=0.3", "progress=NaN"), PAIR.replace("progress=0.3", "progress=1.01"),
-            PAIR.replace("direction=-1", "direction=0"), PAIR.replace("pattern=Fade", "pattern=Fade\nblending_pattern=Zoom")] {
+            PAIR.replace("direction=-1", "direction=not-an-integer"), PAIR.replace("pattern=Fade", "pattern=Fade\nblending_pattern=Zoom")] {
             assert!(parse(&source).is_err());
         }
     }

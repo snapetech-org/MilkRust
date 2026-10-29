@@ -92,7 +92,16 @@ pub fn extract(source: &str, enabled: bool) -> Result<Blocks, String> {
             return Err("Invalid embedded sprite marker".into());
         } else if current.is_some_and(|(_, _, executable)| executable) && !line.is_empty() && !line.starts_with([';', '#']) && !line.starts_with("//") {
             let (key, value) = line.split_once('=').ok_or("Invalid embedded sprite record")?;
-            records.insert(key.trim().to_ascii_lowercase(), value.trim().to_string());
+            let key = key.trim().to_ascii_lowercase();
+            let value = value.trim().to_string();
+            if key == "spritename" {
+                // The legacy reader replaces the image name when it is
+                // repeated, while the other saved sprite fields retain their
+                // first value.
+                records.insert(key, value);
+            } else {
+                records.entry(key).or_insert(value);
+            }
         }
         let target = if current.is_some() { &mut result.source } else { &mut result.body };
         target.push_str(raw);
@@ -336,8 +345,7 @@ impl Runtime {
             };
             let x = ((value("x") * 2.0 - 1.0).clamp(-1000.0, 1000.0) + definition.offset[0] + 1.0) * 0.5;
             let y = ((value("y") * 2.0 - 1.0).clamp(-1000.0, 1000.0) + definition.offset[1] + 1.0) * 0.5;
-            // MilkDrop truncates the EEL value to int and clamps to its five
-            // classic sprite blend modes.
+            // MilkDrop truncates the EEL value and clamps its five saved modes.
             let requested_blend_mode = value("blendmode").trunc() as i32;
             let blend_mode = requested_blend_mode.clamp(0, 4);
             frames.push(Frame {
@@ -422,13 +430,16 @@ void main() {
     vec3 dst = background.rgb;
     float alpha = diffuse.a;
     if (mode == 3) stage = texel;
-    else if (mode == 4) alpha *= sampleColor.a;
+    if (mode == 4) alpha *= sampleColor.a;
     vec3 result;
     if (mode == 1) result = stage; // decal: blending disabled
     else if (mode == 2) result = dst + stage;
     else if (mode == 3) result = stage * stage + dst * (vec3(1.0) - stage);
     else result = mix(dst, stage, alpha);
-    outColor = vec4(clamp(result, 0.0, 1.0), background.a);
+    float resultAlpha = mode == 1 || mode == 2 || mode == 3
+        ? (mode == 2 ? background.a + 1.0 : 1.0)
+        : alpha * alpha + background.a * (1.0 - alpha);
+    outColor = vec4(clamp(result, 0.0, 1.0), clamp(resultAlpha, 0.0, 1.0));
 }
 "#;
 
@@ -468,6 +479,29 @@ mod tests {
         }
         let hidden = extract(&block("SpriteLayer=5\ncode_1=x=0;"), true).unwrap().definitions;
         assert!(Runtime::default().render(&hidden, &BTreeMap::new(), 0.0, 0.0).unwrap().is_empty());
+    }
+
+    #[test]
+    fn duplicate_saved_fields_keep_first_values_except_sprite_name() {
+        let source = "[SPRITE1_BEGIN]\nSpriteName=sprites/first.png\nSpriteLayer=2\nSpriteAlpha=0.25\nSpriteName=sprites/last.png\nSpriteLayer=4\nSpriteAlpha=0.75\n[SPRITE1_END]\n";
+        let definitions = extract(source, true).unwrap().definitions;
+        assert_eq!(definitions[0].texture, "sprites/last.png");
+        assert_eq!(definitions[0].layer, 2);
+        assert_eq!(definitions[0].alpha, 0.25);
+    }
+
+    #[test]
+    fn saved_blend_defaults_to_zero_and_runtime_supports_five_classic_modes() {
+        let default = extract(&block(""), true).unwrap().definitions;
+        assert_eq!(default[0].blend_mode, 0);
+        assert_eq!(Runtime::default().render(&default, &BTreeMap::new(), 0.0, 0.0).unwrap()[0].blend_mode, 0);
+        for mode in 0..=4 {
+            let definitions = extract(&block(&format!("SpriteBlend={mode}\ncode_1=blendmode={mode};")), true).unwrap().definitions;
+            let frame = Runtime::default().render(&definitions, &BTreeMap::new(), 0.0, 0.0).unwrap().remove(0);
+            assert_eq!(frame.blend_mode, mode);
+        }
+        let out_of_range = extract(&block("code_1=blendmode=99;"), true).unwrap().definitions;
+        assert_eq!(Runtime::default().render(&out_of_range, &BTreeMap::new(), 0.0, 0.0).unwrap()[0].blend_mode, 4);
     }
 
     #[test]
@@ -531,7 +565,7 @@ mod tests {
     }
 
     #[test]
-    fn all_classic_saved_modes_are_explicit_and_runtime_errors_propagate() {
+    fn all_saved_modes_are_explicit_and_runtime_errors_propagate() {
         for mode in 0..=4 {
             let blocks = extract(&block(&format!("SpriteBlend={mode}\nSpriteLayer=4")), true).unwrap();
             let frames = Runtime::default().render(&blocks.definitions, &BTreeMap::new(), 0.0, 0.5).unwrap();

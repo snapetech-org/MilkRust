@@ -15,6 +15,11 @@ other executable trailer content remains gated. Progress is a frozen blend posit
 does not advance as a transition timer. Each preset retains its own
 equation/register state and feedback targets.
 
+An omitted progress defaults to `0.5` and an omitted direction defaults to
+`1`. Direction is a signed integer in the saved header; only `-1` reverses the
+four direction-sensitive patterns, while other integer values preserve the
+normal orientation. A non-integer or out-of-range direction is rejected.
+
 `milk2.rs` is an independent bounded parser of the documented wrapper. The
 saved-blend and sprite behavior is implemented from the compatible MIT
 behavioral specification identified in
@@ -38,11 +43,15 @@ sprite executes only with `sprite=1`. Unknown flag values, unmatched/nested
 blocks and unrelated trailer records remain gated. The wrapper enforces the same
 2 MiB source budget when called independently of the preset importer.
 
+Within an active sprite block, repeated saved fields use their first value,
+except repeated `SpriteName` records, which use the last value. Repeated sprite
+block indices still use the last complete block.
+
 The mask arithmetic includes the `-1` direction rule for the four
 direction-aware patterns and the non-square `horizontal` mesh behavior. Saved
 sprite handling includes per-owner scopes, flip UVs, saved offsets/repeats,
-rotation modes, byte-wrapped alpha, layer and burn ordering, and the five
-classic saved blend modes. These are source-level implementations. R8 rasterization,
+rotation modes, byte-wrapped alpha, layer and burn ordering, and all eleven
+saved blend modes. These are source-level implementations. R8 rasterization,
 compositing, sprite filtering and draw order still need reference captures to
 qualify pixel behavior on each renderer. The Canvas and WGSL paths explicitly
 reject unsupported spatial masks or saved sprites. Unknown trailing extensions

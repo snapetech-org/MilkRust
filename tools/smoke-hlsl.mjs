@@ -113,10 +113,21 @@ try {
       const spriteTga = tga.slice(0, 21); spriteTga[12]=1; spriteTga.set([192,128,64],18);
       const spriteTexture = 'data:image/x-tga;base64,' + btoa(String.fromCharCode(...spriteTga));
       const background = [0.1,0.2,0.3], sourceColor = [64/255,128/255,192/255];
-      const expected = (mode) => sourceColor.map((s,i) => {
-        const d = background[i];
-        return Math.min(1, Math.max(0, [s,s,d+s,s*s+d*(1-s),s][mode]))*255;
-      });
+      const sat = (v) => Math.min(1, Math.max(0, v));
+      const q8 = (v) => ((Math.trunc(v*255)%256)+256)%256/255;
+      const expected = (mode, tint, opacity, texel, texAlpha, dst=background) => {
+        let diffuse = tint.map(q8), diffuseAlpha = q8(opacity);
+        if (mode===1 || mode===2) { diffuse=tint.map(v=>q8(v*opacity)); diffuseAlpha=1; }
+        else if (mode===3) { diffuse=[1,1,1]; diffuseAlpha=1; }
+        let stage = diffuse.map((v,i)=>v*texel[i]);
+        if (mode===3) stage=texel;
+        let alpha=diffuseAlpha;
+        if (mode===4) alpha*=texAlpha;
+        return stage.map((v,i)=>sat(
+          mode===1 ? v : mode===2 ? dst[i]+v :
+          mode===3 ? v*v+dst[i]*(1-v) :
+          v*alpha+dst[i]*(1-alpha))*255);
+      };
       for (let mode=0; mode<=4; mode++) {
         const sprite = `\n[SPRITE1_BEGIN]\nSpriteName=art.tga\nSpriteBlend=${mode}\nSpriteBurn=0\nSpriteSX=-0.75\nSpriteSY=-0.75\n[SPRITE1_END]\n`;
         engine.loadPresetText(preset('shader_body { ret=float3(0.1,0.2,0.3); }')+sprite, `sprite-${mode}.milk`, JSON.stringify({'art.tga':spriteTexture}));
@@ -124,7 +135,7 @@ try {
         if(JSON.parse(engine.renderStatusJson()).state!=='preview') throw new Error(`Sprite ${mode} failed`);
         const pixel = new Uint8Array(4);
         gl.readPixels(canvas.width/2,canvas.height/2,1,1,gl.RGBA,gl.UNSIGNED_BYTE,pixel);
-        if(expected(mode).some((value,i)=>Math.abs(value-pixel[i])>3)) throw new Error(`Sprite mode ${mode}: ${pixel}`);
+        if(expected(mode,[1,1,1],1,sourceColor,1).some((value,i)=>Math.abs(value-pixel[i])>3)) throw new Error(`Sprite mode ${mode}: ${pixel}`);
         spriteRows.push({mode,center:Array.from(pixel),status:'pass'});
       }
       // Legacy alpha sources, byte-packed vertex colors, and the opaque
@@ -136,22 +147,12 @@ try {
         return 'data:image/x-tga;base64,' + btoa(String.fromCharCode(...image));
       };
       const tint = [0.83,0.59,0.27], opacity=0.37;
-      const packed = tint.map(v=>Math.floor(v*255)/255);
-      const packedAlpha = Math.floor(opacity*255)/255;
-      const packedPremultiplied = tint.map(v=>Math.floor(v*opacity*255)/255);
       for (const alpha of [0,64,255]) for (const keyed of [false,true]) for (let mode=0;mode<=4;mode++) {
         const key = keyed ? '0x4080C0' : '0xFF00FF';
         const isKey = keyed && alpha===255;
         const texel = isKey ? [0,0,0] : sourceColor;
         const textureAlpha = isKey ? 0 : alpha/255;
-        const wanted = texel.map((v,i)=> {
-          const dst=background[i];
-          const diffuse=mode===1||mode===2?packedPremultiplied[i]:mode===3?1:packed[i];
-          const stage=mode===3?v:v*diffuse;
-          const blend=mode===0?packedAlpha:mode===4?textureAlpha*packedAlpha:1;
-          const result=mode===1?stage:mode===2?dst+stage:mode===3?stage*stage+dst*(1-stage):stage*blend+dst*(1-blend);
-          return Math.min(1,Math.max(0,result))*255;
-        });
+        const wanted = expected(mode,tint,opacity,texel,textureAlpha);
         const records = `\n[SPRITE1_BEGIN]\nSpriteName=rgba.tga\nSpriteBlend=${mode}\nSpriteBurn=0\nSpriteColorKey=${key}\nSpriteR=${tint[0]}\nSpriteG=${tint[1]}\nSpriteB=${tint[2]}\nSpriteAlpha=${opacity}\n[SPRITE1_END]\n`;
         engine.loadPresetText(preset('shader_body { ret=float3(0.1,0.2,0.3); }')+records, 'sprite-alpha.milk', JSON.stringify({'rgba.tga':rgbaSprite([64,128,192,alpha])}));
         for(let frame=0;frame<3;frame++) engine.render(frame/30,0,0,0,'','',0,0.5,0.5,0,0);
