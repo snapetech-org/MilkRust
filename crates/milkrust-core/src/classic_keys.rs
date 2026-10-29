@@ -19,6 +19,7 @@ pub const ALIASES: &[(&str, &str)] = &[
     ("fzoomexponent", "zoomexp"), ("fshader", "shader"),
     ("nmotionvectorsx", "mv_x"), ("nmotionvectorsy", "mv_y"),
     ("bspectrum", "spectrum"), ("busedots", "usedots"),
+    ("num_inst", "instances"), ("thickoutline", "thick"),
     ("bdrawthick", "thick"), ("badditive", "additive"),
 ];
 

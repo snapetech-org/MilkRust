@@ -697,6 +697,7 @@ mod tests {
             ]),
             equations: milkrust_core::MilkRustEquations::default(),
             initialized: false,
+            ..MilkRustIndexedEntry::default()
         };
         let label = milkrust_fragment_entry_label(&entry, 0, "shape");
         assert_eq!(label, "Shape 1: MyShape");
@@ -708,6 +709,7 @@ mod tests {
             base_values: std::collections::BTreeMap::new(),
             equations: milkrust_core::MilkRustEquations::default(),
             initialized: false,
+            ..MilkRustIndexedEntry::default()
         };
         let label = milkrust_fragment_entry_label(&entry, 3, "shape");
         assert_eq!(label, "Shape 4");
@@ -719,6 +721,7 @@ mod tests {
             base_values: std::collections::BTreeMap::new(),
             equations: milkrust_core::MilkRustEquations::default(),
             initialized: false,
+            ..MilkRustIndexedEntry::default()
         };
         let label = milkrust_fragment_entry_label(&entry, 1, "wave");
         assert_eq!(label, "Wave 2");
@@ -733,6 +736,7 @@ mod tests {
             ]),
             equations: milkrust_core::MilkRustEquations::default(),
             initialized: false,
+            ..MilkRustIndexedEntry::default()
         };
         let label = milkrust_fragment_entry_label(&entry, 0, "shape");
         assert_eq!(label, "Shape 1: NameText");
@@ -746,6 +750,7 @@ mod tests {
             ]),
             equations: milkrust_core::MilkRustEquations::default(),
             initialized: false,
+            ..MilkRustIndexedEntry::default()
         };
         let label = milkrust_fragment_entry_label(&entry, 2, "wave");
         assert_eq!(label, "Wave 3: 64 samples");
@@ -759,6 +764,7 @@ mod tests {
             ]),
             equations: milkrust_core::MilkRustEquations::default(),
             initialized: false,
+            ..MilkRustIndexedEntry::default()
         };
         let label = milkrust_fragment_entry_label(&entry, 0, "shape");
         assert_eq!(label, "Shape 1: 8 sides");

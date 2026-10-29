@@ -79,6 +79,18 @@ try {
       const classicPixel = new Uint8Array(4);
       gl.readPixels(canvas.width/2,canvas.height/2,1,1,gl.RGBA,gl.UNSIGNED_BYTE,classicPixel);
       if([153,102,51].some((value,i)=>Math.abs(value-classicPixel[i])>3)) throw new Error(`Classic gamma/invert failed: ${classicPixel}`);
+      const whiteTga=tga.slice(0,21); whiteTga[12]=1; whiteTga.set([255,255,255],18);
+      const whiteTexture='data:image/x-tga;base64,'+btoa(String.fromCharCode(...whiteTga));
+      const layeredShapes='name=Ordered shape gradients\nwave_a=0\nwarp_shader_1=shader_body { ret=0; }\n'+
+        'shapecode_0_enabled=1\nshapecode_0_rad=0.5\nshapecode_0_sides=64\nshapecode_0_r=0\nshapecode_0_g=1\nshapecode_0_b=0\nshapecode_0_a=1\n'+
+        'shapecode_1_enabled=1\nshapecode_1_rad=0.3\nshapecode_1_sides=64\nshapecode_1_textured=1\nshapecode_1_texture=white.tga\n'+
+        'shapecode_1_r=1\nshapecode_1_g=0\nshapecode_1_b=0\nshapecode_1_a=1\nshapecode_1_r2=0\nshapecode_1_g2=0\nshapecode_1_b2=1\nshapecode_1_a2=1\n';
+      engine.loadPresetText(layeredShapes,'shapes.milk',JSON.stringify({'white.tga':whiteTexture}));
+      for(let frame=0;frame<3;frame++) engine.render(frame/30,0,0,0,'','',0,0.5,0.5,0,0);
+      const shapeCenter=new Uint8Array(4),shapeEdge=new Uint8Array(4);
+      gl.readPixels(canvas.width/2,canvas.height/2,1,1,gl.RGBA,gl.UNSIGNED_BYTE,shapeCenter);
+      gl.readPixels(canvas.width/2+11,canvas.height/2,1,1,gl.RGBA,gl.UNSIGNED_BYTE,shapeEdge);
+      if(shapeCenter[0]<220||shapeCenter[1]>5||shapeEdge[2]<100||shapeEdge[1]>5) throw new Error(`Shape order/gradient failed: ${shapeCenter}, ${shapeEdge}`);
       // Saved-sprite arithmetic and lifetime through the real WASM/WebGL path.
       // These are authored controls, not MilkDrop reference-image qualification.
       const spriteTga = tga.slice(0, 21); spriteTga[12]=1; spriteTga.set([192,128,64],18);
@@ -133,7 +145,7 @@ try {
         if (!rejected) throw new Error('Invalid shader import was accepted');
       }
     } finally { engine.free(); }
-    return { schemaVersion: 1, profile: 'milkrust-hlslparser-es300-v1', rows, spriteRows, rejected: invalid.length, contextRecovery: 'pass', fidelity: 'not-assessed', physicalDevice: false };
+    return { schemaVersion: 1, profile: 'milkrust-hlslparser-es300-v1', rows, spriteRows, rejected: invalid.length, contextRecovery: 'pass', shapeOrderAndGradient: 'pass', fidelity: 'not-assessed', physicalDevice: false };
   }, { cases, invalid });
   assert.equal(report.rows.length, cases.length + 1);
   assert.equal(report.spriteRows.length, 11);

@@ -2,7 +2,7 @@
 //! composite are distinct passes; each double-preset layer owns two targets.
 use std::{collections::BTreeMap, ffi::{c_void, CString}, ptr};
 use milkrust_core::{milk2, get_milkrust_texture_name_aliases, MilkRustCompositeFrame, MilkRustFrame, MilkRustFrameSet,
-    MilkRustPrimitiveMode, MilkRustShaderStage, MilkRustTexturedPrimitiveMode};
+    MilkRustPrimitive, MilkRustPrimitiveMode, MilkRustDrawCommand, MilkRustShaderStage, MilkRustTexturedPrimitive, MilkRustTexturedPrimitiveMode};
 use crate::gl::*;
 use milkrust_core::resources::{self, TextureKind};
 
@@ -244,6 +244,7 @@ impl Renderer {
         for entry in &frames.entries {
             let frame = &entry.frame;
             vertices += frame.warp_mesh.as_ref().map_or(6, |mesh| mesh.positions.len() / 2);
+            vertices += frame.motion_vectors.as_ref().map_or(0, |p| p.vertices.len()/2);
             vertices += frame.primitives.iter().map(|p| p.vertices.len()/2).sum::<usize>();
             vertices += frame.textured_primitives.iter().map(|p| p.vertices.len()/2).sum::<usize>();
             if vertices > MAX_VERTICES { return Err("Frame geometry exceeds 262144 vertices".into()); }
@@ -430,6 +431,23 @@ impl Renderer {
         Ok(())
     }
 
+    fn draw_primitive(&self, primitive: &MilkRustPrimitive) -> Result<(), String> {
+        unsafe { (self.gl.enable)(BLEND); (self.gl.blend_func_separate)(SRC_ALPHA, if primitive.additive { 1 } else { ONE_MINUS_SRC_ALPHA }, 1, ONE_MINUS_SRC_ALPHA); }
+        self.color.bind();
+        let mode = match primitive.mode { MilkRustPrimitiveMode::LineStrip => 0x0003, MilkRustPrimitiveMode::Lines => 0x0001,
+            MilkRustPrimitiveMode::Points => 0x0000, MilkRustPrimitiveMode::TriangleFan => 0x0006, MilkRustPrimitiveMode::Triangles => 0x0004 };
+        self.draw(mode, &interleave(&primitive.vertices, &[], &primitive.vertex_colors, primitive.color)?)
+    }
+
+    fn draw_textured(&self, primitive: &MilkRustTexturedPrimitive, previous: u32) -> Result<(), String> {
+        unsafe { (self.gl.enable)(BLEND); (self.gl.blend_func_separate)(SRC_ALPHA, if primitive.additive { 1 } else { ONE_MINUS_SRC_ALPHA }, 1, ONE_MINUS_SRC_ALPHA); (self.gl.bind_sampler)(0, 0); }
+        self.textured.bind(); self.textured.integer("previousFrame", 0);
+        self.bind_texture(0, if primitive.texture_name.is_empty() { previous } else { self.named_texture(&primitive.texture_name)? });
+        let vertices = interleave(&primitive.vertices, &primitive.uvs, &primitive.vertex_colors, primitive.color)?;
+        let mode = match primitive.mode { MilkRustTexturedPrimitiveMode::Quad | MilkRustTexturedPrimitiveMode::TriangleFan => 0x0006 };
+        self.draw(mode, &vertices)
+    }
+
     fn draw(&self, mode: u32, vertices: &[f32]) -> Result<(), String> {
         if vertices.len() % 8 != 0 || vertices.len()/8 > MAX_VERTICES || vertices.iter().any(|v| !v.is_finite()) {
             return Err("Invalid or non-finite frame vertices".into());
@@ -481,6 +499,10 @@ impl Renderer {
         for (index, entry) in frames.entries.iter().enumerate() {
             let layer = &self.layers[index]; let frame = &entry.frame;
             let write = 1 - layer.read;
+            if let Some(motion) = &frame.motion_vectors {
+                unsafe { (self.gl.bind_framebuffer)(FRAMEBUFFER, layer.targets[layer.read].id); }
+                self.draw_primitive(motion)?;
+            }
             self.build_resources(frame, layer, layer.targets[layer.read].texture.id)?;
             unsafe { (self.gl.bind_framebuffer)(FRAMEBUFFER, layer.targets[write].id); (self.gl.disable)(BLEND); }
             self.bind_texture(0, layer.targets[layer.read].texture.id);
@@ -491,21 +513,11 @@ impl Renderer {
             if !frame.shader_stages.warp.required { unsafe { (self.gl.bind_sampler)(0, 0); } }
             self.draw(0x0004, &feedback_vertices(frame)?)?;
             unsafe { (self.gl.enable)(BLEND); (self.gl.blend_func_separate)(SRC_ALPHA, ONE_MINUS_SRC_ALPHA, 1, ONE_MINUS_SRC_ALPHA); }
-            for primitive in &frame.textured_primitives {
-                unsafe { (self.gl.blend_func_separate)(SRC_ALPHA, if primitive.additive { 1 } else { ONE_MINUS_SRC_ALPHA }, 1, ONE_MINUS_SRC_ALPHA); }
-                self.textured.bind(); self.textured.integer("previousFrame", 0);
-                self.bind_texture(0, if primitive.texture_name.is_empty() { layer.targets[layer.read].texture.id }
-                    else { self.named_texture(&primitive.texture_name)? });
-                let vertices = interleave(&primitive.vertices, &primitive.uvs, &[], primitive.color)?;
-                let mode = match primitive.mode { MilkRustTexturedPrimitiveMode::Quad => 0x0006, MilkRustTexturedPrimitiveMode::TriangleFan => 0x0006 };
-                self.draw(mode, &vertices)?;
-            }
-            for primitive in &frame.primitives {
-                unsafe { (self.gl.blend_func_separate)(SRC_ALPHA, if primitive.additive { 1 } else { ONE_MINUS_SRC_ALPHA }, 1, ONE_MINUS_SRC_ALPHA); }
-                self.color.bind();
-                let mode = match primitive.mode { MilkRustPrimitiveMode::LineStrip => 0x0003, MilkRustPrimitiveMode::Lines => 0x0001,
-                    MilkRustPrimitiveMode::Points => 0x0000, MilkRustPrimitiveMode::TriangleFan => 0x0006, MilkRustPrimitiveMode::Triangles => 0x0004 };
-                self.draw(mode, &interleave(&primitive.vertices, &[], &primitive.vertex_colors, primitive.color)?)?;
+            for command in frame.draw_commands() {
+                match command {
+                    MilkRustDrawCommand::Primitive(index) => self.draw_primitive(frame.primitives.get(index).ok_or("Invalid primitive draw index")?)?,
+                    MilkRustDrawCommand::Textured(index) => self.draw_textured(frame.textured_primitives.get(index).ok_or("Invalid textured draw index")?, layer.targets[layer.read].texture.id)?,
+                }
             }
             for sprite in frames.sprites.iter().filter(|sprite| sprite.burn && sprite.layer > 0) {
                 self.draw_sprite(sprite)?;

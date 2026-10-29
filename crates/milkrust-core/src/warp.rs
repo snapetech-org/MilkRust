@@ -10,6 +10,42 @@ fn divisor(value: f64) -> f64 {
     if value < 0.0 { value.min(-0.000001) } else { value.max(0.000001) }
 }
 
+/// Motion trails sample the already evaluated grid, without running per-pixel
+/// code again. mv_dx/dy move the lattice; mv_l scales its feedback displacement.
+pub(crate) fn motion_vectors(scope: &BTreeMap<String, MilkRustValue>, mesh: Option<&MilkRustWarpMesh>) -> Vec<f64> {
+    let n = |key, fallback| crate::milkrust_scope_number(scope, key, fallback);
+    let Some(mesh) = mesh else { return Vec::new(); };
+    let columns = n("meshx",48.0).floor().clamp(1.0,128.0) as usize;
+    let rows = n("meshy",36.0).floor().clamp(1.0,128.0) as usize;
+    if mesh.source_uvs.len() != columns * rows * 12 { return Vec::new(); }
+    let nx = n("mv_x",0.0).clamp(0.0,64.0);
+    let ny = n("mv_y",0.0).clamp(0.0,48.0);
+    let length = n("mv_l",1.0).clamp(-1.0e6,1.0e6);
+    let minimum = 1.0 / n("pixelsx",512.0).clamp(1.0,4096.0);
+    let mut vertices = Vec::with_capacity(nx as usize * ny as usize * 4);
+    for row in 0..ny as usize {
+        let y = (row as f64 + 0.25) / (ny - 0.75) - n("mv_dy",0.0);
+        if !(0.0001..0.9999).contains(&y) { continue; }
+        for column in 0..nx as usize {
+            let x = (column as f64 + 0.25) / (nx - 0.75) + n("mv_dx",0.0);
+            if !(0.0001..0.9999).contains(&x) { continue; }
+            let gx=x*columns as f64; let gy=y*rows as f64;
+            let base=(gy.floor() as usize*columns+gx.floor() as usize)*12;
+            let dx=gx.fract(); let dy=gy.fract();
+            let mut uv=[0.0;2];
+            for (offset,weight) in [(0,(1.0-dx)*(1.0-dy)),(4,dx*(1.0-dy)),(2,(1.0-dx)*dy),(10,dx*dy)] {
+                for axis in 0..2 { uv[axis]+=mesh.source_uvs[base+offset+axis]*weight; }
+            }
+            let mut delta=[(uv[0]-x)*length,(uv[1]-y)*length];
+            let distance=delta[0].hypot(delta[1]);
+            if distance < 1.0e-8 { delta=[minimum,minimum]; }
+            else if distance < minimum { for value in &mut delta { *value *= minimum/distance; } }
+            vertices.extend_from_slice(&[x*2.0-1.0,y*2.0-1.0,(x+delta[0])*2.0-1.0,(y+delta[1])*2.0-1.0]);
+        }
+    }
+    vertices
+}
+
 pub fn mesh(scope: &BTreeMap<String, MilkRustValue>, equations: &str) -> Result<MilkRustWarpMesh, String> {
     let columns = number(scope, "meshx", 48.0)?.floor().clamp(1.0, 128.0) as usize;
     let rows = number(scope, "meshy", 36.0)?.floor().clamp(1.0, 128.0) as usize;
@@ -103,6 +139,17 @@ mod tests {
         assert!((stretched.source_uvs[0] - 0.125).abs() < 1.0e-12);
         let warped = mesh(&scope(&[("warp", 2.0), ("time", 1.0)]), "").unwrap();
         assert_ne!(warped.source_uvs, mesh(&scope(&[]), "").unwrap().source_uvs);
+    }
+    #[test]
+    fn motion_vectors_follow_the_feedback_field_not_the_grid_offsets() {
+        let scope=scope(&[("mv_x",4.0),("mv_y",3.0),("mv_l",1.0),("dx",0.1)]);
+        let grid=mesh(&scope, "").unwrap();
+        let vertices=motion_vectors(&scope,Some(&grid));
+        assert!(!vertices.is_empty());
+        for line in vertices.chunks_exact(4) {
+            assert!((line[2]-line[0]+0.2).abs()<1.0e-9);
+            assert!((line[3]-line[1]).abs()<1.0e-9);
+        }
     }
     #[test]
     fn nonfinite_equation_outputs_are_rejected_before_geometry() {

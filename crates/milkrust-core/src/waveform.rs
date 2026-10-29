@@ -236,7 +236,7 @@ pub(crate) fn classic(wave: &[f64], spectrum: &[f64], stereo: Option<&Stereo>, s
     }).collect()
 }
 
-pub(crate) fn custom_geometry(wave: &MilkRustIndexedEntry, left: &[f64], right: &[f64], scope: &Scope, rgb: [f64; 3]) -> Result<(Vec<f64>, Vec<f64>), String> {
+fn custom_geometry_with_state(wave: &MilkRustIndexedEntry, left: &[f64], right: &[f64], scope: &Scope, rgb: [f64; 3]) -> Result<(Vec<f64>, Vec<f64>, Scope), String> {
     let count = entry(wave, &["samples", "nsamples"], left.len() as f64).floor().clamp(0.0, AUDIO as f64) as usize;
     let spectrum = flag(wave, &["spectrum", "bspectrum"]);
     let separation = entry(wave, &["sep"], 0.0).clamp(-511.0, 511.0);
@@ -252,8 +252,13 @@ pub(crate) fn custom_geometry(wave: &MilkRustIndexedEntry, left: &[f64], right: 
         for value in &mut channels[channel] { *value *= scaling; }
     }
     let color = [entry(wave, &["r"], rgb[0]), entry(wave, &["g"], rgb[1]), entry(wave, &["b"], rgb[2]), entry(wave, &["a"], 1.0)];
-    let mut point_scope = scope.clone();
-    point_scope.extend(crate::classic_keys::scope(&wave.base_values));
+    let mut point_scope = wave.point_values.clone();
+    for values in [scope, &wave.runtime_values] {
+        for (key,value) in values.iter().filter(|(key,_)| crate::is_milkrust_entry_input(key) ||
+            key.strip_prefix('t').and_then(|v| v.parse::<usize>().ok()).is_some_and(|i| (1..=8).contains(&i))) {
+            point_scope.insert(key.clone(),value.clone());
+        }
+    }
     let mut vertices = Vec::with_capacity(count * 2);
     let mut colors = Vec::with_capacity(count * 4);
     let aspect = [number(scope, "aspectx", 1.0).max(1.0), number(scope, "aspecty", 1.0).max(1.0)];
@@ -274,17 +279,25 @@ pub(crate) fn custom_geometry(wave: &MilkRustIndexedEntry, left: &[f64], right: 
         vertices.extend_from_slice(&[(read("x")? * 2.0 - 1.0) * aspect[0], (1.0 - read("y")? * 2.0) * aspect[1]]);
         for key in ["r", "g", "b", "a"] { colors.push(read(key)?.clamp(0.0, 1.0)); }
     }
-    Ok((vertices, colors))
+    Ok((vertices, colors, point_scope))
 }
 
-pub(crate) fn custom(wave: &MilkRustIndexedEntry, samples: &[f64], spectrum: &[f64], stereo: Option<&Stereo>, scope: &Scope, rgb: [f64; 3]) -> Vec<MilkRustPrimitive> {
+pub(crate) fn custom_geometry(wave: &MilkRustIndexedEntry, left: &[f64], right: &[f64], scope: &Scope, rgb: [f64;3]) -> Result<(Vec<f64>,Vec<f64>),String> {
+    custom_geometry_with_state(wave,left,right,scope,rgb).map(|(vertices,colors,_)| (vertices,colors))
+}
+
+pub(crate) fn custom(wave: &mut MilkRustIndexedEntry, samples: &[f64], spectrum: &[f64], stereo: Option<&Stereo>, scope: &mut Scope, rgb: [f64; 3]) -> Vec<MilkRustPrimitive> {
     let spectral = flag(wave, &["spectrum", "bspectrum"]);
     let mono = if spectral { spectrum } else { samples };
     let left = stereo.map_or(mono, |s| if spectral { s.spectrum_left.as_slice() } else { s.left.as_slice() });
     let right = stereo.map_or(mono, |s| if spectral { s.spectrum_right.as_slice() } else { s.right.as_slice() });
-    match custom_geometry(wave, left, right, scope, rgb) {
-        Ok((vertices, colors)) => stroke(vertices, colors, [1.0; 4], flag(wave, &["usedots", "dots", "busedots"]),
-            flag(wave, &["thick", "bdrawthick", "bthick"]), flag(wave, &["additive", "badditive"]), true, scope),
+    match custom_geometry_with_state(wave, left, right, scope, rgb) {
+        Ok((vertices, colors, values)) => {
+            crate::merge_milkrust_global_memory(scope, &values);
+            wave.point_values = values;
+            stroke(vertices, colors, [1.0; 4], flag(wave, &["usedots", "dots", "busedots"]),
+                flag(wave, &["thick", "bdrawthick", "bthick"]), flag(wave, &["additive", "badditive"]), true, scope)
+        },
         Err(error) => { milkrust_expr::limits::record_frame_error(&error); Vec::new() }
     }
 }

@@ -6,7 +6,7 @@ use std::{cell::{Cell, RefCell}, collections::BTreeMap, rc::Rc};
 use milkrust_core::{
     clamp_unit, create_repeated_milkrust_colors, get_milkrust_texture_name_aliases,
     milk2, MilkRustCompositeFrame, MilkRustFrame, MilkRustFrameSet, MilkRustPrimitiveMode, MilkRustTexturedPrimitiveMode,
-    MilkRustShaderStage,
+    MilkRustShaderStage, MilkRustPrimitive, MilkRustTexturedPrimitive, MilkRustDrawCommand,
 };
 use wasm_bindgen::{prelude::*, JsCast};
 
@@ -139,9 +139,7 @@ struct MilkRustWebGlRenderer {
     u_previous_frame: Option<web_sys::WebGlUniformLocation>,
     u_primitive_point_size: Option<web_sys::WebGlUniformLocation>,
     u_resolution: Option<web_sys::WebGlUniformLocation>,
-    u_textured_alpha: Option<web_sys::WebGlUniformLocation>,
     u_textured_sampler: Option<web_sys::WebGlUniformLocation>,
-    u_textured_tint: Option<web_sys::WebGlUniformLocation>,
     u_time: Option<web_sys::WebGlUniformLocation>,
     u_warp_color: Option<web_sys::WebGlUniformLocation>,
     u_warp_feedback: Option<web_sys::WebGlUniformLocation>,
@@ -393,9 +391,7 @@ impl MilkRustWebGlRenderer {
             u_primitive_point_size: gl
                 .get_uniform_location(&primitive_program, "u_primitivePointSize"),
             u_resolution: gl.get_uniform_location(&program, "u_resolution"),
-            u_textured_alpha: gl.get_uniform_location(&textured_program, "u_alpha"),
             u_textured_sampler: gl.get_uniform_location(&textured_program, "u_texture"),
-            u_textured_tint: gl.get_uniform_location(&textured_program, "u_tint"),
             u_time: gl.get_uniform_location(&program, "u_time"),
             u_warp_color: gl.get_uniform_location(&warp_program, "u_color"),
             u_warp_feedback: gl.get_uniform_location(&warp_program, "u_feedback"),
@@ -449,6 +445,11 @@ impl MilkRustWebGlRenderer {
             *targets = next_targets;
         }
         let read_index = targets.read_index;
+        if let Some(motion) = &frame.motion_vectors {
+            self.gl.bind_framebuffer(web_sys::WebGl2RenderingContext::FRAMEBUFFER, Some(&targets.targets[read_index].framebuffer));
+            self.gl.viewport(0, 0, drawing_width, drawing_height);
+            self.draw_primitives(std::slice::from_ref(motion));
+        }
         let write_index = 1 - read_index;
         self.shader_resources.borrow_mut().prepare(frame.shader_stages.warp.texture_samplers.iter()
             .chain(&frame.shader_stages.composite.texture_samplers), drawing_width, drawing_height)?;
@@ -474,8 +475,12 @@ impl MilkRustWebGlRenderer {
         } else {
             self.draw_feedback_quad(frame, time, drawing_width, drawing_height, false, 1.0, TransitionUniforms::fade());
         }
-        self.draw_textured_primitives(frame, &targets.targets[read_index].texture)?;
-        self.draw_primitives(frame);
+        for command in frame.draw_commands() {
+            match command {
+                MilkRustDrawCommand::Primitive(index) => self.draw_primitives(std::slice::from_ref(frame.primitives.get(index).ok_or_else(|| JsValue::from_str("Invalid primitive draw index"))?)),
+                MilkRustDrawCommand::Textured(index) => self.draw_textured_primitives(std::slice::from_ref(frame.textured_primitives.get(index).ok_or_else(|| JsValue::from_str("Invalid textured draw index"))?), &targets.targets[read_index].texture)?,
+            }
+        }
         for sprite in sprites.iter().filter(|sprite| sprite.burn && sprite.layer > 0) { self.draw_sprite(sprite)?; }
         self.shader_resources.borrow_mut().build(frame, &targets.targets[write_index].texture);
 
@@ -918,8 +923,8 @@ impl MilkRustWebGlRenderer {
             .draw_arrays(web_sys::WebGl2RenderingContext::TRIANGLE_STRIP, 0, 4);
     }
 
-    fn draw_primitives(&self, frame: &MilkRustFrame) {
-        if frame.primitives.is_empty() {
+    fn draw_primitives(&self, primitives: &[MilkRustPrimitive]) {
+        if primitives.is_empty() {
             return;
         }
         self.gl.enable(web_sys::WebGl2RenderingContext::BLEND);
@@ -951,7 +956,7 @@ impl MilkRustWebGlRenderer {
                 0,
             );
         }
-        for primitive in &frame.primitives {
+        for primitive in primitives {
             self.gl.blend_func_separate(web_sys::WebGl2RenderingContext::SRC_ALPHA,
                 if primitive.additive { web_sys::WebGl2RenderingContext::ONE } else { web_sys::WebGl2RenderingContext::ONE_MINUS_SRC_ALPHA },
                 web_sys::WebGl2RenderingContext::ONE, web_sys::WebGl2RenderingContext::ONE_MINUS_SRC_ALPHA);
@@ -964,6 +969,7 @@ impl MilkRustWebGlRenderer {
                 .map(|value| *value as f32)
                 .collect::<Vec<_>>();
             let vertex_array = js_sys::Float32Array::from(vertices.as_slice());
+            self.gl.bind_buffer(web_sys::WebGl2RenderingContext::ARRAY_BUFFER, Some(&self.primitive_buffer));
             self.gl.buffer_data_with_array_buffer_view(
                 web_sys::WebGl2RenderingContext::ARRAY_BUFFER,
                 &vertex_array,
@@ -1070,8 +1076,8 @@ impl MilkRustWebGlRenderer {
         Err(JsValue::from_str(&format!("Missing texture: {raw_name}")))
     }
 
-    fn draw_textured_primitives(&self, frame: &MilkRustFrame, previous_frame: &web_sys::WebGlTexture) -> Result<(), JsValue> {
-        if frame.textured_primitives.is_empty() {
+    fn draw_textured_primitives(&self, primitives: &[MilkRustTexturedPrimitive], previous_frame: &web_sys::WebGlTexture) -> Result<(), JsValue> {
+        if primitives.is_empty() {
             return Ok(());
         }
         self.gl.enable(web_sys::WebGl2RenderingContext::BLEND);
@@ -1085,13 +1091,14 @@ impl MilkRustWebGlRenderer {
         self.gl
             .active_texture(web_sys::WebGl2RenderingContext::TEXTURE1);
         self.gl.uniform1i(self.u_textured_sampler.as_ref(), 1);
+        self.gl.bind_sampler(1, None);
         let position = self
             .gl
             .get_attrib_location(&self.textured_program, "position");
         let source_uv = self
             .gl
             .get_attrib_location(&self.textured_program, "sourceUv");
-        for primitive in &frame.textured_primitives {
+        for primitive in primitives {
             self.gl.blend_func_separate(web_sys::WebGl2RenderingContext::SRC_ALPHA,
                 if primitive.additive { web_sys::WebGl2RenderingContext::ONE } else { web_sys::WebGl2RenderingContext::ONE_MINUS_SRC_ALPHA },
                 web_sys::WebGl2RenderingContext::ONE, web_sys::WebGl2RenderingContext::ONE_MINUS_SRC_ALPHA);
@@ -1158,14 +1165,17 @@ impl MilkRustWebGlRenderer {
                     0,
                 );
             }
-            self.gl.uniform3f(
-                self.u_textured_tint.as_ref(),
-                primitive.color[0] as f32,
-                primitive.color[1] as f32,
-                primitive.color[2] as f32,
-            );
-            self.gl
-                .uniform1f(self.u_textured_alpha.as_ref(), primitive.color[3] as f32);
+            let color = self.gl.get_attrib_location(&self.textured_program, "color");
+            if color >= 0 {
+                let rgba = if primitive.vertex_colors.len() == vertices.len() * 2 { primitive.vertex_colors.clone() }
+                    else { create_repeated_milkrust_colors(vertices.len()/2, primitive.color) };
+                let rgba = rgba.iter().map(|v| *v as f32).collect::<Vec<_>>();
+                self.gl.bind_buffer(web_sys::WebGl2RenderingContext::ARRAY_BUFFER, Some(&self.primitive_color_buffer));
+                self.gl.buffer_data_with_array_buffer_view(web_sys::WebGl2RenderingContext::ARRAY_BUFFER,
+                    &js_sys::Float32Array::from(rgba.as_slice()), web_sys::WebGl2RenderingContext::DYNAMIC_DRAW);
+                self.gl.enable_vertex_attrib_array(color as u32);
+                self.gl.vertex_attrib_pointer_with_i32(color as u32, 4, web_sys::WebGl2RenderingContext::FLOAT, false, 0, 0);
+            }
             let draw_mode = match primitive.mode {
                 MilkRustTexturedPrimitiveMode::Quad
                 | MilkRustTexturedPrimitiveMode::TriangleFan => {
@@ -1590,9 +1600,12 @@ void main() {
 const MILKRUST_TEXTURED_VERTEX_SHADER: &str = r#"#version 300 es
 in vec2 position;
 in vec2 sourceUv;
+in vec4 color;
+out vec4 v_color;
 out vec2 v_uv;
 void main() {
   v_uv = sourceUv;
+  v_color = color;
   gl_Position = vec4(position, 0.0, 1.0);
 }
 "#;
@@ -1600,13 +1613,12 @@ void main() {
 const MILKRUST_TEXTURED_FRAGMENT_SHADER: &str = r#"#version 300 es
 precision highp float;
 uniform sampler2D u_texture;
-uniform vec3 u_tint;
-uniform float u_alpha;
+in vec4 v_color;
 in vec2 v_uv;
 out vec4 outColor;
 void main() {
   vec4 texel = texture(u_texture, v_uv);
-  outColor = vec4(texel.rgb * u_tint, texel.a * u_alpha);
+  outColor = texel * v_color;
 }
 "#;
 

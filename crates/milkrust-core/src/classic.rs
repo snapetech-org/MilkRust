@@ -68,7 +68,7 @@ mod tests {
         let set = runtime.render_source("wave_a=1\nbAdditiveWaves=1\nbWaveDots=1\nbDarkenCenter=1\n", 0.0, 0.1, 0.2, 0.3);
         let primitives = &set.entries[0].frame.primitives;
         assert!(primitives.iter().any(|p| p.additive && p.mode == crate::MilkRustPrimitiveMode::Triangles));
-        let center = &primitives[0];
+        let center = primitives.iter().find(|p| p.mode == crate::MilkRustPrimitiveMode::TriangleFan && p.vertex_colors.len() == 24).unwrap();
         assert_eq!(center.vertex_colors[3], 3.0 / 32.0);
         assert_eq!(center.vertices[2], -0.025);
         assert!(!center.additive);
