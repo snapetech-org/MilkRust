@@ -1,51 +1,79 @@
 # HLSL compatibility scope
 
-MilkRust does not yet have a full HLSL compiler. The native and WebGL paths
-share a restricted expression/declaration translator, not a complete HLSL
-front end. A GL compiler accepting generated text is not a fidelity result.
+MilkRust still does **not** have a full HLSL compiler. The native and WebGL
+paths share a restricted HLSL-like expression/declaration translator. A driver
+accepting generated GLSL is not a fidelity result. Full HLSL, full `.milk2`,
+and broad community-preset compatibility remain unimplemented and
+unqualified.
 
-The current source corrects exact function-token recognition (including
-whitespace), balanced argument discovery, nested calls, named sampler discovery,
-identifier case in simple conditional returns, comment token boundaries and
-HLSL `fmod` truncation. The previous GLSL `mod` substitution was wrong for
-negative inputs. Helpers cover scalar and float2/3/4 operands, including
-scalar/vector combinations.
+## Implemented translator subset
 
-The native and WebGL shader paths now lower these common legacy 2D sampling
-forms when the sampler resolves to a known MilkDrop texture binding:
-`tex2D`/`tex`, `tex2Dlod`, `tex2Dbias`, `tex2Dproj`, and `tex2Dgrad`. Nested
-sampling expressions are bounded; malformed arity, excessive nesting or
-unresolved sampler names fail closed. This is intrinsic lowering inside the
-existing restricted expression/declaration translator, not broad shader
-compatibility. WebGPU keeps these added operations disabled because its current
-binding path cannot lower their sampling semantics. No GPU comparison has run.
+The bounded path currently handles a single returned expression, a limited
+sequence of initialized scalar/vector declarations and assignments, simple
+conditional returns, selected common HLSL intrinsics, and these legacy 2D
+sampling forms when the sampler maps to a known MilkDrop texture binding:
+`tex2D`/`tex`, `tex2Dlod`, `tex2Dbias`, `tex2Dproj`, and `tex2Dgrad`. The code
+preserves HLSL `fmod` truncation for native/WebGL. WebGPU rejects sampling
+forms whose sampling semantics are not represented by its current bindings.
 
-Full HLSL remains separate work: a licensed compiler/front end, macros and
-scopes, functions, arrays, structs, typed matrices and `mul`, control flow,
-sampler/resource reflection, built-in noise/blur/mipmap resources, exact
-MilkDrop uniforms and stage behavior. Compiler/driver hangs also require
-containment outside the current in-process renderer. Extending token rewrites
-does not satisfy those requirements.
+Common `float1`, `half`/`halfN`, `min16floatN`/`min10floatN`, `intN`, `uintN`
+and `boolN` declarations and constructors now lower to explicit GLSL
+scalar/vector types. The half and minimum-precision float forms widen to
+32-bit GLSL floats; rounding can differ from a 16-bit HLSL implementation.
+WebGPU rejects integer and boolean types until their WGSL constructor and
+binding path is implemented. This alias lowering does not supply HLSL's
+broader implicit cast, overflow or precision rules.
 
-The next native/WebAssembly front-end candidate is the MIT-licensed
-[Thekla HLSLParser](https://github.com/Thekla/hlslparser). Its own README says
-it targets legacy Direct3D 9-style HLSL; the GLSL translator is maintained by
-community contributions. projectM vendors this parser, yet its current release
-notes still list presets that translate incorrectly or render black. Therefore
-the parser is a candidate for a pinned integration and corpus evaluation, not
-a complete-compatibility claim. Before replacing this translator, the project
-must audit the pinned source and notices, add a bounded MilkDrop shader wrapper
-and uniform/resource ABI, compile for each native target and WebAssembly, and
-compare output against an approved reference corpus. Arbitrary modern HLSL,
-DirectX-specific resources, and unsupported MilkDrop runtime features remain
-outside the promised compatibility contract unless those are separately
-implemented and qualified.
+`analyze_milkrust_shader_compatibility` returns stable issue categories for
+common unsupported classes: source limit, preprocessor, structured types,
+matrix operations, control flow, arrays/indexing, resource declarations,
+unsupported texture intrinsics, or the remaining restricted grammar. These
+diagnostics are surfaced in CLI and desktop compatibility reports. They are a
+triage aid, not a compiler or qualification claim. A supported result means
+only that the current translator generated its bounded output.
 
-Upstream routes reviewed for this work include
-[projectM](https://github.com/projectM-visualizer/projectm) (whose own releases
-still document shader translation limitations) and the MIT-licensed
-[Butterchurn converter](https://github.com/jberg/milkdrop-shader-converter/tree/291c8851d2ed0769fce5d06cf32b39d51d027875).
-The latter relies on hlsl2glslfork and glsl-optimizer and is not a drop-in
-MilkRust renderer or complete resource/runtime implementation. No source from
-the noncommercial MDropDX12 renderer was copied. All non-Fade `.milk2` spatial
-patterns remain rejected rather than approximated under a compatibility claim.
+The translator is not a general HLSL front end. Macros, arbitrary functions and
+scope, arrays, structs, typed matrices and `mul`, loops and general branching,
+resource reflection, shader-model semantics, blur/noise/mipmap resources,
+exact MilkDrop uniforms and stage behavior remain unsupported. Compiler and
+driver hangs also need resource/time containment. Non-Fade `.milk2` spatial
+patterns remain rejected rather than approximated.
+
+## Integration preparation and acceptance criteria
+
+The MIT-licensed [Thekla HLSLParser](https://github.com/Thekla/hlslparser) is a
+candidate parser, not a complete compatibility solution. Its legacy D3D9 scope
+and community-maintained GLSL emitter must be reviewed at a pinned revision.
+Before adding it to a shipping runtime, the implementation must:
+
+1. Pin source and transitive dependencies, record every license, and establish
+   native plus WebAssembly buildability without relaxing `unsafe_code = forbid`
+   across the Rust workspace. If a foreign-language parser is required, isolate
+   its FFI behind a separately reviewed safe boundary.
+2. Parse HLSL into a typed, bounded intermediate form and map MilkDrop's
+   uniforms, texture aliases, sampler state and warp/composite stages explicitly.
+   Keep GLSL ES and WGSL resource layouts distinct; reject any resource or
+   intrinsic a selected backend cannot represent.
+3. Enforce byte, token, nesting, recursion, instruction, allocation and elapsed
+   time limits before handing output to a driver. Compilation must be
+   cancellable or isolated so hostile presets cannot hang playback.
+4. Use a rights-cleared shader corpus and per-case records for source parser
+   result, generated source, backend compilation, image comparison, audio
+   synchronization and resource behavior. Compare supported targets with an
+   approved reference implementation; retain black-frame and translation
+   failure cases as failures.
+5. Version the compatibility profile and only broaden it when every required
+   backend passes the corpus. Keep unsupported constructs visible in the app's
+   compatibility report and never silently downgrade a shader-bearing preset.
+
+projectM's open-source HLSL conversion work and
+[MilkDrop shader converter](https://github.com/jberg/milkdrop-shader-converter/tree/291c8851d2ed0769fce5d06cf32b39d51d027875)
+are useful comparison sources, not drop-in renderer replacements. Their
+translation limitations and different runtime/resource models mean parser
+integration alone cannot support a claim that all `.milk` or `.milk2` presets
+work. No source from the noncommercial MDropDX12 renderer was copied.
+
+No HLSL compiler integration, GPU comparison, full `.milk2` implementation or
+qualification was performed in this source-only change. The added type
+lowering and issue diagnostics improve a limited subset and make failure
+categories visible; the compiler and rendering work remain open.

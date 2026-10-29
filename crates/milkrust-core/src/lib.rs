@@ -4827,7 +4827,21 @@ fn normalize_milkrust_shader_expression(expression: &str) -> String {
             while paren < bytes.len() && bytes[paren].is_ascii_whitespace() { paren += 1; }
             if bytes.get(paren) != Some(&b'(') { continue; }
             let replacement = match &expression[start..index] {
-                "float4" => "vec4", "float3" => "vec3", "float2" => "vec2",
+                "float4" | "half4" | "min16float4" | "min10float4" => "vec4",
+                "float3" | "half3" | "min16float3" | "min10float3" => "vec3",
+                "float2" | "half2" | "min16float2" | "min10float2" => "vec2",
+                "float1" | "half" | "half1" | "min16float" | "min16float1"
+                | "min10float" | "min10float1" => "float",
+                "int4" | "min16int4" => "ivec4",
+                "int3" | "min16int3" => "ivec3",
+                "int2" | "min16int2" => "ivec2",
+                "int1" | "min16int" | "min16int1" => "int",
+                "uint4" | "min16uint4" => "uvec4",
+                "uint3" | "min16uint3" => "uvec3",
+                "uint2" | "min16uint2" => "uvec2",
+                "uint1" | "min16uint" | "min16uint1" => "uint",
+                "bool4" => "bvec4", "bool3" => "bvec3", "bool2" => "bvec2",
+                "bool1" => "bool",
                 "saturate" => "clamp01", "lerp" => "mix", "frac" => "fract",
                 "fmod" => "milkrust_hlsl_fmod", "rsqrt" => "inversesqrt", "atan2" => "atan",
                 _ => continue,
@@ -4844,7 +4858,16 @@ fn normalize_milkrust_shader_expression(expression: &str) -> String {
 
 fn normalize_milkrust_shader_type(shader_type: &str) -> String {
     match shader_type {
-        "float2" => "vec2", "float3" => "vec3", "float4" => "vec4",
+        "float1" | "half" | "half1" | "min16float" | "min16float1"
+        | "min10float" | "min10float1" => "float",
+        "float2" | "half2" | "min16float2" | "min10float2" => "vec2",
+        "float3" | "half3" | "min16float3" | "min10float3" => "vec3",
+        "float4" | "half4" | "min16float4" | "min10float4" => "vec4",
+        "int1" | "min16int" | "min16int1" => "int", "int2" | "min16int2" => "ivec2",
+        "int3" | "min16int3" => "ivec3", "int4" | "min16int4" => "ivec4",
+        "uint1" | "min16uint" | "min16uint1" => "uint", "uint2" | "min16uint2" => "uvec2",
+        "uint3" | "min16uint3" => "uvec3", "uint4" | "min16uint4" => "uvec4",
+        "bool1" => "bool", "bool2" => "bvec2", "bool3" => "bvec3", "bool4" => "bvec4",
         value => value,
     }.to_string()
 }
@@ -4896,7 +4919,14 @@ fn is_safe_milkrust_shader_expression(expression: &str) -> bool {
 
 fn split_milkrust_shader_declaration(statement: &str) -> Option<(&str, &str, &str)> {
     for shader_type in [
-        "float4", "float3", "float2", "float", "vec4", "vec3", "vec2",
+        "min16float4", "min16float3", "min16float2", "min10float4", "min10float3", "min10float2",
+        "min16int4", "min16int3", "min16int2", "min16uint4", "min16uint3", "min16uint2",
+        "float4", "float3", "float2", "half4", "half3", "half2",
+        "int4", "int3", "int2", "uint4", "uint3", "uint2", "bool4", "bool3", "bool2",
+        "min16float1", "min10float1", "min16int1", "min16uint1",
+        "min16float", "min10float", "min16int", "min16uint",
+        "float1", "half1", "int1", "uint1", "bool1",
+        "float", "half", "int", "uint", "bool", "vec4", "vec3", "vec2",
     ] {
         let Some(rest) = statement.strip_prefix(shader_type) else {
             continue;
@@ -5204,6 +5234,12 @@ pub fn create_translated_milkrust_wgsl_shader(source: &str) -> String {
     // These HLSL operations currently have no equivalent in this limited WGSL
     // binding path. Keep WebGPU closed rather than emit invalid sampling calls.
     let source_without_comments = strip_milkrust_shader_comments(source);
+    let has_unlowered_integer_or_boolean_type = [
+        "int", "int1", "int2", "int3", "int4", "min16int", "min16int1", "min16int2", "min16int3", "min16int4",
+        "uint", "uint1", "uint2", "uint3", "uint4", "min16uint", "min16uint1", "min16uint2", "min16uint3", "min16uint4",
+        "bool", "bool1", "bool2", "bool3", "bool4",
+    ].iter().any(|name| contains_milkrust_shader_identifier(&source_without_comments, name));
+    if has_unlowered_integer_or_boolean_type { return String::new(); }
     if ["tex2Dlod", "tex2Dbias", "tex2Dproj", "tex2Dgrad"].iter()
         .any(|name| find_milkrust_shader_call(&source_without_comments, name).is_some())
     { return String::new(); }
