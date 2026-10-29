@@ -73,6 +73,12 @@ try {
         if (lit < canvas.width * canvas.height / 20 || max - min < 10) throw new Error(`${test.id}: blank or uniform output`);
         rows.push({ id: test.id, status: 'pass', litPixels: lit, range: max-min });
       }
+      const classicSource = 'name=Classic controls\nwave_a=0\nwarp_shader_1=shader_body { ret=float3(0.2,0.3,0.4); }\nfGammaAdj=2\nbInvert=1\n';
+      engine.loadPresetText(classicSource, 'classic.milk', '{}');
+      engine.render(0,0,0,0,'','',0,0.5,0.5,0,0);
+      const classicPixel = new Uint8Array(4);
+      gl.readPixels(canvas.width/2,canvas.height/2,1,1,gl.RGBA,gl.UNSIGNED_BYTE,classicPixel);
+      if([153,102,51].some((value,i)=>Math.abs(value-classicPixel[i])>3)) throw new Error(`Classic gamma/invert failed: ${classicPixel}`);
       // Saved-sprite arithmetic and lifetime through the real WASM/WebGL path.
       // These are authored controls, not MilkDrop reference-image qualification.
       const spriteTga = tga.slice(0, 21); spriteTga[12]=1; spriteTga.set([192,128,64],18);

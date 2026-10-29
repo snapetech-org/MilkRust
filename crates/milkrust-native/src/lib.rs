@@ -191,8 +191,10 @@ fn render_session(session: &mut Session, elapsed: f64,
 /// framebuffer must belong to the current, creating GL context. See milkrust.h.
 #[no_mangle]
 pub unsafe extern "C" fn milkrust_render(handle: u64, framebuffer: u32, width: u32, height: u32, elapsed: f64) -> i32 {
-    call(handle, |session| render_session(session, elapsed,
-        |renderer, frames| renderer.render(frames, framebuffer, width, height, elapsed)))
+    call(handle, |session| {
+        session.runtime.set_viewport(width, height)?;
+        render_session(session, elapsed, |renderer, frames| renderer.render(frames, framebuffer, width, height, elapsed))
+    })
 }
 
 /// # Safety
@@ -207,6 +209,7 @@ pub unsafe extern "C" fn milkrust_render_rgba(handle: u64, width: u32, height: u
             || length as u64 != u64::from(width)*u64::from(height)*4 || output.is_null() {
             return Err("Invalid RGBA output buffer".into());
         }
+        session.runtime.set_viewport(width, height)?;
         let output = unsafe { std::slice::from_raw_parts_mut(output, length) };
         render_session(session, elapsed, |renderer, frames| renderer.capture(frames, width, height, elapsed, output))
     })

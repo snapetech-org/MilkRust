@@ -63,6 +63,10 @@ pub fn frame_values(scope: &std::collections::BTreeMap<String, crate::MilkRustVa
         let value = match scope.get(name) { Some(crate::MilkRustValue::Number(v)) if v.is_finite() => *v, _ => fallback };
         values.insert(name.to_string(), value);
     }
+    for (name, fallback) in crate::classic::VALUES {
+        let value = crate::milkrust_scope_number(scope, name, *fallback);
+        values.insert((*name).into(), if value.is_finite() { value } else { *fallback });
+    }
     let seed = title.bytes().fold(2166136261u32, |s, c| (s ^ u32::from(c)).wrapping_mul(16777619));
     values.insert("preset_seed".into(), f64::from(seed));
     for (target, suffix) in [("vol", ""), ("vol_att", "_att")] {

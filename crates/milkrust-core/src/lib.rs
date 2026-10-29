@@ -9,6 +9,8 @@ pub mod sprites;
 mod hlsl;
 pub mod resources;
 pub mod classic_keys;
+pub mod classic;
+mod warp;
 use input_limits::validate_preset_source;
 
 pub struct MilkRustPreset {
@@ -163,6 +165,7 @@ pub enum MilkRustPrimitiveMode {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct MilkRustPrimitive {
+    pub additive: bool,
     pub color: [f64; 4],
     pub mode: MilkRustPrimitiveMode,
     pub vertex_colors: Vec<f64>,
@@ -177,6 +180,7 @@ pub enum MilkRustTexturedPrimitiveMode {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct MilkRustTexturedPrimitive {
+    pub additive: bool,
     pub color: [f64; 4],
     pub mode: MilkRustTexturedPrimitiveMode,
     pub texture_name: String,
@@ -627,68 +631,14 @@ fn create_milkrust_warp_mesh(
     preset: &MilkRustPresetDocument,
     frame_scope: &BTreeMap<String, MilkRustValue>,
 ) -> Option<MilkRustWarpMesh> {
-    let equations = preset.equations.per_pixel.trim();
-    if equations.is_empty() {
-        return None;
-    }
-    let columns = milkrust_scope_number(frame_scope, "meshx", 8.0)
-        .floor()
-        .clamp(1.0, 128.0) as usize;
-    let rows = milkrust_scope_number(frame_scope, "meshy", 6.0)
-        .floor()
-        .clamp(1.0, 128.0) as usize;
-    let mut positions = Vec::with_capacity(columns * rows * 12);
-    let mut source_uvs = Vec::with_capacity(columns * rows * 12);
-    let mut push_point = |x: f64, y: f64| {
-        let centered_x = x - 0.5;
-        let centered_y = y - 0.5;
-        let mut point_scope = frame_scope.clone();
-        point_scope.insert(
-            "ang".to_string(),
-            MilkRustValue::Number(centered_y.atan2(centered_x)),
-        );
-        point_scope.insert(
-            "rad".to_string(),
-            MilkRustValue::Number((centered_x * centered_x + centered_y * centered_y).sqrt()),
-        );
-        point_scope.insert("x".to_string(), MilkRustValue::Number(x));
-        point_scope.insert("y".to_string(), MilkRustValue::Number(y));
-        if let Ok(next_scope) = evaluate_milkrust_equations(equations, &point_scope) {
-            point_scope = next_scope;
-        }
-        let rotation = milkrust_scope_number(&point_scope, "rot", 0.0);
-        let zoom = milkrust_scope_number(&point_scope, "zoom", 1.0)
-            .abs()
-            .max(0.001);
-        let dx = milkrust_scope_number(&point_scope, "dx", 0.0);
-        let dy = milkrust_scope_number(&point_scope, "dy", 0.0);
-        let scaled_x = centered_x / zoom;
-        let scaled_y = centered_y / zoom;
-        let sine = rotation.sin();
-        let cosine = rotation.cos();
-        positions.push(x * 2.0 - 1.0);
-        positions.push(y * 2.0 - 1.0);
-        source_uvs.push(cosine * scaled_x - sine * scaled_y + 0.5 + dx);
-        source_uvs.push(sine * scaled_x + cosine * scaled_y + 0.5 + dy);
-    };
-    for row in 0..rows {
-        for column in 0..columns {
-            let left = column as f64 / columns as f64;
-            let right = (column + 1) as f64 / columns as f64;
-            let top = row as f64 / rows as f64;
-            let bottom = (row + 1) as f64 / rows as f64;
-            push_point(left, top);
-            push_point(left, bottom);
-            push_point(right, top);
-            push_point(right, top);
-            push_point(left, bottom);
-            push_point(right, bottom);
+    match warp::mesh(frame_scope, preset.equations.per_pixel.trim()) {
+        Ok(mesh) => Some(mesh),
+        Err(error) => {
+            milkrust_expr::limits::record_frame_error(&error);
+            // Empty geometry is an explicit renderer error for legacy callers.
+            Some(MilkRustWarpMesh { positions: Vec::new(), source_uvs: Vec::new() })
         }
     }
-    Some(MilkRustWarpMesh {
-        positions,
-        source_uvs,
-    })
 }
 
 pub fn milkrust_frame_from_source(
@@ -1281,6 +1231,8 @@ impl MilkRustRuntime {
 
 #[derive(Clone, Debug, Default)]
 pub struct MilkRustFrameSetRuntime {
+    previous_time: Option<f64>,
+    viewport: Option<(u32, u32)>,
     sprite_runtime: sprites::Runtime,
     last_error: Option<String>,
      initialized: Vec<bool>,
@@ -1292,6 +1244,13 @@ pub struct MilkRustFrameSetRuntime {
  }
 
 impl MilkRustFrameSetRuntime {
+    pub fn set_viewport(&mut self, width: u32, height: u32) -> Result<(), String> {
+        if width == 0 || height == 0 || width > 4096 || height > 4096 || u64::from(width) * u64::from(height) > 8 * 1024 * 1024 {
+            return Err("Runtime viewport exceeds its dimensions budget".into());
+        }
+        self.viewport = Some((width, height));
+        Ok(())
+    }
 
 
      pub fn render_source(
@@ -1410,6 +1369,7 @@ if self.source != source || self.preset_documents.is_empty() {
                  source,
                  source.to_ascii_lowercase().contains("[preset01]"),
              );
+             self.previous_time = None;
              self.sprite_runtime = sprites::Runtime::default();
              self.cached_preset_set = Some(parsed.clone());
              self.shader_stages = parsed.presets.iter().map(milkrust_shader_stages).collect();
@@ -1423,6 +1383,9 @@ if self.source != source || self.preset_documents.is_empty() {
              self.source = source.to_string();
          }
 
+         let fps = self.previous_time.filter(|previous| time_seconds > *previous)
+             .map_or(60.0, |previous| (1.0 / (time_seconds - previous)).clamp(1.0, 1000.0));
+         self.previous_time = Some(time_seconds);
          let preset_set = self.cached_preset_set.as_ref().unwrap();
          let title = milkrust_preset_set_title(preset_set);
          let transition_mode = milkrust_transition_mode(preset_set);
@@ -1445,6 +1408,14 @@ if self.source != source || self.preset_documents.is_empty() {
                  waveform,
                  spectrum,
              );
+             scope.insert("fps".into(), MilkRustValue::Number(fps));
+             if let Some((width, height)) = self.viewport {
+                 let ratio = f64::from(width) / f64::from(height);
+                 for (name, value) in [("pixelsx", f64::from(width)), ("pixelsy", f64::from(height)),
+                     ("aspectx", (1.0 / ratio).max(1.0)), ("aspecty", ratio.max(1.0))] {
+                     scope.insert(name.into(), MilkRustValue::Number(value));
+                 }
+             }
              update_milkrust_scope_input(scope, input);
              if !self.initialized.get(index).copied().unwrap_or_default() {
                  if !preset_document.equations.init.trim().is_empty() {
@@ -3475,18 +3446,21 @@ fn create_milkrust_frame_primitives(
     } else {
         waveform
     };
-    let mut primitives = Vec::new();
+    let mut primitives = classic::darken_center(frame_scope).into_iter().collect::<Vec<_>>();
     let waveform_vertices = create_milkrust_waveform_vertices(samples, frame_scope);
     let waveform_alpha = clamp_unit(milkrust_scope_number(frame_scope, "wave_a", 1.0));
     if waveform_vertices.len() >= 4 && waveform_alpha > 0.0 {
         primitives.push(MilkRustPrimitive {
+            additive: milkrust_scope_number(frame_scope, "wave_additive", milkrust_scope_number(frame_scope, "additivewave", 0.0)) != 0.0,
             color: [
                 fallback_color[0],
                 fallback_color[1],
                 fallback_color[2],
                 waveform_alpha,
             ],
-            mode: MilkRustPrimitiveMode::LineStrip,
+            mode: if milkrust_scope_number(frame_scope, "wave_usedots", milkrust_scope_number(frame_scope, "wave_dots", 0.0)) != 0.0 {
+                MilkRustPrimitiveMode::Points
+            } else { MilkRustPrimitiveMode::LineStrip },
             vertex_colors: Vec::new(),
             vertices: waveform_vertices,
         });
@@ -3508,6 +3482,7 @@ fn create_milkrust_frame_primitives(
         ));
         if vertices.len() >= 6 && alpha > 0.0 {
             primitives.push(MilkRustPrimitive {
+                additive: false,
                 color: [
                     clamp_unit(milkrust_scope_number(
                         frame_scope,
@@ -3536,6 +3511,7 @@ fn create_milkrust_frame_primitives(
     let motion_alpha = clamp_unit(milkrust_scope_number(frame_scope, "mv_a", 0.8));
     if motion_vertices.len() >= 4 && motion_alpha > 0.0 {
         primitives.push(MilkRustPrimitive {
+            additive: false,
             color: [
                 clamp_unit(milkrust_scope_number(
                     frame_scope,
@@ -3569,6 +3545,7 @@ fn create_milkrust_frame_primitives(
             continue;
         }
         primitives.push(MilkRustPrimitive {
+            additive: milkrust_entry_flag(&evaluated, &["additive", "badditive"]),
             color: [
                 clamp_unit(milkrust_entry_number(
                     &evaluated,
@@ -3602,8 +3579,9 @@ fn create_milkrust_frame_primitives(
             continue;
         }
         let fill_vertices = create_milkrust_shape_fill_vertices(&evaluated);
-        if fill_vertices.len() >= 6 {
+        if fill_vertices.len() >= 6 && !is_milkrust_shape_textured(&evaluated) {
             primitives.push(MilkRustPrimitive {
+                additive: milkrust_entry_flag(&evaluated, &["additive", "badditive"]),
                 color: [
                     clamp_unit(milkrust_entry_number(
                         &evaluated,
@@ -3630,6 +3608,7 @@ fn create_milkrust_frame_primitives(
         let outline_vertices = create_milkrust_shape_vertices(&evaluated);
         if outline_vertices.len() >= 8 {
             primitives.push(MilkRustPrimitive {
+                additive: milkrust_entry_flag(&evaluated, &["additive", "badditive"]),
                 color: [
                     clamp_unit(milkrust_entry_number(
                         &evaluated,
@@ -3672,6 +3651,7 @@ fn create_milkrust_frame_textured_primitives(
         let uvs = create_milkrust_shape_texture_uvs(&evaluated);
         if vertices.len() >= 6 && vertices.len() == uvs.len() {
             primitives.push(MilkRustTexturedPrimitive {
+                additive: milkrust_entry_flag(&evaluated, &["additive", "badditive"]),
                 color: [
                     clamp_unit(milkrust_entry_number(
                         &evaluated,
@@ -3703,6 +3683,7 @@ fn create_milkrust_frame_textured_primitives(
         let uvs = create_milkrust_sprite_texture_uvs(&evaluated);
         if vertices.len() >= 8 && vertices.len() == uvs.len() {
             primitives.push(MilkRustTexturedPrimitive {
+                additive: milkrust_entry_flag(&evaluated, &["additive", "badditive"]),
                 color: [
                     clamp_unit(milkrust_entry_number(
                         &evaluated,
@@ -3754,19 +3735,22 @@ fn create_milkrust_frame_primitives_and_textures_stateful(
     } else {
         spectrum
     };
-    let mut primitives = Vec::new();
+    let mut primitives = classic::darken_center(frame_scope).into_iter().collect::<Vec<_>>();
     let mut textured_primitives = Vec::new();
     let waveform_vertices = create_milkrust_waveform_vertices(waveform_samples, frame_scope);
     let waveform_alpha = clamp_unit(milkrust_scope_number(frame_scope, "wave_a", 1.0));
     if waveform_vertices.len() >= 4 && waveform_alpha > 0.0 {
         primitives.push(MilkRustPrimitive {
+            additive: milkrust_scope_number(frame_scope, "wave_additive", milkrust_scope_number(frame_scope, "additivewave", 0.0)) != 0.0,
             color: [
                 fallback_color[0],
                 fallback_color[1],
                 fallback_color[2],
                 waveform_alpha,
             ],
-            mode: MilkRustPrimitiveMode::LineStrip,
+            mode: if milkrust_scope_number(frame_scope, "wave_usedots", milkrust_scope_number(frame_scope, "wave_dots", 0.0)) != 0.0 {
+                MilkRustPrimitiveMode::Points
+            } else { MilkRustPrimitiveMode::LineStrip },
             vertex_colors: Vec::new(),
             vertices: waveform_vertices,
         });
@@ -3789,6 +3773,7 @@ fn create_milkrust_frame_primitives_and_textures_stateful(
         ));
         if vertices.len() >= 6 && alpha > 0.0 {
             primitives.push(MilkRustPrimitive {
+                additive: false,
                 color: [
                     clamp_unit(milkrust_scope_number(
                         frame_scope,
@@ -3818,6 +3803,7 @@ fn create_milkrust_frame_primitives_and_textures_stateful(
     let motion_alpha = clamp_unit(milkrust_scope_number(frame_scope, "mv_a", 0.8));
     if motion_vertices.len() >= 4 && motion_alpha > 0.0 {
         primitives.push(MilkRustPrimitive {
+            additive: false,
             color: [
                 clamp_unit(milkrust_scope_number(
                     frame_scope,
@@ -3859,6 +3845,7 @@ fn create_milkrust_frame_primitives_and_textures_stateful(
             continue;
         }
         primitives.push(MilkRustPrimitive {
+            additive: milkrust_entry_flag(&evaluated, &["additive", "badditive"]),
             color: [
                 clamp_unit(milkrust_entry_number(
                     &evaluated,
@@ -3900,6 +3887,7 @@ fn create_milkrust_frame_primitives_and_textures_stateful(
                 let uvs = create_milkrust_shape_texture_uvs(&evaluated);
                 if fill_vertices.len() == uvs.len() {
                     textured_primitives.push(MilkRustTexturedPrimitive {
+                        additive: milkrust_entry_flag(&evaluated, &["additive", "badditive"]),
                         color: [
                             clamp_unit(milkrust_entry_number(
                                 &evaluated,
@@ -3926,6 +3914,7 @@ fn create_milkrust_frame_primitives_and_textures_stateful(
                 }
             } else {
                 primitives.push(MilkRustPrimitive {
+                    additive: milkrust_entry_flag(&evaluated, &["additive", "badditive"]),
                     color: [
                         clamp_unit(milkrust_entry_number(
                             &evaluated,
@@ -3953,6 +3942,7 @@ fn create_milkrust_frame_primitives_and_textures_stateful(
         let outline_vertices = create_milkrust_shape_vertices(&evaluated);
         if outline_vertices.len() >= 8 {
             primitives.push(MilkRustPrimitive {
+                additive: milkrust_entry_flag(&evaluated, &["additive", "badditive"]),
                 color: [
                     clamp_unit(milkrust_entry_number(
                         &evaluated,
@@ -3986,6 +3976,7 @@ fn create_milkrust_frame_primitives_and_textures_stateful(
         let uvs = create_milkrust_sprite_texture_uvs(&evaluated);
         if vertices.len() >= 8 && vertices.len() == uvs.len() {
             textured_primitives.push(MilkRustTexturedPrimitive {
+                additive: milkrust_entry_flag(&evaluated, &["additive", "badditive"]),
                 color: [
                     clamp_unit(milkrust_entry_number(
                         &evaluated,

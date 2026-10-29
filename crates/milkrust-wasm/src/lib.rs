@@ -407,6 +407,9 @@ impl WasmMilkRustEngine {
             }
         }
         if self.render_error.is_some() { return; }
+        if let Err(error) = self.runtime.set_viewport(self.canvas.width().max(1), self.canvas.height().max(1)) {
+            self.render_error = Some(error); return;
+        }
         let input = MilkRustInputState {
             mouse_down,
             mouse_dx,

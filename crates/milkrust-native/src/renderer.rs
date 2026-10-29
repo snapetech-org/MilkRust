@@ -7,7 +7,7 @@ use crate::gl::*;
 use milkrust_core::resources::{self, TextureKind};
 
 const VERTEX: &str = "#version 300 es\nin vec2 position; in vec2 sourceUv; in vec4 vertexColor; out vec2 uv; out highp vec2 originalUv; out vec4 tint; void main(){ originalUv=position*0.5+0.5; uv=sourceUv; tint=vertexColor; gl_Position=vec4(position,0,1); gl_PointSize=1.0; }";
-const COPY_BODY: &str = "uniform sampler2D previousFrame; uniform float feedback; uniform float outputAlpha; in vec2 uv; out vec4 outColor; void main(){outColor=vec4(texture(previousFrame,uv).rgb*feedback,outputAlpha*milkrust_transition_mask(uv));}";
+const COPY_BODY: &str = "uniform sampler2D previousFrame; uniform float feedback; uniform float outputAlpha; uniform float classicDisplay; in vec2 uv; out vec4 outColor; void main(){vec2 sampleUv=classicWrap>0.5?fract(uv):clamp(uv,0.0,1.0); vec3 color=classicDisplay>0.5?milkrust_classic_display(previousFrame,uv):texture(previousFrame,sampleUv).rgb*feedback;outColor=vec4(color,outputAlpha*milkrust_transition_mask(uv));}";
 const COLOR: &str = "#version 300 es\nprecision highp float; in vec4 tint; out vec4 outColor; void main(){outColor=tint;}";
 const TEXTURED: &str = "#version 300 es\nprecision highp float; uniform sampler2D previousFrame; in vec2 uv; in vec4 tint; out vec4 outColor; void main(){outColor=texture(previousFrame,uv)*tint;}";
 const MAX_PIXELS: u64 = 8 * 1024 * 1024;
@@ -166,8 +166,8 @@ impl Renderer {
     /// # Safety
     /// gl must refer to the current dedicated context for this entire lifetime.
     pub unsafe fn new(gl: Gl, gles: bool) -> Result<Self, String> {
-        let copy_source = format!("#version 300 es\nprecision highp float;\n{}\n{}",
-            milk2::GLSL_TRANSITION_MASK, COPY_BODY);
+        let copy_source = format!("#version 300 es\nprecision highp float;\n{}\n{}\n{}",
+            milk2::GLSL_TRANSITION_MASK, milkrust_core::classic::GLSL, COPY_BODY);
         let copy = Program::new(gl, gles, &copy_source)?;
         let color = Program::new(gl, gles, COLOR)?;
         let textured = Program::new(gl, gles, TEXTURED)?;
@@ -342,6 +342,10 @@ impl Renderer {
     fn uniforms(&self, program: &Program, frame: &MilkRustFrame, stage: &MilkRustShaderStage,
         time: f64, alpha: f32, feedback: f32, transition: TransitionUniforms, layer: &Layer, history: u32) -> Result<(), String> {
         program.bind(); program.integer("previousFrame", 0);
+        let (echo, filters, wrap) = milkrust_core::classic::uniforms(frame);
+        program.vector4("classicEcho", echo[0], echo[1], echo[2], echo[3]);
+        program.vector4("classicFilters", filters[0], filters[1], filters[2], filters[3]);
+        program.float("classicWrap", wrap);
         unsafe { (self.gl.bind_sampler)(0, self.samplers.ids[2]); }
         program.float("feedback", feedback); program.float("outputAlpha", alpha);
         program.integer("u_transitionPattern", transition.pattern);
@@ -483,9 +487,12 @@ impl Renderer {
             let warp = layer.warp.as_ref().map_or(&self.copy, |(_, program)| program);
             self.uniforms(warp, frame, &frame.shader_stages.warp, time, 1.0,
                 (1.0-frame.background_alpha).clamp(0.0, 1.0) as f32, TransitionUniforms::fade(), layer, layer.targets[layer.read].texture.id)?;
+            warp.float("classicDisplay", 0.0);
+            if !frame.shader_stages.warp.required { unsafe { (self.gl.bind_sampler)(0, 0); } }
             self.draw(0x0004, &feedback_vertices(frame)?)?;
             unsafe { (self.gl.enable)(BLEND); (self.gl.blend_func_separate)(SRC_ALPHA, ONE_MINUS_SRC_ALPHA, 1, ONE_MINUS_SRC_ALPHA); }
             for primitive in &frame.textured_primitives {
+                unsafe { (self.gl.blend_func_separate)(SRC_ALPHA, if primitive.additive { 1 } else { ONE_MINUS_SRC_ALPHA }, 1, ONE_MINUS_SRC_ALPHA); }
                 self.textured.bind(); self.textured.integer("previousFrame", 0);
                 self.bind_texture(0, if primitive.texture_name.is_empty() { layer.targets[layer.read].texture.id }
                     else { self.named_texture(&primitive.texture_name)? });
@@ -494,6 +501,7 @@ impl Renderer {
                 self.draw(mode, &vertices)?;
             }
             for primitive in &frame.primitives {
+                unsafe { (self.gl.blend_func_separate)(SRC_ALPHA, if primitive.additive { 1 } else { ONE_MINUS_SRC_ALPHA }, 1, ONE_MINUS_SRC_ALPHA); }
                 self.color.bind();
                 let mode = match primitive.mode { MilkRustPrimitiveMode::LineStrip => 0x0003, MilkRustPrimitiveMode::Lines => 0x0001,
                     MilkRustPrimitiveMode::Points => 0x0000, MilkRustPrimitiveMode::TriangleFan => 0x0006, MilkRustPrimitiveMode::Triangles => 0x0004 };
@@ -518,6 +526,8 @@ impl Renderer {
             let transition = TransitionUniforms::from_entry(entry);
             self.uniforms(composite, frame, &frame.shader_stages.composite, time,
                 transition.output_alpha(index == 0), 1.0, transition, layer, layer.targets[write].texture.id)?;
+            composite.float("classicDisplay", 1.0);
+            if !frame.shader_stages.composite.required { unsafe { (self.gl.bind_sampler)(0, 0); } }
             self.draw(0x0004, &quad())?;
             // Back-layer burns become history for the next frame, after the
             // current composite has sampled it. Equations still ran only once.
@@ -557,7 +567,9 @@ fn quad() -> Vec<f32> {
     interleave(&points, &uvs, &[], [1.0; 4]).unwrap_or_default()
 }
 fn feedback_vertices(frame: &MilkRustFrame) -> Result<Vec<f32>, String> {
-    if let Some(mesh) = &frame.warp_mesh { return interleave(&mesh.positions, &mesh.source_uvs, &[], [1.0; 4]); }
+    if let Some(mesh) = &frame.warp_mesh {
+        if mesh.positions.len() < 6 { return Err("Invalid or failed warp mesh".into()); }
+        return interleave(&mesh.positions, &mesh.source_uvs, &[], [1.0; 4]); }
     let mut vertices = quad();
     let (sine, cosine) = frame.rotation.sin_cos();
     for vertex in vertices.chunks_exact_mut(8) {

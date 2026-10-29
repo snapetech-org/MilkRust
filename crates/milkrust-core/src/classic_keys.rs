@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use crate::MilkRustValue;
 
 pub const ALIASES: &[(&str, &str)] = &[
-    ("frating", "rating"), ("fgammaadj", "gammaadj"), ("fdecay", "decay"),
+    ("frating", "rating"), ("fgammaadj", "gamma"), ("fdecay", "decay"),
     ("fvideoechozoom", "echo_zoom"), ("fvideoechoalpha", "echo_alpha"),
     ("nvideoechoorientation", "echo_orient"), ("nwavemode", "wave_mode"),
     ("badditivewaves", "additivewave"), ("bwavedots", "wave_dots"),

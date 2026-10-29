@@ -285,8 +285,9 @@ impl MilkRustWebGlRenderer {
             MILKRUST_WEBGL_VERTEX_SHADER,
         )?;
         let fragment_source = format!(
-            "#version 300 es\nprecision highp float;\n{}\n{}",
+            "#version 300 es\nprecision highp float;\n{}\n{}\n{}",
             milk2::GLSL_TRANSITION_MASK,
+            milkrust_core::classic::GLSL,
             MILKRUST_WEBGL_FRAGMENT_BODY,
         );
         let fragment_shader = compile_milkrust_shader(
@@ -608,6 +609,8 @@ impl MilkRustWebGlRenderer {
         );
         self.gl.uniform1f(self.u_warp_output_alpha.as_ref(), 1.0);
         self.gl.uniform1i(self.u_warp_previous_frame.as_ref(), 0);
+        self.gl.bind_sampler(0, None);
+        self.gl.uniform1f(self.gl.get_uniform_location(&self.warp_program, "classicWrap").as_ref(), milkrust_core::classic::uniforms(frame).2);
         }
         self.gl.draw_arrays(
             web_sys::WebGl2RenderingContext::TRIANGLES,
@@ -872,6 +875,11 @@ impl MilkRustWebGlRenderer {
         }
         let (r, g, b) = frame.wave_color;
         let feedback = (1.0 - frame.background_alpha).clamp(0.0, 1.0) as f32;
+        self.gl.bind_sampler(0, None);
+        let (echo, filters, wrap) = milkrust_core::classic::uniforms(frame);
+        self.gl.uniform4fv_with_f32_array(self.gl.get_uniform_location(&self.program, "classicEcho").as_ref(), &echo);
+        self.gl.uniform4fv_with_f32_array(self.gl.get_uniform_location(&self.program, "classicFilters").as_ref(), &filters);
+        self.gl.uniform1f(self.gl.get_uniform_location(&self.program, "classicWrap").as_ref(), wrap);
         self.gl.uniform1i(self.u_previous_frame.as_ref(), 0);
         self.gl.uniform1f(
             self.u_display_only.as_ref(),
@@ -944,6 +952,9 @@ impl MilkRustWebGlRenderer {
             );
         }
         for primitive in &frame.primitives {
+            self.gl.blend_func_separate(web_sys::WebGl2RenderingContext::SRC_ALPHA,
+                if primitive.additive { web_sys::WebGl2RenderingContext::ONE } else { web_sys::WebGl2RenderingContext::ONE_MINUS_SRC_ALPHA },
+                web_sys::WebGl2RenderingContext::ONE, web_sys::WebGl2RenderingContext::ONE_MINUS_SRC_ALPHA);
             if primitive.vertices.len() < 4 {
                 continue;
             }
@@ -1081,6 +1092,9 @@ impl MilkRustWebGlRenderer {
             .gl
             .get_attrib_location(&self.textured_program, "sourceUv");
         for primitive in &frame.textured_primitives {
+            self.gl.blend_func_separate(web_sys::WebGl2RenderingContext::SRC_ALPHA,
+                if primitive.additive { web_sys::WebGl2RenderingContext::ONE } else { web_sys::WebGl2RenderingContext::ONE_MINUS_SRC_ALPHA },
+                web_sys::WebGl2RenderingContext::ONE, web_sys::WebGl2RenderingContext::ONE_MINUS_SRC_ALPHA);
             if primitive.vertices.len() < 6 || primitive.vertices.len() != primitive.uvs.len() {
                 continue;
             }
@@ -1545,7 +1559,9 @@ void main() {
   vec2 feedbackUv = vec2(c*centered.x-s*centered.y, s*centered.x+c*centered.y) + vec2(0.5) + u_motion.zw;
   vec2 sampleUv = u_displayOnly > 0.5 ? v_uv : feedbackUv;
   float retention = u_displayOnly > 0.5 ? 1.0 : clamp(u_feedback, 0.0, 1.0);
-  outColor = vec4(texture(u_previousFrame, clamp(sampleUv, vec2(0.0), vec2(1.0))).rgb * retention, u_outputAlpha);
+  vec2 boundedUv = classicWrap > 0.5 ? fract(sampleUv) : clamp(sampleUv, 0.0, 1.0);
+  vec3 color = u_displayOnly > 0.5 ? milkrust_classic_display(u_previousFrame, v_uv) : texture(u_previousFrame, boundedUv).rgb * retention;
+  outColor = vec4(color, u_outputAlpha);
   outColor.a *= milkrust_transition_mask(v_uv);
 }
 "#;
@@ -1608,12 +1624,13 @@ const MILKRUST_WARP_GRID_FRAGMENT_SHADER: &str = r#"#version 300 es
 precision highp float;
 uniform vec3 u_color;
 uniform float u_feedback;
+uniform float classicWrap;
 uniform float u_outputAlpha;
 uniform sampler2D u_previousFrame;
 in vec2 v_sourceUv;
 out vec4 outColor;
 void main() {
-  vec3 previous = texture(u_previousFrame, clamp(v_sourceUv, vec2(0.0), vec2(1.0))).rgb;
+  vec3 previous = texture(u_previousFrame, (classicWrap > 0.5 ? fract(v_sourceUv) : clamp(v_sourceUv, vec2(0.0), vec2(1.0)))).rgb;
   vec3 base = previous * clamp(u_feedback, 0.0, 1.0);
   outColor = vec4(base, u_outputAlpha);
 }
