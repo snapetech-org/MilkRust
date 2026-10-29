@@ -715,9 +715,13 @@ struct HLSLIdentifierExpression : public HLSLExpression
     {
         name     = NULL;
         global  = false;
+        declaration = NULL;
     }
     const char*         name;
     bool                global; // This is a global variable.
+    // Lexically resolved declaration, including local constants. Not a child
+    // edge: visitors must not follow it (a declaration can refer to itself).
+    HLSLDeclaration*     declaration;
 };
 
 /** float2(1, 2) */

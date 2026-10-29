@@ -4,6 +4,8 @@
 #include "HLSLTree.h"
 #include <limits>
 #include <cstdint>
+#include <cmath>
+#include "HLSLNumeric.h"
 
 namespace M4
 {
@@ -353,165 +355,19 @@ HLSLBuffer * HLSLTree::FindBuffer(const char * name)
 
 
 
-bool HLSLTree::GetExpressionValue(HLSLExpression * expression, int & value)
+#include "HLSLConstants.inl"
+
+bool HLSLTree::GetExpressionValue(HLSLExpression* expression, int& value)
 {
-    DepthGuard milkrustDepth;
-    ASSERT (expression != NULL);
-
-    // Expression must be constant.
-    if ((expression->expressionType.flags & HLSLTypeFlag_Const) == 0)
-    {
-        return false;
-    }
-
-    // We are expecting an integer scalar. @@ Add support for type conversion from other scalar types.
-    if (expression->expressionType.baseType != HLSLBaseType_Int &&
-        expression->expressionType.baseType != HLSLBaseType_Bool)
-    {
-        return false;
-    }
-
-    if (expression->expressionType.array)
-    {
-        return false;
-    }
-
-    if (expression->nodeType == HLSLNodeType_BinaryExpression)
-    {
-        HLSLBinaryExpression * binaryExpression = (HLSLBinaryExpression *)expression;
-
-        int value1, value2;
-        if (!GetExpressionValue(binaryExpression->expression1, value1) ||
-            !GetExpressionValue(binaryExpression->expression2, value2))
-        {
-            return false;
-        }
-
-        switch(binaryExpression->binaryOp)
-        {
-            case HLSLBinaryOp_And:
-                value = value1 && value2;
-                return true;
-            case HLSLBinaryOp_Or:
-                value = value1 || value2;
-                return true;
-            case HLSLBinaryOp_Add:
-                value = CheckedConstant(std::int64_t(value1) + value2);
-                return true;
-            case HLSLBinaryOp_Sub:
-                value = CheckedConstant(std::int64_t(value1) - value2);
-                return true;
-            case HLSLBinaryOp_Mul:
-                value = CheckedConstant(std::int64_t(value1) * value2);
-                return true;
-            case HLSLBinaryOp_Div:
-                if (value2 == 0) throw std::range_error("HLSL integer division by zero");
-                value = CheckedConstant(std::int64_t(value1) / value2);
-                return true;
-            case HLSLBinaryOp_Mod:
-                if (value2 == 0) throw std::range_error("HLSL integer remainder by zero");
-                value = int(std::int64_t(value1) % value2); return true;
-            case HLSLBinaryOp_LeftShift:
-            case HLSLBinaryOp_RightShift:
-                if (value2 < 0 || value2 > 31) throw std::range_error("HLSL constant shift is out of range");
-                if (binaryExpression->binaryOp == HLSLBinaryOp_LeftShift) value = CheckedConstant(std::int64_t(value1) * (std::int64_t(1) << value2));
-                else value = int(value1 >= 0 ? std::int64_t(value1) / (std::int64_t(1) << value2) : -1 - ((-1 - std::int64_t(value1)) / (std::int64_t(1) << value2)));
-                return true;
-            case HLSLBinaryOp_Less:
-                value = value1 < value2;
-                return true;
-            case HLSLBinaryOp_Greater:
-                value = value1 > value2;
-                return true;
-            case HLSLBinaryOp_LessEqual:
-                value = value1 <= value2;
-                return true;
-            case HLSLBinaryOp_GreaterEqual:
-                value = value1 >= value2;
-                return true;
-            case HLSLBinaryOp_Equal:
-                value = value1 == value2;
-                return true;
-            case HLSLBinaryOp_NotEqual:
-                value = value1 != value2;
-                return true;
-            case HLSLBinaryOp_BitAnd:
-                value = value1 & value2;
-                return true;
-            case HLSLBinaryOp_BitOr:
-                value = value1 | value2;
-                return true;
-            case HLSLBinaryOp_BitXor:
-                value = value1 ^ value2;
-                return true;
-            case HLSLBinaryOp_Assign:
-            case HLSLBinaryOp_AddAssign:
-            case HLSLBinaryOp_SubAssign:
-            case HLSLBinaryOp_MulAssign:
-            case HLSLBinaryOp_DivAssign:
-                // IC: These are not valid on non-constant expressions and should fail earlier when querying expression value.
-                return false;
-        }
-    }
-    else if (expression->nodeType == HLSLNodeType_UnaryExpression)
-    {
-        HLSLUnaryExpression * unaryExpression = (HLSLUnaryExpression *)expression;
-
-        if (!GetExpressionValue(unaryExpression->expression, value))
-        {
-            return false;
-        }
-
-        switch(unaryExpression->unaryOp)
-        {
-            case HLSLUnaryOp_Negative:
-                value = CheckedConstant(-std::int64_t(value));
-                return true;
-            case HLSLUnaryOp_Positive:
-                // nop.
-                return true;
-            case HLSLUnaryOp_Not:
-                value = !value;
-                return true;
-            case HLSLUnaryOp_BitNot:
-                value = ~value;
-                return true;
-            case HLSLUnaryOp_PostDecrement:
-            case HLSLUnaryOp_PostIncrement:
-            case HLSLUnaryOp_PreDecrement:
-            case HLSLUnaryOp_PreIncrement:
-                // IC: These are not valid on non-constant expressions and should fail earlier when querying expression value.
-                return false;
-        }
-    }
-    else if (expression->nodeType == HLSLNodeType_IdentifierExpression)
-    {
-        HLSLIdentifierExpression * identifier = (HLSLIdentifierExpression *)expression;
-
-        HLSLDeclaration * declaration = FindGlobalDeclaration(identifier->name);
-        if (declaration == NULL)
-        {
-            return false;
-        }
-        if ((declaration->type.flags & HLSLTypeFlag_Const) == 0)
-        {
-            return false;
-        }
-
-        return GetExpressionValue(declaration->assignment, value);
-    }
-    else if (expression->nodeType == HLSLNodeType_LiteralExpression)
-    {
-        HLSLLiteralExpression * literal = (HLSLLiteralExpression *)expression;
-
-        if (literal->expressionType.baseType == HLSLBaseType_Int) value = literal->iValue;
-        else if (literal->expressionType.baseType == HLSLBaseType_Bool) value = (int)literal->bValue;
-        else return false;
-
-        return true;
-    }
-
-    return false;
+    if (!expression) return false;
+    const auto type = expression->expressionType.baseType;
+    if (type != HLSLBaseType_Int && type != HLSLBaseType_Uint && type != HLSLBaseType_Bool) return false;
+    ScalarConstant constant;
+    if (!EvaluateScalar(*this, expression, constant)) return false;
+    if (constant.value < -2147483648.0 || constant.value > 2147483647.0)
+        throw std::range_error("HLSL constant bound exceeds signed 32-bit range");
+    value = static_cast<int>(constant.value);
+    return true;
 }
 
 bool HLSLTree::NeedsFunction(const char* name)

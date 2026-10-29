@@ -916,6 +916,7 @@ HLSLParser::HLSLParser(Allocator* allocator, const char* fileName, const char* b
     m_tokenizer(fileName, buffer, length),
     m_userTypes(allocator),
     m_variables(allocator),
+    m_typeAliases(allocator),
     m_functions(allocator)
 {
     m_numGlobals = 0;
@@ -1031,7 +1032,7 @@ bool HLSLParser::ParseTopLevel(HLSLStatement*& statement)
 {
     DepthGuard milkrustDepth;
     HLSLAttribute * attributes = NULL;
-    ParseAttributeBlock(attributes);
+    if (m_tokenizer.GetToken() == '[' && !ParseAttributeBlock(attributes)) return false;
 
     int line             = GetLineNumber();
     const char* fileName = GetFileName();
@@ -1042,6 +1043,8 @@ bool HLSLParser::ParseTopLevel(HLSLStatement*& statement)
     //int          typeFlags = false;
 
     bool doesNotExpectSemicolon = false;
+
+    if (Accept("typedef")) return ParseTypedef();
 
     if (Accept(HLSLToken_Struct))
     {
@@ -1131,7 +1134,7 @@ bool HLSLParser::ParseTopLevel(HLSLStatement*& statement)
                 m_tokenizer.Error("Expected variable declaration");
                 return false;
             }
-            DeclareVariable( field->name, field->type );
+            DeclareVariable( field->name, field->type, field );
             field->buffer = buffer;
             if (buffer->field == NULL)
             {
@@ -1226,47 +1229,24 @@ bool HLSLParser::ParseTopLevel(HLSLStatement*& statement)
         }
         else
         {
-            // Uniform declaration.
-            HLSLDeclaration* declaration = m_tree->AddNode<HLSLDeclaration>(fileName, line);
-            declaration->name            = globalName;
-            declaration->type            = type;
-
-            // Handle array syntax.
-            if (Accept('['))
-            {
-                if (!Accept(']'))
-                {
-                    if (!ParseExpression(declaration->type.arraySize) || !Expect(']'))
-                    {
-                        return false;
-                    }
+            HLSLDeclaration* previous = NULL;
+            do {
+                auto* declaration = m_tree->AddNode<HLSLDeclaration>(fileName, line);
+                declaration->name = globalName;
+                declaration->type = type;
+                if (!ParseArraySuffix(declaration->type, true)) return false;
+                if (Accept(':')) {
+                    if (!AcceptIdentifier(declaration->semantic) &&
+                        (!Expect(HLSLToken_Register) || !Expect('(') || !ExpectIdentifier(declaration->registerName) || !Expect(')'))) return false;
                 }
-                declaration->type.array = true;
-            }
-
-            // Handle optional register.
-            if (Accept(':'))
-            {
-                // @@ Currently we support either a semantic or a register, but not both.
-                if (AcceptIdentifier(declaration->semantic)) {
-                    int k = 1;
-                }
-                else if (!Expect(HLSLToken_Register) || !Expect('(') || !ExpectIdentifier(declaration->registerName) || !Expect(')'))
-                {
-                    return false;
-                }
-            }
-
-            DeclareVariable( globalName, declaration->type );
-
-            if (!ParseDeclarationAssignment(declaration))
-            {
-                return false;
-            }
-
-            // TODO: Multiple variables declared on one line.
-
-            statement = declaration;
+                DeclareVariable(globalName, declaration->type, declaration);
+                if (!ParseDeclarationAssignment(declaration)) return false;
+                if (previous) previous->nextStatement = declaration;
+                else statement = declaration;
+                previous = declaration;
+                if (!Accept(',')) break;
+                if (!ExpectIdentifier(globalName)) return false;
+            } while (true);
         }
     }
     else if (ParseTechnique(statement)) {
@@ -1359,7 +1339,8 @@ bool HLSLParser::ParseStatement(HLSLStatement*& statement, const HLSLType& retur
     }
 
     HLSLAttribute * attributes = NULL;
-    ParseAttributeBlock(attributes);    // @@ Leak if not assigned to node?
+    if (m_tokenizer.GetToken() == '[' && !ParseAttributeBlock(attributes)) return false;
+    if (Accept("typedef")) return ParseTypedef();
 
 #if 0 // @@ Work in progress.
     // Static statements: @if only for now.
@@ -1589,38 +1570,20 @@ bool HLSLParser::ParseDeclaration(HLSLDeclaration*& declaration)
         return false;
     }
 
-    bool allowUnsizedArray = true;  // @@ Really?
-
+    const HLSLType baseType = type;
     HLSLDeclaration * firstDeclaration = NULL;
     HLSLDeclaration * lastDeclaration = NULL;
 
     do {
+        type = baseType;
         const char* name;
-        if (!ExpectIdentifier(name))
-        {
-            // TODO: false means we didn't accept a declaration and we had an error!
-            return false;
-        }
-        // Handle array syntax.
-        if (Accept('['))
-        {
-            type.array = true;
-            // Optionally allow no size to the specified for the array.
-            if (Accept(']') && allowUnsizedArray)
-            {
-                return true;
-            }
-            if (!ParseExpression(type.arraySize) || !Expect(']'))
-            {
-                return false;
-            }
-        }
+        if (!ExpectIdentifier(name) || !ParseArraySuffix(type, true)) return false;
 
         HLSLDeclaration * declaration = m_tree->AddNode<HLSLDeclaration>(fileName, line);
         declaration->type  = type;
         declaration->name  = name;
 
-        DeclareVariable( declaration->name, declaration->type );
+        DeclareVariable( declaration->name, declaration->type, declaration );
 
         // Handle option assignment of the declared variables(s).
         if (!ParseDeclarationAssignment( declaration )) {
@@ -1638,33 +1601,115 @@ bool HLSLParser::ParseDeclaration(HLSLDeclaration*& declaration)
     return true;
 }
 
-bool HLSLParser::ParseDeclarationAssignment(HLSLDeclaration* declaration)
+bool HLSLParser::ParseArraySuffix(HLSLType& type, bool allowUnsized)
 {
-    DepthGuard milkrustDepth;
-    if (Accept('='))
-    {
-        // Handle array initialization syntax.
-        if (declaration->type.array)
-        {
-            int numValues = 0;
-            if (!Expect('{') || !ParseExpressionList('}', true, declaration->assignment, numValues))
-            {
-                return false;
-            }
+    if (!Accept('[')) return true;
+    if (type.array) { m_tokenizer.Error("Nested array types are unavailable in the ES300 profile"); return false; }
+    type.array = true;
+    if (Accept(']')) {
+        if (allowUnsized) return true;
+        m_tokenizer.Error("An explicit array bound is required"); return false;
+    }
+    return ParseExpression(type.arraySize) && Expect(']');
+}
+
+bool HLSLParser::ParseTypedef()
+{
+    HLSLType base;
+    if (!ExpectType(false, base)) return false;
+    do {
+        const char* name = NULL;
+        HLSLType type = base;
+        if (!ExpectIdentifier(name) || !ParseArraySuffix(type, false)) return false;
+        for (int i = m_typeAliases.GetSize() - 1; i >= 0 && m_typeAliases[i].name; --i) {
+            if (m_typeAliases[i].name == name) { m_tokenizer.Error("Duplicate type alias '%s'", name); return false; }
         }
-        else if (IsSamplerType(declaration->type.baseType))
-        {
-            if (!ParseSamplerState(declaration->assignment))
-            {
-                return false;
-            }
-        }
-        else if (!ParseExpression(declaration->assignment))
-        {
-            return false;
+        if (FindUserDefinedType(name)) { m_tokenizer.Error("Type '%s' already exists", name); return false; }
+        if (m_typeAliases.GetSize() >= 4096) throw std::length_error("HLSL type alias limit exceeded");
+        auto& alias = m_typeAliases.PushBackNew();
+        alias.name = name; alias.type = type; alias.declaration = NULL;
+    } while (Accept(','));
+    return Expect(';');
+}
+
+bool HLSLParser::ParseInitializer(const HLSLType& type, HLSLExpression*& expression)
+{
+    DepthGuard depth;
+    if (m_tokenizer.GetToken() != '{') return ParseExpression(expression);
+    if (type.array) { m_tokenizer.Error("Nested array initializers are unavailable"); return false; }
+    m_tokenizer.Next();
+    auto* constructor = m_tree->AddNode<HLSLConstructorExpression>(GetFileName(), GetLineNumber());
+    constructor->type = type;
+    constructor->expressionType = type;
+    constructor->expressionType.flags = HLSLTypeFlag_Const;
+    HLSLExpression* last = NULL;
+    const HLSLStruct* structure = type.baseType == HLSLBaseType_UserDefined ? FindUserDefinedType(type.typeName) : NULL;
+    const HLSLStructField* field = structure ? structure->field : NULL;
+    int count = 0;
+    while (!Accept('}')) {
+        if (CheckForUnexpectedEndOfStream('}')) return false;
+        if (count && !Expect(',')) return false;
+        if (Accept('}')) break;
+        HLSLExpression* item = NULL;
+        // Nested braces initialize a struct field or a matrix row. Flat
+        // numeric lists retain the HLSL row-major constructor ordering.
+        HLSLType itemType = field ? field->type : HLSLType(ScalarBaseType[type.baseType]);
+        if (!field && IsMatrixType(type.baseType) && m_tokenizer.GetToken() == '{')
+            itemType = HLSLType(NumericShape(ScalarBaseType[type.baseType], 0, NumericWidth(type.baseType)));
+        if (!ParseInitializer(itemType, item)) return false;
+        if (last) last->nextExpression = item; else constructor->argument = item;
+        last = item;
+        constructor->expressionType.flags &= item->expressionType.flags;
+        ++count;
+        if (structure) {
+            if (!field) { m_tokenizer.Error("Too many structure initializer values"); return false; }
+            field = field->nextField;
         }
     }
+    if (!count || field) { m_tokenizer.Error("Incomplete initializer"); return false; }
+    expression = constructor;
     return true;
+}
+
+bool HLSLParser::ParseDeclarationAssignment(HLSLDeclaration* declaration)
+{
+    DepthGuard depth;
+    if (!Accept('=')) return true;
+    if (declaration->type.array) {
+        if (!Expect('{')) return false;
+        HLSLType element = declaration->type; element.array = false; element.arraySize = NULL;
+        HLSLExpression* last = NULL;
+        int count = 0;
+        while (!Accept('}')) {
+            if (CheckForUnexpectedEndOfStream('}')) return false;
+            if (count && !Expect(',')) return false;
+            if (Accept('}')) break;
+            HLSLExpression* item = NULL;
+            if (!ParseInitializer(element, item)) return false;
+            if (!CheckTypeCast(item->expressionType, element)) return false;
+            if (last) last->nextExpression = item; else declaration->assignment = item;
+            last = item;
+            if (++count > 4096) throw std::length_error("HLSL array initializer limit exceeded");
+        }
+        if (!count) { m_tokenizer.Error("Empty array initializer"); return false; }
+        if (!declaration->type.arraySize) {
+            auto* size = m_tree->AddNode<HLSLLiteralExpression>(declaration->fileName, declaration->line);
+            size->type = HLSLBaseType_Int; size->iValue = count;
+            size->expressionType = HLSLType(HLSLBaseType_Int); size->expressionType.flags = HLSLTypeFlag_Const;
+            declaration->type.arraySize = size;
+            // The scope entry was declared before reading its initializer.
+            for (int i = m_variables.GetSize() - 1; i >= 0; --i)
+                if (m_variables[i].declaration == declaration) { m_variables[i].type = declaration->type; break; }
+        } else {
+            int bound = 0;
+            if (!m_tree->GetExpressionValue(declaration->type.arraySize, bound) || bound != count) {
+                m_tokenizer.Error("Array initializer count must match its constant bound"); return false;
+            }
+        }
+        return true;
+    }
+    if (IsSamplerType(declaration->type.baseType)) return ParseSamplerState(declaration->assignment);
+    return ParseInitializer(declaration->type, declaration->assignment);
 }
 
 bool HLSLParser::ParseFieldDeclaration(HLSLStructField*& field)
@@ -1953,6 +1998,7 @@ bool HLSLParser::ParseBinaryExpression(int priority, HLSLExpression*& expression
             }
             conditionalExpression->trueExpression  = expression1;
             conditionalExpression->falseExpression = expression2;
+            resultType.flags = (expression->expressionType.flags & expression1->expressionType.flags & expression2->expressionType.flags) & HLSLTypeFlag_Const;
             conditionalExpression->expressionType  = resultType;
 
             expression = conditionalExpression;
@@ -1989,6 +2035,8 @@ bool HLSLParser::ParsePartialConstructor(HLSLExpression*& expression, HLSLBaseTy
     }
     constructorExpression->expressionType = constructorExpression->type;
     constructorExpression->expressionType.flags = HLSLTypeFlag_Const;
+    for (auto* a = constructorExpression->argument; a; a = a->nextExpression)
+        constructorExpression->expressionType.flags &= a->expressionType.flags;
     expression = constructorExpression;
     return true;
 }
@@ -2055,7 +2103,9 @@ bool HLSLParser::ParseTerminalExpression(HLSLExpression*& expression, bool& need
             castingExpression->type = type;
             expression = castingExpression;
             castingExpression->expressionType = type;
-            return Expect(')') && ParseTerminalExpression(castingExpression->expression, needsEndParen);
+            if (!Expect(')') || !ParseTerminalExpression(castingExpression->expression, needsEndParen)) return false;
+            castingExpression->expressionType.flags = castingExpression->expression->expressionType.flags & HLSLTypeFlag_Const;
+            return true;
         }
 
         if (!ParseExpression(expression) || !Expect(')'))
@@ -2146,7 +2196,7 @@ bool HLSLParser::ParseTerminalExpression(HLSLExpression*& expression, bool& need
 
             bool undeclaredIdentifier = false;
 
-            const HLSLType* identifierType = FindVariable(identifierExpression->name, identifierExpression->global);
+            const HLSLType* identifierType = FindVariable(identifierExpression->name, identifierExpression->global, &identifierExpression->declaration);
             if (identifierType != NULL)
             {
                 identifierExpression->expressionType = *identifierType;
@@ -2860,7 +2910,15 @@ bool HLSLParser::ParseAttributeList(HLSLAttribute*& firstAttribute)
         else if (strcmp(identifier, "branch") == 0) attribute->attributeType = HLSLAttributeType_Branch;
         else if (strcmp(identifier, "nofastmath") == 0) attribute->attributeType = HLSLAttributeType_NoFastMath;
 
-        // @@ parse arguments, () not required if attribute constructor has no arguments.
+        if (Accept('(')) {
+            if (!String_Equal(identifier, "unroll")) {
+                m_tokenizer.Error("Attribute '%s' does not take arguments in this profile", identifier); return false;
+            }
+            HLSLExpression* factor = NULL; int value = 0;
+            if (!ParseExpression(factor) || !Expect(')') || !m_tree->GetExpressionValue(factor, value) || value < 1) {
+                m_tokenizer.Error("unroll factor must be a positive integer constant"); return false;
+            }
+        }
 
         if (firstAttribute == NULL)
         {
@@ -2897,7 +2955,7 @@ bool HLSLParser::ParseAttributeBlock(HLSLAttribute*& attribute)
     }
 
     // Parse list of attribute constructors.
-    ParseAttributeList(*lastAttribute);
+    if (!ParseAttributeList(*lastAttribute)) return false;
 
     if (!Expect(']'))
     {
@@ -2905,7 +2963,7 @@ bool HLSLParser::ParseAttributeBlock(HLSLAttribute*& attribute)
     }
 
     // Parse additional [] blocks.
-    ParseAttributeBlock(*lastAttribute);
+    if (m_tokenizer.GetToken() == '[' && !ParseAttributeBlock(*lastAttribute)) return false;
 
     return true;
 }
@@ -3016,6 +3074,8 @@ bool HLSLParser::AcceptTypeModifier(int& flags)
         return true;
     }*/
 
+    if (Accept("row_major") || Accept("column_major")) return true;
+
     // Not an usage keyword.
     return false;
 }
@@ -3059,6 +3119,48 @@ bool HLSLParser::AcceptType(bool allowVoid, HLSLType& type/*, bool acceptFlags*/
     {
         type.flags = 0;
         while(AcceptTypeModifier(type.flags) || AcceptInterpolationModifier(type.flags)) {}
+    }
+
+    if (m_tokenizer.GetToken() == HLSLToken_Identifier) {
+        const char* name = m_tree->AddString(m_tokenizer.GetIdentifier());
+        const bool matrix = String_Equal(name, "matrix");
+        if (matrix || String_Equal(name, "vector")) {
+            m_tokenizer.Next();
+            HLSLType scalar(HLSLBaseType_Float);
+            int rows = matrix ? 4 : 0, width = 4;
+            if (Accept('<')) {
+                if (!ExpectType(false, scalar) || !IsScalarType(scalar) || scalar.array) {
+                    m_tokenizer.Error("A vector/matrix element must be a scalar numeric type"); return false;
+                }
+                if (Accept(',')) {
+                    // '>' closes the template. Comparison/shift expressions
+                    // can still appear in explicitly parenthesized dimensions.
+                    HLSLExpression* extent = NULL;
+                    if (!ParseBinaryExpression(_binaryOpPriority[HLSLBinaryOp_Less], extent) || !m_tree->GetExpressionValue(extent, width)) return false;
+                    if (matrix) {
+                        rows = width; width = 4;
+                        if (Accept(',')) {
+                            if (!ParseBinaryExpression(_binaryOpPriority[HLSLBinaryOp_Less], extent) || !m_tree->GetExpressionValue(extent, width)) return false;
+                        }
+                    }
+                }
+                if (!Expect('>')) return false;
+            }
+            type.baseType = matrix && (rows < 2 || rows > 4) ? HLSLBaseType_Unknown : NumericShape(scalar.baseType, rows, width);
+            if (type.baseType == HLSLBaseType_Unknown) {
+                m_tokenizer.Error("Unsupported vector/matrix shape in the ES300 profile"); return false;
+            }
+            return true;
+        }
+        const char* scalarNames[] = {"float1", "half1", "bool1", "int1", "uint1"};
+        const HLSLBaseType scalarTypes[] = {HLSLBaseType_Float, HLSLBaseType_Half, HLSLBaseType_Bool, HLSLBaseType_Int, HLSLBaseType_Uint};
+        for (int i = 0; i < 5; ++i) if (String_Equal(name, scalarNames[i])) {
+            m_tokenizer.Next(); type.baseType = scalarTypes[i]; return true;
+        }
+        for (int i = m_typeAliases.GetSize() - 1; i >= 0; --i) if (m_typeAliases[i].name == name) {
+            const int flags = type.flags; type = m_typeAliases[i].type; type.flags |= flags;
+            m_tokenizer.Next(); return true;
+        }
     }
 
     int token = m_tokenizer.GetToken();
@@ -3281,21 +3383,7 @@ bool HLSLParser::AcceptDeclaration(bool allowUnsizedArray, HLSLType& type, const
         // TODO: false means we didn't accept a declaration and we had an error!
         return false;
     }
-    // Handle array syntax.
-    if (Accept('['))
-    {
-        type.array = true;
-        // Optionally allow no size to the specified for the array.
-        if (Accept(']') && allowUnsizedArray)
-        {
-            return true;
-        }
-        if (!ParseExpression(type.arraySize) || !Expect(']'))
-        {
-            return false;
-        }
-    }
-    return true;
+    return ParseArraySuffix(type, allowUnsizedArray);
 }
 
 bool HLSLParser::ExpectDeclaration(bool allowUnsizedArray, HLSLType& type, const char*& name)
@@ -3349,6 +3437,7 @@ void HLSLParser::BeginScope()
     // Use NULL as a sentinel that indices a new scope level.
     Variable& variable = m_variables.PushBackNew();
     variable.name = NULL;
+    m_typeAliases.PushBackNew().name = NULL;
 }
 
 void HLSLParser::EndScope()
@@ -3360,15 +3449,19 @@ void HLSLParser::EndScope()
         ASSERT(numVariables >= 0);
     }
     m_variables.Resize(numVariables);
+    int aliases = m_typeAliases.GetSize() - 1;
+    while (aliases >= 0 && m_typeAliases[aliases].name != NULL) --aliases;
+    m_typeAliases.Resize(aliases < 0 ? 0 : aliases);
 }
 
-const HLSLType* HLSLParser::FindVariable(const char* name, bool& global) const
+const HLSLType* HLSLParser::FindVariable(const char* name, bool& global, HLSLDeclaration** declaration) const
 {
     for (int i = m_variables.GetSize() - 1; i >= 0; --i)
     {
         if (m_variables[i].name == name)
         {
             global = (i < m_numGlobals);
+            if (declaration) *declaration = m_variables[i].declaration;
             return &m_variables[i].type;
         }
     }
@@ -3426,7 +3519,7 @@ const HLSLFunction* HLSLParser::FindFunction(const HLSLFunction* fun) const
     return NULL;
 }
 
-void HLSLParser::DeclareVariable(const char* name, const HLSLType& type)
+void HLSLParser::DeclareVariable(const char* name, const HLSLType& type, HLSLDeclaration* declaration)
 {
     if (m_variables.GetSize() == m_numGlobals)
     {
@@ -3435,6 +3528,7 @@ void HLSLParser::DeclareVariable(const char* name, const HLSLType& type)
     Variable& variable = m_variables.PushBackNew();
     variable.name = name;
     variable.type = type;
+    variable.declaration = declaration;
 }
 
 bool HLSLParser::GetIsFunction(const char* name) const

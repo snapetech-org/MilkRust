@@ -77,6 +77,9 @@ private:
     bool ParseExpressionList(int endToken, bool allowEmptyEnd, HLSLExpression*& firstExpression, int& numExpressions);
     bool ParseArgumentList(HLSLArgument*& firstArgument, int& numArguments, int& numOutputArguments);
     bool ParseDeclarationAssignment(HLSLDeclaration* declaration);
+    bool ParseTypedef();
+    bool ParseArraySuffix(HLSLType& type, bool allowUnsized);
+    bool ParseInitializer(const HLSLType& type, HLSLExpression*& expression);
     bool ParsePartialConstructor(HLSLExpression*& expression, HLSLBaseType type, const char* typeName);
 
     bool ParseStateName(bool isSamplerState, bool isPipelineState, const char*& name, const EffectState *& state);
@@ -99,10 +102,10 @@ private:
     void BeginScope();
     void EndScope();
 
-    void DeclareVariable(const char* name, const HLSLType& type);
+    void DeclareVariable(const char* name, const HLSLType& type, HLSLDeclaration* declaration = NULL);
 
     /** Returned pointer is only valid until Declare or Begin/EndScope is called. */
-    const HLSLType* FindVariable(const char* name, bool& global) const;
+    const HLSLType* FindVariable(const char* name, bool& global, HLSLDeclaration** declaration = NULL) const;
 
     const HLSLFunction* FindFunction(const char* name) const;
     const HLSLFunction* FindFunction(const HLSLFunction* fun) const;
@@ -126,11 +129,13 @@ private:
     {
         const char*     name;
         HLSLType        type;
+        HLSLDeclaration* declaration;
     };
 
     HLSLTokenizer           m_tokenizer;
     Array<HLSLStruct*>      m_userTypes;
     Array<Variable>         m_variables;
+    Array<Variable>         m_typeAliases;
     Array<HLSLFunction*>    m_functions;
     int                     m_numGlobals;
 

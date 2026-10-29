@@ -522,7 +522,16 @@ void GLSLGenerator::OutputExpression(HLSLExpression* expression, const HLSLType*
             OutputMatrixConstructor(constructorExpression); return;
         }
         m_writer.Write("%s(", GetTypeName(constructorExpression->type));
-        OutputExpressionList(constructorExpression->argument);
+        if (constructorExpression->type.baseType == HLSLBaseType_UserDefined) {
+            auto* structure = FindStruct(m_tree->GetRoot(), constructorExpression->type.typeName);
+            auto* field = structure ? structure->field : NULL;
+            auto* argument = constructorExpression->argument;
+            for (; field && argument; field = field->nextField, argument = argument->nextExpression) {
+                OutputExpression(argument, &field->type);
+                if (argument->nextExpression) m_writer.Write(", ");
+            }
+            if (field || argument || !structure) Error("Structure constructor arity mismatch");
+        } else OutputExpressionList(constructorExpression->argument);
         m_writer.Write(")");
     }
     else if (expression->nodeType == HLSLNodeType_CastingExpression)
@@ -1860,7 +1869,11 @@ void GLSLGenerator::OutputDeclaration(HLSLDeclaration* declaration, bool skipIni
             else if( declaration->type.array )
 			{
 				m_writer.Write( "%s[]( ", GetTypeName( declaration->type ) );
-				OutputExpressionList( declaration->assignment );
+                HLSLType element = declaration->type; element.array = false; element.arraySize = NULL;
+                for (auto* item = declaration->assignment; item; item = item->nextExpression) {
+                    OutputExpression(item, &element);
+                    if (item->nextExpression) m_writer.Write(", ");
+                }
 				m_writer.Write( " )" );
 			}
 			else
@@ -1929,7 +1942,11 @@ void GLSLGenerator::OutputDeclarationBody( const HLSLType& type, const char* nam
 		m_writer.Write( "%s[", GetSafeIdentifierName( name ) );
 		if( type.arraySize != NULL )
 		{
-			OutputExpression( type.arraySize );
+            int extent = 0;
+            if (!m_tree->GetExpressionValue(type.arraySize, extent) || extent < 1 || extent > 4096) {
+                Error("Invalid constant array extent"); return;
+            }
+            m_writer.Write("%d", extent);
 		}
 		m_writer.Write( "]" );
 	}

@@ -81,6 +81,30 @@ mod tests {
     }
 
     #[test]
+    fn declaration_and_scoped_constant_contract_compiles() {
+        compile(include_str!("../tests/fixtures/declarations.hlsl"), "main")
+            .expect("declaration control must reach GLSL generation");
+    }
+
+    #[test]
+    fn malformed_declarations_fail_with_bounded_diagnostics() {
+        for body in [
+            "float values[uint(0xffffffffu)];",
+            "const int n=int(1e20); float values[n];",
+            "const int n=n; float values[n];",
+            "const int n=int(uv.x); float values[n];",
+            "float values[]={};",
+            "float values[2]={1,2,3};",
+            "vector<float,5> v;",
+            "typedef float Tone; typedef int Tone;",
+            "[unroll(0)] for(int i=0;i<2;i++) {}",
+        ] {
+            let source = format!("float4 main(float2 uv:TEXCOORD0):COLOR0 {{ {body} return 1; }}");
+            assert!(compile(&source, "main").is_err(), "invalid declaration accepted: {body}");
+        }
+    }
+
+    #[test]
     fn token_and_numeric_limits_return_errors() {
         let identifier = "a".repeat(300);
         for body in [format!("float {identifier}=1;"), "float v=1e100;".into(),

@@ -222,3 +222,27 @@ are emitted at the call site, retaining the offset's constant-expression status
 and evaluating coordinates once. Dimension-only sampler references are included
 in resource discovery. Native compiler, preprocessor and browser source cases
 are added; no execution is claimed.
+
+## Declarations and constant expressions checkpoint
+
+The parser accepts scoped `typedef` aliases (including bounded array aliases),
+`vector<T,N>` and `matrix<T,R,C>` spellings for supported numeric shapes, their
+float defaults, and scalar-width-one names. It reads numeric/struct brace
+initializers, nested matrix rows, inferred array extents, grouped global/local
+declarations, `row_major`/`column_major`, and positive constant `[unroll(n)]`
+hints. Arrays keep their own declarator shape instead of leaking it into the
+next comma-separated variable.
+
+Constant evaluation resolves each identifier to its lexical declaration, so
+local and shadowed constants work in bounds. Casts, scalar constructors,
+conditionals, uint arithmetic and finite float32 intermediates are typed;
+signed overflow, invalid shifts, cyclic definitions and nonconstant bounds
+fail within the compiler's existing budgets. GLSL array extents are emitted as
+validated integers, independent of whether a readonly local is a GLSL constant.
+The `declarations.hlsl` pixel control and malformed-input cases are authored
+but unrun. This does not add integer/Boolean matrices, one-row/one-column
+matrices, multidimensional arrays or modern resource-object syntax.
+
+Semantic references: Microsoft's [vector types](https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl/dx-graphics-hlsl-vector),
+[user-defined types](https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl/dx-graphics-hlsl-user-defined)
+and [loop attributes](https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl/dx-graphics-hlsl-for).
