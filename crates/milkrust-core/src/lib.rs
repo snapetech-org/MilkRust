@@ -2,6 +2,7 @@ use milkrust_expr::limits::{ExpressionBudget, MAX_EXPRESSION_TOKENS, validate_ex
 use std::collections::BTreeMap;
 
 pub mod input_limits;
+pub mod text;
 pub mod milk2;
 mod hlsl;
 pub mod resources;

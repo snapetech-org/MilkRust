@@ -87,3 +87,15 @@ Algorithm/reference: `jecassis/foo_vis_milk2`, `vis_milk2/milkdropfs.cpp`
 (`ApplyShaderParams`, `UvToMathSpace`) and `state.cpp` (`RandomizePresetVars`),
 plus MilkDrop's `include.fx`. The implementation here uses its own seeded RNG
 and independently expressed matrix arithmetic.
+
+## Preset text decoding
+
+Native `milkrust_load`, the CLI and the browser pack loader accept UTF-8 (with
+optional BOM), BOM-marked UTF-16LE/BE and legacy Windows-1252. The encoded and
+UTF-8-decoded budgets are each 2 MiB. Malformed surrogates, undefined code-page
+bytes and binary controls fail explicitly. The CLI records the chosen legacy
+encoding without removing the file from its denominator. A decoding failure
+remains a separate failed entry. Other historical encodings are not guessed.
+PlezyNG validates the same encodings before its include/path checks and retains
+original archive bytes, preserving integrity receipts. New decoder regressions
+have not been executed during this source-only continuation.

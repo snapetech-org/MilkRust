@@ -192,9 +192,16 @@ fn compat_command(path: Option<&String>) -> MilkRustCliResult {
                 .and_then(|extension| extension.to_str())
                 .is_some_and(|extension| extension.eq_ignore_ascii_case("milk2"));
             match read_bounded_preset(file) {
-                Ok(bytes) => match String::from_utf8(bytes) {
-                    Ok(source) => {
-                        source_read_statuses.push("readable-utf8");
+                Ok(bytes) => match milkrust_core::text::decode_preset(&bytes) {
+                    Ok(decoded) => {
+                        source_read_statuses.push(if decoded.encoding == "utf-8" { "readable-utf8" } else { "readable-decoded" });
+                        if decoded.encoding != "utf-8" {
+                            encoding_warnings.push(serde_json::json!({
+                                "fileName": file_name, "encoding": decoded.encoding,
+                                "status": "decoded-losslessly",
+                            }));
+                        }
+                        let source = decoded.source;
                         build_milkrust_compatibility_entry(
                             &id,
                             &file_name,
@@ -203,12 +210,12 @@ fn compat_command(path: Option<&String>) -> MilkRustCliResult {
                         )
                     }
                     Err(error) => {
-                        source_read_statuses.push("readable-non-utf8");
+                        source_read_statuses.push("decode-failed");
                         encoding_warnings.push(serde_json::json!({
                             "fileName": file_name,
-                            "error": "non-UTF-8 preset; compatibility is reported unsupported",
+                            "error": error,
                         }));
-                        let source = String::from_utf8_lossy(error.as_bytes());
+                        let source = String::from_utf8_lossy(&bytes);
                         let mut entry = build_milkrust_compatibility_entry(
                             &id,
                             &file_name,
@@ -219,7 +226,7 @@ fn compat_command(path: Option<&String>) -> MilkRustCliResult {
                         entry.webgpu_supported = false;
                         for report in &mut entry.preset_reports {
                             let encoding_diagnostic =
-                                "source encoding is not UTF-8; support is unverified";
+                                "source encoding could not be decoded without loss";
                             if !report.error.contains(encoding_diagnostic) {
                                 if !report.error.is_empty() {
                                     report.error.push_str("; ");
@@ -288,14 +295,14 @@ fn compat_command(path: Option<&String>) -> MilkRustCliResult {
                 "sourceReadStatus": source_read_statuses[index],
                 "parseStatus": match source_read_statuses[index] {
                     "read-failed" => "not-run",
-                    "readable-non-utf8" => "lossy-diagnostic-only",
+                    "decode-failed" => "lossy-diagnostic-only",
                     _ if entry.preset_count == 0 => "no-presets-parsed",
                     _ if entry.preset_reports.iter().any(|report| !report.parse_errors.is_empty()) => "rejected-input-limits",
                     _ => "parsed",
                 },
                 "featureSubsetStatus": match source_read_statuses[index] {
                     "read-failed" => "not-evaluated",
-                    "readable-non-utf8" => "unsupported-encoding",
+                    "decode-failed" => "unsupported-encoding",
                     _ if entry.preset_count == 0 => "no-presets-parsed",
                     _ if entry.supported => "supported-by-current-static-subset",
                     _ => "unsupported-by-current-static-subset",
@@ -456,7 +463,7 @@ fn read_one_path(path: Option<&String>) -> Result<(PathBuf, String), MilkRustCli
     };
     let path = PathBuf::from(path);
     match read_bounded_preset(&path).and_then(|bytes|
-        String::from_utf8(bytes).map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))) {
+        milkrust_core::text::decode_preset(&bytes).map(|decoded| decoded.source).map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))) {
         Ok(source) => Ok((path, source)),
         Err(error) => Err(MilkRustCliResult::err(
             1,

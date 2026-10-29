@@ -90,11 +90,12 @@ pub unsafe extern "C" fn milkrust_create(loader: Option<gl::Loader>, gles: i32) 
 }
 
 /// # Safety
-/// utf8 must be readable for length bytes, at most 2 MiB. See milkrust.h.
+/// text_bytes must be readable for length bytes, at most 2 MiB. See milkrust.h.
 #[no_mangle]
-pub unsafe extern "C" fn milkrust_load(handle: u64, utf8: *const u8, length: usize) -> i32 {
+pub unsafe extern "C" fn milkrust_load(handle: u64, text_bytes: *const u8, length: usize) -> i32 {
     call(handle, |session| {
-        let source = std::str::from_utf8(unsafe { bytes(utf8, length, 2*1024*1024)? }).map_err(|_| "Preset must be UTF-8")?;
+        let decoded = milkrust_core::text::decode_preset(unsafe { bytes(text_bytes, length, 2*1024*1024)? })?;
+        let source = decoded.source.as_str();
         // Uses the same explicitly implemented stage family as WebGL. A failed
         // translation/unsupported saved pattern never becomes a fallback scene.
         validate_milkrust_webgl_import(source)?;

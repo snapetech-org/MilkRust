@@ -1,3 +1,4 @@
+import { readMilkRustPresetResponse } from './presetText.js';
 const milkrustPresets = [
   {
     name: 'MilkRust grid smoke',
@@ -265,7 +266,7 @@ export const loadMilkRustPackPresetSource = async (
   if (!response.ok) {
     throw new Error(`failed to load preset ${preset?.file || preset?.id || '<unknown>'}`);
   }
-  return response.text();
+  return readMilkRustPresetResponse(response);
 };
 
 export const loadMilkRustPackPlugins = async (
