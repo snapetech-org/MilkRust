@@ -142,6 +142,16 @@ mod tests {
         assert!(!shape.base_values.contains_key("counter"));
     }
     #[test]
+    fn custom_points_receive_current_spectrum_and_viewport_then_clear_silence() {
+        let source="[preset00]\nwave_a=0\nwavecode_0_enabled=1\nwavecode_0_samples=2\nwavecode_0_bUseDots=1\nwave_0_per_point1=x=sample*pixelsx/canvas_width;y=0.5;a=get_fft(0.5);\n";
+        let mut runtime=crate::MilkRustFrameSetRuntime::default();
+        runtime.set_viewport(320,180).unwrap();
+        let live=runtime.try_render_source_with_audio_and_input(source,0.0,0.0,0.0,0.0,&[0.0;512],&[0.4;256],crate::MilkRustInputState::default()).unwrap();
+        assert!((live.entries[0].frame.primitives[0].vertex_colors[3]-0.4).abs()<1.0e-9);
+        let silent=runtime.try_render_source_with_audio_and_input(source,1.0,0.0,0.0,0.0,&[],&[],crate::MilkRustInputState::default()).unwrap();
+        assert_eq!(silent.entries[0].frame.primitives[0].vertex_colors[3],0.0);
+    }
+    #[test]
     fn point_temporaries_survive_frames_without_mutating_frame_vm() {
         let source="[preset00]\nwave_a=0\nwavecode_0_enabled=1\nwavecode_0_samples=2\nwave_0_per_point1=counter+=1;x=sample;y=0.5;gmegabuf(1)=counter;\n";
         let mut runtime=crate::MilkRustFrameSetRuntime::default();

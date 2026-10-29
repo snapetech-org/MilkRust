@@ -508,18 +508,8 @@ fn update_milkrust_scope_audio(
      insert_num(scope, "canvas_width", 1.0);
      insert_num(scope, "canvas_height", 1.0);
      insert_num(scope, "aspect", 1.0);
-     if !waveform.is_empty() {
-         scope.insert(
-             "waveform_data".to_string(),
-             MilkRustValue::Text(milkrust_sample_text(waveform)),
-         );
-     }
-     if !spectrum.is_empty() {
-         scope.insert(
-             "frequency_data".to_string(),
-             MilkRustValue::Text(milkrust_sample_text(spectrum)),
-         );
-     }
+     scope.insert("waveform_data".into(), MilkRustValue::Text(milkrust_sample_text(waveform)));
+     scope.insert("frequency_data".into(), MilkRustValue::Text(milkrust_sample_text(spectrum)));
  }
 
 fn update_milkrust_scope_input(
@@ -1430,6 +1420,7 @@ if self.source != source || self.preset_documents.is_empty() {
              if let Some((width, height)) = self.viewport {
                  let ratio = f64::from(width) / f64::from(height);
                  for (name, value) in [("pixelsx", f64::from(width)), ("pixelsy", f64::from(height)),
+                     ("canvas_width", f64::from(width)), ("canvas_height", f64::from(height)), ("aspect", ratio),
                      ("aspectx", (1.0 / ratio).max(1.0)), ("aspecty", ratio.max(1.0))] {
                      scope.insert(name.into(), MilkRustValue::Number(value));
                  }
@@ -2283,7 +2274,8 @@ fn is_milkrust_entry_input(key: &str) -> bool {
     is_milkrust_q_variable(key) || key.starts_with("fft_") || key.starts_with("waveform_")
         || key.starts_with("gmegabuf_") || matches!(key,
         "time" | "frame" | "fps" | "progress" | "bass" | "mid" | "treb" |
-        "bass_att" | "mid_att" | "treb_att" | "pixelsx" | "pixelsy" | "aspectx" | "aspecty" |
+        "bass_att" | "mid_att" | "treb_att" | "frequency_data" | "sample_rate" | "samplerate" |
+        "canvas_width" | "canvas_height" | "aspect" | "pixelsx" | "pixelsy" | "aspectx" | "aspecty" |
         "mouse_down" | "mouse_x" | "mouse_y" | "mouse_dx" | "mouse_dy" | "instance")
 }
 
