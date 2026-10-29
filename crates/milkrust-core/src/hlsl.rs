@@ -60,6 +60,12 @@ pub(crate) fn sampler_names(source: &str) -> Result<Vec<String>, String> {
         let name = format!("sampler_blur{level}");
         if tokens.iter().any(|t| t == &format!("GetBlur{level}")) && !names.contains(&name) { names.push(name); }
     }
+    for token in &tokens {
+        if let Some(base) = token.strip_prefix("texsize_") {
+            let name = format!("sampler_{base}");
+            if base != "main" && !crate::resources::VECTOR_UNIFORMS.contains(&token.as_str()) && !names.contains(&name) { names.push(name); }
+        }
+    }
     if names.len() > 15 { return Err("Shader exceeds 15 additional samplers".into()); }
     Ok(names)
 }
@@ -70,8 +76,9 @@ pub(crate) fn needs_environment(source: &str) -> bool {
         || crate::resources::VECTOR_UNIFORMS.contains(&name.as_str())
         || crate::resources::SCALAR_UNIFORMS.contains(&name.as_str())
         || name.starts_with("mip_") || name.starts_with("texsize_")
-        || ["rad", "ang", "aspect", "GetMain", "GetPixel", "GetBlur1", "GetBlur2", "GetBlur3", "lum",
-            "M_PI", "M_PI_2", "M_INV_PI_2", "tex2d", "tex3d"].contains(&name.as_str()))
+        || name.strip_prefix('q').and_then(|n| n.parse::<usize>().ok()).is_some_and(|n| (1..=64).contains(&n))
+        || ["rad", "ang", "aspect", "uv_orig", "hue_shader", "GetMain", "GetPixel", "GetBlur1", "GetBlur2", "GetBlur3", "lum",
+            "M_PI", "M_PI_2", "M_INV_PI_2", "M_INV_PI", "tex2d", "tex3d"].contains(&name.as_str()))
 }
 
 pub(crate) fn compile(source: &str, legacy_feedback: bool) -> Result<String, String> {
@@ -83,8 +90,14 @@ pub(crate) fn compile(source: &str, legacy_feedback: bool) -> Result<String, Str
     aliases.insert("tex2d".into(), "tex2D".into());
     aliases.insert("tex3d".into(), "tex3D".into());
     aliases.insert("aspect".into(), "hlslAspect".into());
+    aliases.insert("uv".into(), "milkrust_uv_value".into());
+    aliases.insert("uv_orig".into(), "milkrust_uv_orig_value".into());
+    aliases.insert("texsize_main".into(), "texsize".into());
+    for q in 0..64 {
+        aliases.insert(format!("q{}", q+1), format!("_q{}.{}", char::from(b'a'+(q/4) as u8), ["x", "y", "z", "w"][q%4]));
+    }
     for (name, value) in [("M_PI", "3.141592653589793"), ("M_PI_2", "6.283185307179586"),
-        ("M_INV_PI_2", "0.159154943091895"), ("mip_x", "_c12.x"), ("mip_y", "_c12.y"),
+        ("M_INV_PI_2", "0.159154943091895"), ("M_INV_PI", "0.318309886183791"), ("mip_x", "_c12.x"), ("mip_y", "_c12.y"),
         ("mip_xy", "_c12.xy"), ("mip_avg", "_c12.z")] { aliases.insert(name.into(), value.into()); }
     for name in ["sampler_main"] {
         aliases.insert(name.into(), "previousFrame".into());
@@ -101,7 +114,7 @@ pub(crate) fn compile(source: &str, legacy_feedback: bool) -> Result<String, Str
     aliases.insert("main".into(), "milkrust_user_entry".into());
     let mut tokens = milkrust_hlsl::tokenize(&source)?;
     for pair in tokens.windows(2) {
-        if matches!(pair[0].as_str(), "float" | "double" | "half") && matches!(pair[1].as_str(), "M_PI" | "M_PI_2" | "M_INV_PI_2") {
+        if matches!(pair[0].as_str(), "float" | "double" | "half") && matches!(pair[1].as_str(), "M_PI" | "M_PI_2" | "M_INV_PI_2" | "M_INV_PI") {
             aliases.remove(&pair[1]);
         }
     }
@@ -138,6 +151,7 @@ pub(crate) fn compile(source: &str, legacy_feedback: bool) -> Result<String, Str
     tokens = clean;
     let explicit_entry = tokens.iter().any(|t| t == "milkrust_user_entry");
     let mut preamble = String::from("float3 color; sampler2D previousFrame; float feedback; float outputAlpha; float time; float sampleRate; float fftBins[64]; float waveformBins[64]; float2 resolution; float2 pixelSize; float4 hlslAspect; float4 texsize;\n");
+    preamble.push_str("static float2 milkrust_uv_value; static float2 milkrust_uv_orig_value; static float x; static float y; static float rad; static float ang; static float3 ret; static float3 hue_shader;\n");
     for name in ["bass", "bass_att", "mid", "mid_att", "treb", "treb_att"] { preamble.push_str(&format!("float {name};\n")); }
     for q in 1..=64 { preamble.push_str(&format!("float q{q};\n")); }
     for (index, name) in samplers.iter().enumerate() {
@@ -147,6 +161,10 @@ pub(crate) fn compile(source: &str, legacy_feedback: bool) -> Result<String, Str
     for name in crate::resources::SCALAR_UNIFORMS { preamble.push_str(&format!("float {name};\n")); }
     for name in crate::resources::VECTOR_UNIFORMS { preamble.push_str(&format!("float4 {name};\n")); }
     for name in crate::resources::MATRIX_UNIFORMS { preamble.push_str(&format!("float4x3 {name};\n")); }
+    let sizes: std::collections::BTreeSet<_> = samplers.iter().map(|name| format!("texsize_{}", crate::resources::base_name(name))).collect();
+    for name in sizes {
+        if !crate::resources::VECTOR_UNIFORMS.contains(&name.as_str()) { preamble.push_str(&format!("float4 {name};\n")); }
+    }
     for level in 1..=3 {
         if let Some(index) = samplers.iter().position(|name| name == &format!("sampler_blur{level}")) {
             let (scale, bias) = match level { 1 => ("_c5.x", "_c5.y"), 2 => ("_c5.z", "_c5.w"), _ => ("_c6.x", "_c6.y") };
@@ -157,8 +175,8 @@ pub(crate) fn compile(source: &str, legacy_feedback: bool) -> Result<String, Str
     preamble.push_str("float get_fft(float p) { return fftBins[(int)(clamp(p, 0.0, 1.0)*63.0)]; }\nfloat get_fft_hz(float hz) { return get_fft(hz / max(sampleRate * 0.5, 1.0)); }\nfloat get_waveform(float p) { return waveformBins[(int)(clamp(p,0.0,1.0)*63.0)]; }\n");
     let entry;
     if explicit_entry {
-        // The emitter maps only COLOR0 and TEXCOORD0 (plus system fragment
-        // coordinates) to this render graph. Other semantics fail below.
+        // The adapter maps legacy UV pairs, polar coordinates and hue input,
+        // plus system fragment coordinates. Other semantics fail below.
         entry = "milkrust_user_entry";
         preamble.push_str(&tokens.join(" "));
     } else {
@@ -173,19 +191,12 @@ pub(crate) fn compile(source: &str, legacy_feedback: bool) -> Result<String, Str
             tokens[1..tokens.len() - 1].join(" ")
         } else { tokens.join(" ") };
         preamble.push_str(&format!(r#"
-float3 milkrust_body(float2 uv) {{
-    float2 uv_orig = uv;
-    float x = uv.x; float y = uv.y;
-    float2 centered = (uv * 2.0 - 1.0) * hlslAspect.xy;
-    float rad = length(centered) / length(hlslAspect.xy);
-    float ang = atan2(centered.y, centered.x);
-    if (ang < 0.0) ang += 6.283185307179586;
-    float3 ret = color;
+float3 milkrust_body() {{
     {body}
     return ret;
 }}
 float4 milkrust_entry(float2 milkrust_uv : TEXCOORD0) : COLOR0 {{
-    return float4(milkrust_body(milkrust_uv), 1.0);
+    return float4(milkrust_body(), 1.0);
 }}
 "#));
     }
@@ -200,13 +211,40 @@ fn adapt_output(glsl: &str, feedback: bool) -> Result<String, String> {
     let mut has_uv = false;
     let mut has_output = false;
     let mut has_main = false;
+    let mut initializers = Vec::new();
     for line in glsl.lines() {
         let trimmed = line.trim();
+        // Keep the host binding spelling, then copy into mutable per-fragment
+        // storage. Helpers and user assignments see the same local registers.
+        if let Some(declaration) = trimmed.strip_prefix("uniform ").and_then(|v| v.strip_suffix(';')) {
+            let parts: Vec<_> = declaration.split_whitespace().collect();
+            if parts.len() == 2 {
+                let (kind, name) = (parts[0], parts[1]);
+                let mutable = crate::resources::SCALAR_UNIFORMS.contains(&name)
+                    || crate::resources::VECTOR_UNIFORMS.contains(&name)
+                    || crate::resources::MATRIX_UNIFORMS.contains(&name)
+                    || ["color", "time", "texsize", "hlslAspect", "bass", "mid", "treb", "bass_att", "mid_att", "treb_att"].contains(&name)
+                    || name.strip_prefix('q').and_then(|n| n.parse::<usize>().ok()).is_some_and(|n| (1..=64).contains(&n));
+                if mutable {
+                    let suffix = name.trim_start_matches('_');
+                    output.push_str(&format!("{line}\n{kind} milkrust_value_{suffix};\nvoid milkrust_init_{suffix}() {{ milkrust_value_{suffix} = {name}; }}\n#define {name} milkrust_value_{suffix}\n"));
+                    initializers.push(format!("milkrust_init_{suffix}();"));
+                    continue;
+                }
+            }
+        }
         if trimmed.starts_with("in ") {
             if trimmed == "in vec2 frag_TEXCOORD0;" {
                 output.push_str("in vec2 uv;\nvec2 milkrust_input_uv() { return uv; }\n#define frag_TEXCOORD0 milkrust_input_uv()\n");
                 has_uv = true; continue;
             }
+            if trimmed == "in vec4 frag_TEXCOORD0;" {
+                output.push_str("in vec2 uv;\n#define frag_TEXCOORD0 vec4(uv, originalUv)\n");
+                has_uv = true; continue;
+            }
+            if trimmed == "in vec2 frag_TEXCOORD1;" { output.push_str("#define frag_TEXCOORD1 vec2(rad, ang)\n"); continue; }
+            if trimmed == "in vec4 frag_COLOR0;" { output.push_str("#define frag_COLOR0 vec4(hue_shader, 1.0)\n"); continue; }
+            if trimmed == "in vec3 frag_COLOR0;" { output.push_str("#define frag_COLOR0 hue_shader\n"); continue; }
             return Err(format!("Unsupported pixel shader input: {trimmed}"));
         }
         if trimmed.starts_with("out ") {
@@ -221,10 +259,13 @@ fn adapt_output(glsl: &str, feedback: bool) -> Result<String, String> {
     }
     if !has_output || !has_main { return Err("Shader entry must write COLOR0".into()); }
     if !has_uv { output.push_str("in vec2 uv;\n"); }
+    output.insert_str(output.find('\n').map_or(0, |i| i+1), "in highp vec2 originalUv;\n");
     output.push_str(milk2::GLSL_TRANSITION_MASK);
     // The driver may optimize an unused source uniform out. In GLSL it still
     // exists in the declaration stream emitted from our preamble.
-    output.push_str("\nvoid main() { milkrust_generated_main();\n");
+    output.push_str("\nvoid main() {\n");
+    output.push_str(&initializers.join("\n"));
+    output.push_str("\nmilkrust_uv_value=uv; milkrust_uv_orig_value=originalUv; x=uv.x; y=uv.y;\nvec2 milkrust_centered=(originalUv*2.0-1.0)*hlslAspect.xy;\nrad=length(milkrust_centered)/length(hlslAspect.xy); ang=atan(milkrust_centered.y,milkrust_centered.x); if(ang<0.0)ang+=6.283185307179586;\nhue_shader=mix(mix(hue_corner4.xyz,hue_corner3.xyz,originalUv.x),mix(hue_corner2.xyz,hue_corner1.xyz,originalUv.x),originalUv.y); ret=color;\nmilkrust_generated_main();\n");
     if feedback { output.push_str("rast_FragData[0].rgb = mix(rast_FragData[0].rgb, texture(previousFrame, clamp(uv, vec2(0.0), vec2(1.0))).rgb, feedback);\n"); }
     output.push_str("rast_FragData[0].a *= outputAlpha * milkrust_transition_mask(uv);\n}\n");
     if output.len() > 256 * 1024 { return Err("Generated shader exceeds renderer source limit".into()); }
@@ -242,6 +283,20 @@ mod tests {
         assert!(output.contains("mat3x4 rot_s1"));
         assert!(output.contains("_c5"));
         assert_eq!(sampler_names(source).unwrap(), vec!["sampler_PC_main", "sampler_blur2"]);
+    }
+    #[test]
+    fn helpers_share_mutable_registers_and_fragment_coordinates() {
+        let source = "void tint(){q1+=0.25; hue_shader*=2; ret+=float3(uv_orig,rad);}\nshader_body { tint(); ret+=float3(_qa.x,q1,ang); }";
+        let result = compile(source, false).unwrap();
+        assert!(result.contains("#define _qa milkrust_value_qa"));
+        assert!(result.contains("milkrust_init_qa();"));
+        assert!(result.contains("milkrust_uv_orig_value=originalUv"));
+        assert!(result.contains("hue_shader=mix"));
+        assert_eq!(sampler_names("ret=float3(texsize_paper.xy,1);").unwrap(), vec!["sampler_paper"]);
+    }
+    #[test]
+    fn explicit_legacy_entries_receive_uv_pairs_hue_and_polar_coordinates() {
+        assert!(compile("float4 main(float4 p:TEXCOORD0,float2 a:TEXCOORD1,float4 hue:COLOR0):COLOR0 { return float4(p.zw,a.x,1)*hue; }",false).is_ok());
     }
     #[test]
     fn compiles_typed_helpers_arrays_matrices_and_loops() {

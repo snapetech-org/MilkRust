@@ -24,6 +24,9 @@ GPU capture or device run was performed for this source-only continuation.
 - All 24 legacy rotation matrices, constant registers `_c0.._c13`, canonical
   coordinate/roam/mip helpers and matched blur range encoding/decoding are bound
   in native and WebGL hosts. Regression sources are present but unrun.
+- Shared writable shader globals, coherent packed/scalar q aliases, original UV
+  and animated corner hue inputs, explicit legacy entry semantics and actual
+  named-texture dimensions are wired through both renderer hosts.
 - Three blur levels, deterministic original 2D/3D noise, mipmaps and per-binding
   filtering/wrapping; q registers, frame uniforms, texture sizes and random/roam
   vectors. Missing resources and compiler/driver errors do not become a placeholder.
@@ -57,8 +60,9 @@ GPU capture or device run was performed for this source-only continuation.
 - Reference-equivalent `.milk2` masks and embedded executable extensions. The
   available upstream source snapshot does not implement the saved wrapper; the
   independent masks are not a port of its unavailable saved-pattern renderer.
-- Complete format/EEL/texture behavior for every corpus file, including legacy
-  encodings, sprite extensions and unsupported formats. Preserve every exception.
+- Complete format/EEL/texture behavior for every corpus file, including other legacy
+  encodings, sprite extensions and unsupported formats. UTF-8, BOM-marked UTF-16
+  and Windows-1252 now have bounded decoders; preserve every remaining exception.
 - Compiler/driver hang containment, browser decoder allocation isolation,
   context-loss/recovery, long-run resource/performance and accessibility evidence.
 - Qualified broader archives, rights review for historical collections, production

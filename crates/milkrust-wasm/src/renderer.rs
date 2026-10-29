@@ -154,6 +154,7 @@ struct MilkRustTranslatedProgram {
     program: web_sys::WebGlProgram,
     source: String,
     mesh: bool,
+    uniforms: BTreeMap<String, Option<web_sys::WebGlUniformLocation>>,
 }
 
 struct MilkRustTextureAsset {
@@ -635,6 +636,7 @@ impl MilkRustWebGlRenderer {
             program: program.clone(),
             source: source.to_string(),
             mesh,
+            uniforms: BTreeMap::new(),
         });
         Ok(Some(program))
     }
@@ -653,7 +655,12 @@ impl MilkRustWebGlRenderer {
     ) -> Result<(), JsValue> {
         let (r, g, b) = frame.wave_color;
         let feedback = (1.0 - frame.background_alpha).clamp(0.0, 1.0) as f32;
-        let uniform = |name: &str| self.gl.get_uniform_location(program, name);
+        let mut cached = (if warp { &self.translated_warp_program } else { &self.translated_composite_program }).borrow_mut();
+        let mut uniform = |name: &str| {
+            if let Some(cached) = cached.as_mut().filter(|cached| cached.program == *program) {
+                cached.uniforms.entry(name.to_string()).or_insert_with(|| self.gl.get_uniform_location(program, name)).clone()
+            } else { self.gl.get_uniform_location(program, name) }
+        };
         self.gl.uniform3f(
             uniform("color").as_ref(),
             r as f32 / 255.0,
@@ -681,6 +688,15 @@ impl MilkRustWebGlRenderer {
                     web_sys::WebGl2RenderingContext::TEXTURE_2D),
             };
             self.gl.bind_texture(target, Some(&texture));
+            let dimensions = self.shader_resources.borrow().dimensions(name).or_else(|| {
+                let assets = self.named_textures.borrow();
+                get_milkrust_texture_name_aliases(name).iter().find_map(|alias|
+                    assets.get(alias).map(|asset| (asset.image.natural_width(), asset.image.natural_height())))
+            });
+            let (width, height) = dimensions.filter(|(w,h)| *w > 0 && *h > 0)
+                .ok_or_else(|| JsValue::from_str("Shader texture dimensions are unavailable"))?;
+            self.gl.uniform4f(uniform(&format!("texsize_{}", milkrust_core::resources::base_name(name))).as_ref(),
+                width as f32, height as f32, 1.0/width as f32, 1.0/height as f32);
             if !milkrust_core::resources::texture_kind(name).is_builtin() { self.gl.generate_mipmap(target); }
             self.shader_resources.borrow().bind_sampler(texture_unit as u32, name);
             self.gl.uniform1i(
@@ -1340,6 +1356,7 @@ fn create_milkrust_texture_from_data_url(
             web_sys::WebGl2RenderingContext::TEXTURE_2D,
             Some(&texture_for_load),
         );
+        gl_for_load.pixel_storei(web_sys::WebGl2RenderingContext::UNPACK_FLIP_Y_WEBGL, 1);
         let result = gl_for_load.tex_image_2d_with_u32_and_u32_and_html_image_element(
             web_sys::WebGl2RenderingContext::TEXTURE_2D,
             0,
@@ -1348,6 +1365,7 @@ fn create_milkrust_texture_from_data_url(
             web_sys::WebGl2RenderingContext::UNSIGNED_BYTE,
             &image_for_load,
         );
+        gl_for_load.pixel_storei(web_sys::WebGl2RenderingContext::UNPACK_FLIP_Y_WEBGL, 0);
         let result = result.map_err(|error| error.as_string().unwrap_or_else(|| "GPU upload failed".to_string()))
             .and_then(|()| if gl_for_load.get_error() == web_sys::WebGl2RenderingContext::NO_ERROR { Ok(()) }
                 else { Err("GPU texture upload failed".to_string()) });
@@ -1432,7 +1450,9 @@ in vec2 position;
 uniform vec4 motion;
 uniform float isWarp;
 out vec2 uv;
+out highp vec2 originalUv;
 void main() {
+  originalUv = position * 0.5 + vec2(0.5);
   uv = position * 0.5 + vec2(0.5);
   if (isWarp > 0.5) {
     float c = cos(motion.x), s = sin(motion.x);
@@ -1446,7 +1466,9 @@ const MILKRUST_TRANSLATED_MESH_VERTEX_SHADER: &str = r#"#version 300 es
 in vec2 position;
 in vec2 sourceUv;
 out vec2 uv;
+out highp vec2 originalUv;
 void main() {
+  originalUv = position * 0.5 + vec2(0.5);
   uv = sourceUv;
   gl_Position = vec4(position, 0.0, 1.0);
 }

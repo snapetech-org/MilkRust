@@ -6,7 +6,7 @@ use milkrust_core::{milk2, get_milkrust_texture_name_aliases, MilkRustCompositeF
 use crate::gl::*;
 use milkrust_core::resources::{self, TextureKind};
 
-const VERTEX: &str = "#version 300 es\nin vec2 position; in vec2 sourceUv; in vec4 vertexColor; out vec2 uv; out vec4 tint; void main(){ uv=sourceUv; tint=vertexColor; gl_Position=vec4(position,0,1); gl_PointSize=1.0; }";
+const VERTEX: &str = "#version 300 es\nin vec2 position; in vec2 sourceUv; in vec4 vertexColor; out vec2 uv; out highp vec2 originalUv; out vec4 tint; void main(){ originalUv=position*0.5+0.5; uv=sourceUv; tint=vertexColor; gl_Position=vec4(position,0,1); gl_PointSize=1.0; }";
 const COPY_BODY: &str = "uniform sampler2D previousFrame; uniform float feedback; uniform float outputAlpha; in vec2 uv; out vec4 outColor; void main(){outColor=vec4(texture(previousFrame,uv).rgb*feedback,outputAlpha*milkrust_transition_mask(uv));}";
 const COLOR: &str = "#version 300 es\nprecision highp float; in vec4 tint; out vec4 outColor; void main(){outColor=tint;}";
 const TEXTURED: &str = "#version 300 es\nprecision highp float; uniform sampler2D previousFrame; in vec2 uv; in vec4 tint; out vec4 outColor; void main(){outColor=texture(previousFrame,uv)*tint;}";
@@ -29,11 +29,11 @@ impl TransitionUniforms {
     }
 }
 
-struct Program { gl: Gl, id: u32 }
+struct Program { gl: Gl, id: u32, locations: std::cell::RefCell<BTreeMap<String, i32>> }
 impl Drop for Program { fn drop(&mut self) { unsafe { (self.gl.delete_program)(self.id); } } }
 struct Shader { gl: Gl, id: u32 }
 impl Drop for Shader { fn drop(&mut self) { unsafe { (self.gl.delete_shader)(self.id); } } }
-struct Texture { gl: Gl, id: u32, pixels: u64 }
+struct Texture { gl: Gl, id: u32, pixels: u64, width: u32, height: u32 }
 struct Samplers { gl: Gl, ids: [u32; 4] }
 impl Drop for Samplers { fn drop(&mut self) { unsafe { (self.gl.delete_samplers)(4, self.ids.as_ptr()); } } }
 impl Drop for Texture { fn drop(&mut self) { unsafe { (self.gl.delete_textures)(1, &self.id); } } }
@@ -83,7 +83,7 @@ impl Program {
         let fragment = shader(gl, 0x8B30, source_for_context(fragment, gles))?;
         let id = unsafe { (gl.create_program)() };
         if id == 0 { return Err("GL could not allocate a program".into()); }
-        let program = Self { gl, id };
+        let program = Self { gl, id, locations: std::cell::RefCell::new(BTreeMap::new()) };
         unsafe {
             (gl.attach_shader)(id, vertex.id); (gl.attach_shader)(id, fragment.id);
             for (index, name) in ["position", "sourceUv", "vertexColor"].iter().enumerate() {
@@ -101,7 +101,10 @@ impl Program {
         Ok(program)
     }
     fn location(&self, name: &str) -> i32 {
-        CString::new(name).ok().map_or(-1, |name| unsafe { (self.gl.uniform_location)(self.id, name.as_ptr()) })
+        if let Some(location) = self.locations.borrow().get(name) { return *location; }
+        let location = CString::new(name).ok().map_or(-1, |name| unsafe { (self.gl.uniform_location)(self.id, name.as_ptr()) });
+        self.locations.borrow_mut().insert(name.to_string(), location);
+        location
     }
     fn bind(&self) { unsafe { (self.gl.use_program)(self.id); } }
     fn float(&self, name: &str, value: f32) { unsafe { (self.gl.uniform_1f)(self.location(name), value); } }
@@ -118,7 +121,7 @@ impl Texture {
         let mut id = 0;
         unsafe { (gl.gen_textures)(1, &mut id); }
         if id == 0 { return Err("GL could not allocate a texture".into()); }
-        let texture = Self { gl, id, pixels: u64::from(width) * u64::from(height) };
+        let texture = Self { gl, id, pixels: u64::from(width) * u64::from(height), width, height };
         unsafe {
             (gl.active_texture)(TEXTURE0); (gl.bind_texture)(TEXTURE_2D, id);
             (gl.pixel_store)(0x0CF5, 1); // UNPACK_ALIGNMENT
@@ -217,9 +220,12 @@ impl Renderer {
     }
 
     fn named_texture(&self, name: &str) -> Result<u32, String> {
+        self.named_texture_asset(name).map(|texture| texture.id)
+    }
+    fn named_texture_asset(&self, name: &str) -> Result<&Texture, String> {
         let aliases = get_milkrust_texture_name_aliases(name);
         for name in aliases {
-            if let Some(texture) = self.textures.get(&name.to_ascii_lowercase()) { return Ok(texture.id); }
+            if let Some(texture) = self.textures.get(&name.to_ascii_lowercase()) { return Ok(texture); }
         }
         Err(format!("Missing texture: {name}"))
     }
@@ -250,7 +256,7 @@ impl Renderer {
                                     let mut id = 0;
                                     unsafe { (self.gl.gen_textures)(1, &mut id); }
                                     if id == 0 { return Err("GL noise allocation failed".into()); }
-                                    let texture = Texture { gl: self.gl, id, pixels: u64::from(w*h*d) };
+                                    let texture = Texture { gl: self.gl, id, pixels: u64::from(w*h*d), width: w, height: h };
                                     unsafe {
                                         (self.gl.active_texture)(TEXTURE0); (self.gl.bind_texture)(target, id);
                                         (self.gl.tex_image_3d)(target, 0, 0x8058, w as i32, h as i32, d as i32, 0, 0x1908, 0x1401, data.as_ptr().cast());
@@ -368,6 +374,16 @@ impl Renderer {
                 TextureKind::Asset => (self.named_texture(name)?, TEXTURE_2D),
             };
             let (nearest, repeat) = resources::sampler_state(name);
+            let (width, height) = match resources::texture_kind(name) {
+                TextureKind::Main => (self.width, self.height),
+                TextureKind::Blur(i) => { let texture = &layer.blur[i][1].texture; (texture.width, texture.height) },
+                TextureKind::Noise2d(_) | TextureKind::Noise3d(_) => {
+                    let texture = &self.noise.get(resources::base_name(name)).ok_or("Missing noise dimensions")?.0;
+                    (texture.width, texture.height)
+                }
+                TextureKind::Asset => { let texture = self.named_texture_asset(name)?; (texture.width, texture.height) },
+            };
+            program.vector4(&format!("texsize_{}", resources::base_name(name)), width as f32, height as f32, 1.0/width as f32, 1.0/height as f32);
             unsafe {
                 (self.gl.active_texture)(TEXTURE0 + (index + 1) as u32);
                 (self.gl.bind_texture)(target, texture);

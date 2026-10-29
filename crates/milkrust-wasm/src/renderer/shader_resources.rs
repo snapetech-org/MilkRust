@@ -126,6 +126,15 @@ impl ShaderResources {
             TextureKind::Asset => None,
         }
     }
+    pub fn dimensions(&self, name: &str) -> Option<(u32, u32)> {
+        match resources::texture_kind(name) {
+            TextureKind::Main => Some((self.size.0 as u32, self.size.1 as u32)),
+            TextureKind::Blur(index) => self.blur.get(index).map(|target| (target.width as u32, target.height as u32)),
+            TextureKind::Noise2d(seed) => { let side = if seed == 4 { 32 } else { 256 }; Some((side, side)) },
+            TextureKind::Noise3d(_) => Some((32, 32)),
+            TextureKind::Asset => None,
+        }
+    }
     pub fn bind_sampler(&self, unit: u32, name: &str) {
         let (nearest, repeat) = resources::sampler_state(name);
         self.gl.bind_sampler(unit, self.samplers.get(usize::from(nearest) + 2 * usize::from(repeat)));

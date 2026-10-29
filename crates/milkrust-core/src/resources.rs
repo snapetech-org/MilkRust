@@ -51,6 +51,7 @@ pub const BLUR_FRAGMENT: &str = "#version 300 es\nprecision highp float; uniform
 pub const SCALAR_UNIFORMS: &[&str] = &["frame", "fps", "progress", "decay", "vol", "vol_att", "blur1_edge_darken",
     "blur1_min", "blur1_max", "blur2_min", "blur2_max", "blur3_min", "blur3_max"];
 pub const VECTOR_UNIFORMS: &[&str] = &["rand_frame", "rand_preset", "roam_sin", "roam_cos", "slow_roam_sin", "slow_roam_cos",
+    "hue_corner1", "hue_corner2", "hue_corner3", "hue_corner4",
     "_c0", "_c1", "_c2", "_c3", "_c4", "_c5", "_c6", "_c7", "_c8", "_c9", "_c10", "_c11", "_c12", "_c13",
     "texsize_noise_lq", "texsize_noise_mq", "texsize_noise_hq", "texsize_noise_lq_lite", "texsize_noisevol_lq", "texsize_noisevol_hq",
     "_qa", "_qb", "_qc", "_qd", "_qe", "_qf", "_qg", "_qh", "_qi", "_qj", "_qk", "_ql", "_qm", "_qn", "_qo", "_qp"];
@@ -118,6 +119,15 @@ pub fn uniform_vectors(frame: &crate::MilkRustFrame, time: f64, width: u32, heig
     ]);
     for (target, source) in [("_c8", "roam_cos"), ("_c9", "roam_sin"), ("_c10", "slow_roam_cos"), ("_c11", "slow_roam_sin")] {
         if let Some((_, v)) = result.iter().find(|(name, _)| *name == source) { let v = *v; result.push((target, v)); }
+    }
+    let random = result.iter().find(|(name, _)| *name == "rand_preset").map_or([0.0;4], |(_, v)| *v);
+    for (corner, name) in ["hue_corner1", "hue_corner2", "hue_corner3", "hue_corner4"].iter().enumerate() {
+        let channels: [f32; 3] = std::array::from_fn(|i| {
+            let phase=time*[0.429,0.321,0.387][i]+[3.0,1.0,6.0][i]+corner as f64*[21.0,13.0,9.0][i]+f64::from(random[[3,1,2][i]])*std::f64::consts::TAU;
+            (0.6+0.3*phase.sin()) as f32
+        });
+        let peak=channels.iter().copied().fold(0.0f32,f32::max);
+        result.push((*name,[0.5+0.5*channels[0]/peak,0.5+0.5*channels[1]/peak,0.5+0.5*channels[2]/peak,1.0]));
     }
     result
 }

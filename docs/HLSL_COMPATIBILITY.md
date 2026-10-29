@@ -23,7 +23,8 @@ community-preset compatibility result.
   explicit block emission, empty/expression loop initializers, bare returns,
   const globals and HLSL `fmod` sign semantics.
 - MilkDrop `shader_body` wrappers with helper preambles, and explicit pixel
-  entry points with TEXCOORD0/COLOR0. Unknown input/output semantics fail.
+  entry points with TEXCOORD0 UV pairs, TEXCOORD1 polar coordinates and
+  COLOR0 hue input/output. Unknown input/output semantics fail.
 - Separate warp/composite passes, three separable blur levels, deterministic
   original 2D/3D noise resources, mipmap generation, and per-binding sampler
   filtering/addressing on native GL/GLES and WebGL2. Noise and blur algorithms
@@ -68,7 +69,7 @@ translation. Their deterministic random stream is seeded per preset; animated
 families follow the legacy `Rx * translation * Rz * Ry` composition and rate
 curve. They are not expected to reproduce another process's random seed.
 
-The typed path supplies `_c0.._c13`, packed q vectors, mip aliases, the three
+The typed path supplies `_c0.._c13`, packed q vectors, mip aliases, the four
 MilkDrop PI spellings, `GetMain`, `GetPixel`, `lum`, lowercase sampling aliases,
 and uppercase sampler addressing prefixes. `sampler_fc_main` now keeps its
 own clamp binding. Roaming vectors use the legacy rates and phases; `rad` is
@@ -99,3 +100,22 @@ remains a separate failed entry. Other historical encodings are not guessed.
 PlezyNG validates the same encodings before its include/path checks and retains
 original archive bytes, preserving integrity receipts. New decoder regressions
 have not been executed during this source-only continuation.
+
+## Shared fragment state and texture bindings
+
+Helpers and `shader_body` now share `uv`, `uv_orig`, `x`, `y`, `rad`, `ang`,
+`ret` and `hue_shader`. Built-in shader registers are initialized into writable
+per-fragment storage before calling the user entry. `q1..q64` alias the matching
+components of `_qa.._qp`, so assignments through either spelling stay coherent.
+The original screen UV remains separate from warped feedback coordinates.
+Four animated corner hues are interpolated from the original UV for both hosts.
+Explicit legacy entry points accept float4 TEXCOORD0 (warped/original UV),
+float2 TEXCOORD1 (radius/angle), and float3/4 COLOR0 (hue).
+
+Named samplers resolve to the underlying asset filename when the native host
+loads dependencies. Both renderers bind actual `texsize_<asset>` dimensions,
+including dimension-only references; `texsize_main` aliases the feedback size.
+Texture uploads use consistent bottom-up GL orientation. Program-local uniform
+location caches avoid repeating hundreds of driver queries each frame. Added
+compiler and browser integration cases are source only; no execution or
+reference-image result is implied.

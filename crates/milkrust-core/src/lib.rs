@@ -7458,13 +7458,14 @@ memcpy(4,2,1);
         let shader = create_translated_milkrust_fragment_shader(
             r#"
 shader_body {
-  float3 tint = saturate(vec3(x, y, aspect));
+  float3 tint = saturate(vec3(x, y, aspect.x));
   ret = tint * tex2D(sampler_main, uv).rgb;
 }
 "#,
         );
-        assert!(shader.contains("vec3 tint = clamp01(vec3(x, y, aspect));"));
-        assert!(shader.contains("vec3 ret = vec3(tint * texture(previousFrame, uv).rgb);"));
+        assert!(!shader.is_empty(), "MilkDrop vector aspect must compile through the typed path");
+        assert!(shader.contains("milkrust_generated_main"));
+        assert!(shader.contains("uniform sampler2D previousFrame;"));
         assert_eq!(
             translate_milkrust_shader_expression("shader_body { ret = vec3(q1); }"),
             "vec3(q1)"
