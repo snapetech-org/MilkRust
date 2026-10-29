@@ -50,10 +50,12 @@ or a license disclaimer cannot use that exception.
 
 ## Candidate status
 
-`tools/build_cleared_pack_candidates.py` can create deterministic archives from
-the MIT-licensed Butterchurn shaderless subset. The separate
-`Prepare cleared preset pack candidates` workflow uploads them as short-lived
-review artifacts. Candidate metadata always reports zero rendered and zero
-qualified presets. It does not change the signed download catalog, so these
-archives do not appear in the app until the rights and compatibility gates are
-completed and reviewed.
+`tools/build_cleared_pack_candidates.py` can create deterministic, explicitly
+non-promotable review archives from the shaderless Butterchurn subset. Every
+asset remains `NOASSERTION`; the upstream package's MIT declaration is retained
+as evidence but does not substitute for the per-asset rights-holder review.
+The separate `Prepare preset pack review candidates` workflow uploads them as
+short-lived review artifacts. Candidate metadata always reports
+`rights-review-required`, zero rendered and zero qualified presets. It does not
+change the signed download catalog, so these archives cannot appear in the app
+until rights and compatibility gates are completed and reviewed.

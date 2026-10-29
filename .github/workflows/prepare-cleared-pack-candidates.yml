@@ -1,5 +1,5 @@
 # ng-runner-policy: private-jit-only-v1
-name: Prepare cleared preset pack candidates
+name: Prepare preset pack review candidates
 on:
   workflow_dispatch:
 permissions:
@@ -16,16 +16,16 @@ jobs:
         with:
           fetch-depth: 1
           persist-credentials: false
-      - name: Convert and package the MIT-licensed shaderless subset
+      - name: Convert the shaderless subset into non-promotable review candidates
         env:
           SOURCE_REVISION: ${{ github.sha }}
         run: >-
           python3 tools/build_cleared_pack_candidates.py
           --source-revision "$SOURCE_REVISION"
-          --output "$RUNNER_TEMP/cleared-pack-candidates"
+          --output "$RUNNER_TEMP/preset-pack-review-candidates"
       - uses: actions/upload-artifact@v7
         with:
-          name: cleared-pack-candidates-${{ github.sha }}
-          path: ${{ runner.temp }}/cleared-pack-candidates/
+          name: preset-pack-review-candidates-${{ github.sha }}
+          path: ${{ runner.temp }}/preset-pack-review-candidates/
           if-no-files-found: error
           retention-days: 14

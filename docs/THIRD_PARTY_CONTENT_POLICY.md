@@ -43,6 +43,13 @@ Not allowed for vendoring:
 
 No-license historical MilkDrop presets are common. Those should be link-only by default, even if upstream projects have used them for many years. Upstream claims that no-license presets are "safe to assume" public domain should be recorded as provenance, but should not be treated as an explicit public-domain dedication for vendoring.
 
+For a converted collection, a package-wide license declaration is retained as
+source evidence, but does not replace a rights-holder review when the source
+does not establish the license chain for each underlying preset or derivative.
+Such material may be held as a review candidate, but it must remain excluded
+from the public download catalog until an approved, archive-bound rights record
+exists.
+
 ## Repo Model
 
 - `content/catalog.json` is the source catalog.

@@ -4968,7 +4968,8 @@ fn parse_milkrust_shader_program(source: &str) -> Option<MilkRustShaderProgram> 
     let source_without_comments = strip_milkrust_shader_comments(source);
     let normalized_source = normalize_simple_milkrust_conditional_return(&source_without_comments);
     let lowered = normalized_source.to_ascii_lowercase();
-    if lowered.contains("for (")
+    if normalized_source.contains('[') || normalized_source.contains(']')
+        || lowered.contains("for (")
         || lowered.contains("while (")
         || lowered.contains("float3x")
         || lowered.contains("float4x")

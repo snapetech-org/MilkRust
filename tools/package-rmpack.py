@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Build a reproducible, redistribution-cleared MilkRust .rmpack archive."""
+"""Build deterministic MilkRust .rmpack archives.
+
+The default mode requires a redistributable manifest. --review-candidate only
+packages explicitly non-promotable candidates whose rights still need review.
+"""
 
 from __future__ import annotations
 
@@ -38,6 +42,8 @@ def safe_relative_path(path: str) -> str:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
+    parser.add_argument("--review-candidate", action="store_true",
+                        help="package a rights-review-required candidate that cannot enter the public catalog")
     parser.add_argument("pack_dir", type=Path)
     parser.add_argument("output", type=Path)
     args = parser.parse_args()
@@ -53,7 +59,11 @@ def main() -> int:
         raise ValueError("pack must declare a non-empty id")
     if not isinstance(manifest.get("version"), str) or not manifest["version"].strip():
         raise ValueError("pack must declare a non-empty version")
-    if manifest.get("distributionStatus") != "redistributable":
+    if args.review_candidate:
+        if (manifest.get("distributionStatus") != "rights-review-required"
+                or manifest.get("rightsReviewStatus") != "required"):
+            raise ValueError("review-candidate mode requires an explicitly rights-review-required manifest")
+    elif manifest.get("distributionStatus") != "redistributable":
         raise ValueError("pack manifest must explicitly declare redistributable status")
     license_files = manifest.get("licenseFiles")
     if manifest.get("license") not in VENDORABLE_LICENSES or not isinstance(license_files, list) or not license_files:
@@ -99,7 +109,10 @@ def main() -> int:
             raise ValueError(f"{label} must reference content, not pack metadata")
         if not isinstance(asset.get("kind"), str) or not asset["kind"].strip():
             raise ValueError(f"{label} must declare a kind")
-        if asset.get("license") not in VENDORABLE_LICENSES:
+        if args.review_candidate:
+            if asset.get("license") != "NOASSERTION" or asset.get("rightsStatus") != "review-required":
+                raise ValueError(f"{label} must remain NOASSERTION until rights review is complete")
+        elif asset.get("license") not in VENDORABLE_LICENSES:
             raise ValueError(f"{label} must use an explicitly redistributable license")
         if not isinstance(asset.get("author"), str) or not asset["author"].strip():
             raise ValueError(f"{label} must declare its author or rights holder")
@@ -107,11 +120,12 @@ def main() -> int:
         parsed_url = urlsplit(source_url) if isinstance(source_url, str) else None
         if parsed_url is None or parsed_url.scheme != "https" or not parsed_url.netloc:
             raise ValueError(f"{label} must declare an HTTPS sourceUrl")
-        if not isinstance(asset.get("licenseFile"), str):
-            raise ValueError(f"{label} must declare a relative licenseFile path")
-        notice_path = safe_relative_path(asset["licenseFile"])
-        if notice_path not in license_paths:
-            raise ValueError(f"{label} must point to a shipped licenseFile")
+        if not args.review_candidate:
+            if not isinstance(asset.get("licenseFile"), str):
+                raise ValueError(f"{label} must declare a relative licenseFile path")
+            notice_path = safe_relative_path(asset["licenseFile"])
+            if notice_path not in license_paths:
+                raise ValueError(f"{label} must point to a shipped licenseFile")
         if not (root / relative).is_file():
             raise ValueError(f"missing asset: {relative}")
 

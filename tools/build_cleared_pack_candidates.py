@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Prepare unqualified, redistribution-cleared pack archives for review.
+"""Prepare unqualified, rights-review-required pack archives for review.
 
-This creates candidate .rmpack files and a staging catalog only. It never edits
+This creates non-promotable candidate .rmpack files and a staging catalog only. It never edits
 content/downloads/catalog.json, runs preset code, renders presets, or claims
 compatibility qualification. Run it only on an approved private ephemeral JIT
 runner.
@@ -84,7 +84,7 @@ def main() -> int:
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
             archive_path = archives / f"{manifest['id']}-{manifest['version']}.rmpack"
             summary = json.loads(run([
-                sys.executable, str(ROOT / "tools/package-rmpack.py"),
+                sys.executable, str(ROOT / "tools/package-rmpack.py"), "--review-candidate",
                 str(pack_dir), str(archive_path),
             ]))
             archive_bytes = archive_path.read_bytes()
@@ -96,8 +96,9 @@ def main() -> int:
                 "name": manifest["name"],
                 "version": manifest["version"],
                 "license": manifest["license"],
-                "distributionStatus": "redistributable",
-                "redistributionBasis": "upstream MIT license copied into the archive; legal review is still required before promotion",
+                "distributionStatus": "rights-review-required",
+                "rightsReviewStatus": "required",
+                "rightsBasis": "the source package declares MIT, but per-preset rights-holder chains are not confirmed",
                 "archive": archive_path.relative_to(staging).as_posix(),
                 "sha256": digest,
                 "archiveBytes": len(archive_bytes),
@@ -111,7 +112,7 @@ def main() -> int:
 
         candidate_catalog = {
             "schemaVersion": 1,
-            "status": "qualification-candidates-only",
+            "status": "rights-and-qualification-review-candidates",
             "publicationEligible": False,
             "generatedBy": "tools/build_cleared_pack_candidates.py",
             "sourceRevision": args.source_revision,
@@ -124,21 +125,22 @@ def main() -> int:
             "qualified": 0,
             "packs": packs,
             "promotionBlockers": [
-                "Independent rights review and attribution review for each candidate pack.",
+                "Confirm that the upstream MIT grant covers every underlying preset and transformed derivative; record independent per-asset rights and attribution review.",
                 "Per-preset reference comparison, rendering, audio-sync, resource-limit and lifecycle evidence.",
                 "All required physical-host qualification targets from content/qualification/README.md.",
                 "Immutable archive commit, signed-catalog metadata review and production trust provisioning.",
             ],
-            "notice": "Candidate archives are not listed in the in-app download catalog. Conversion acceptance is not render compatibility or qualification.",
+            "notice": "Candidate archives are not listed in the in-app download catalog. Every preset remains NOASSERTION and each pack is rights-review-required. Conversion acceptance is not a rights grant, render compatibility or qualification.",
         }
         (staging / "candidate-catalog.json").write_text(
             json.dumps(candidate_catalog, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
             encoding="utf-8",
         )
         (staging / "README.txt").write_text(
-            "MilkRust cleared-pack candidate artifact\n"
+            "MilkRust preset pack review-candidate artifact\n"
             "\n"
-            "This artifact contains deterministic .rmpack candidates and full source accounting.\n"
+            "This artifact contains deterministic, non-promotable .rmpack candidates and full source accounting.\n"
+            "Every asset remains NOASSERTION until independent rights review is complete.\n"
             "It is not a production download catalog. No preset was executed or rendered.\n"
             "Review candidate-catalog.json and conversion/conversion-report.json before any\n"
             "qualification work. The current conversion subset is shaderless and unqualified.\n",

@@ -36,7 +36,7 @@
         "url": "https://www.npmjs.com/package/butterchurn-presets/v/2.4.7"
       },
       "licenseUrl": "https://raw.githubusercontent.com/jberg/butterchurn-presets/master/LICENSE",
-      "notes": "MIT-licensed converted Butterchurn preset package. Contains 1,754 converted JSON presets plus bundle files. This is not raw .milk source, but it is redistributable and useful for compatibility/import tooling."
+      "notes": "The upstream package declares MIT and contains converted MilkDrop presets. It is retained for compatibility and conversion review, but per-preset rights-holder chains are not independently confirmed; do not promote generated packs to public downloads until rights review is approved."
     },
     {
       "id": "projectm-cream-of-the-crop",

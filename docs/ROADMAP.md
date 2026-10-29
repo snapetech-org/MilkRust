@@ -96,7 +96,7 @@ The repository currently contains:
 - `examples`: browser smoke client.
 - `examples/web-component`: vanilla HTML/JS use of `<milkrust-visualizer>`.
 - `content/catalog.json`: third-party content catalog with copy/link/review policy.
-- `content/third-party/butterchurn-presets-2.4.7`: MIT-licensed converted Butterchurn preset package vendored for compatibility/import work.
+- `content/third-party/butterchurn-presets-2.4.7`: Butterchurn's upstream package declares MIT; converted presets are retained for compatibility/import review, with per-preset rights review still required before public pack promotion.
 - `content/community-unlicensed`: public projectM/MilkDrop community preset and texture packs imported for aggressive compatibility testing and opt-in builds.
 - `content/generated`: generated summaries for community pack counts and sampled compatibility.
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Convert the cleared Butterchurn 2.4.7 shaderless subset without executing JS.
+"""Convert the Butterchurn 2.4.7 shaderless review subset without executing JS.
 
 Every discovered JSON receives an accounting row. Unsupported code/shaders are
 retained in the report, not silently accepted or counted as rendering successes.
@@ -248,14 +248,16 @@ def main():
             source_url = f"https://github.com/snapetech-org/MilkRust/blob/{args.source_revision}/{SOURCE.as_posix()}/presets/converted/{quote(source.name)}"
             presets.append({"id": row["sha256"], "file": path, "title": original, "author": credits,
                             "sourceFormat": "milk", "tags": ["butterchurn", "converted", "shaderless"]})
-            assets.append({"path": path, "kind": "preset", "license": "MIT", "author": credits,
-                           "sourceUrl": source_url, "sourceSha256": row["sha256"], "originalFilename": source.name,
-                           "licenseFile": "licenses/MIT.txt", "transformation": "restricted scalar JS-expression to EEL conversion; no execution"})
+            assets.append({"path": path, "kind": "preset", "license": "NOASSERTION", "rightsStatus": "review-required",
+                           "author": credits, "sourceUrl": source_url, "sourceSha256": row["sha256"],
+                           "originalFilename": source.name,
+                           "transformation": "restricted scalar JS-expression to EEL conversion; no execution"})
             row["packId"] = pack_id
         manifest = {"schemaVersion": 1, "id": pack_id, "version": "2.4.7.1", "name": f"Butterchurn Classic {part}",
-                    "license": "MIT", "licenseFiles": ["licenses/MIT.txt"], "distributionStatus": "redistributable",
+                    "license": "MIT", "licenseFiles": ["licenses/MIT.txt"],
+                    "distributionStatus": "rights-review-required", "rightsReviewStatus": "required",
                     "sourceUrls": [SOURCE_URL, "https://www.npmjs.com/package/butterchurn-presets/v/2.4.7"],
-                    "contentNotice": "Converted from butterchurn-presets 2.4.7, distributed upstream under MIT. Original filename credits are retained. Converted equation subset only; rendering fidelity has not been qualified. Third-party names may contain mature language. No downloaded JavaScript is executed.",
+                    "contentNotice": "Converted from butterchurn-presets 2.4.7; the upstream package declares MIT and its notice is included. Per-preset rights-holder chains have not been independently confirmed, so every asset is NOASSERTION and this archive is not eligible for public catalog promotion. Original filename credits are retained. Converted equation subset only; rendering fidelity has not been qualified. Third-party names may contain mature language. No downloaded JavaScript is executed.",
                     "presetRoot": "presets", "presets": presets, "assets": assets,
                     "compatibilityStatus": "converted-unqualified", "sourceRevision": args.source_revision}
         (root / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n")
