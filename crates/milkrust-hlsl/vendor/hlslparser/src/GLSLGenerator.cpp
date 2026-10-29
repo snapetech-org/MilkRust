@@ -42,6 +42,18 @@ const char* GLSLGenerator::s_reservedWord[] =
 
 static const char* GetTypeName(const HLSLType& type)
 {
+    if (IsMatrixType(type.baseType)) {
+        const auto scalar = ScalarBaseType[type.baseType];
+        const int rows = MatrixRows(type.baseType), columns = NumericWidth(type.baseType);
+        if (rows == 1 || columns == 1)
+            return GetTypeName(HLSLType(NumericShape(scalar, 0, std::max(rows, columns))));
+        if (scalar == HLSLBaseType_Bool || scalar == HLSLBaseType_Int || scalar == HLSLBaseType_Uint) {
+            static thread_local char customType[64];
+            const char* scalarName = scalar == HLSLBaseType_Bool ? "bool" : scalar == HLSLBaseType_Int ? "int" : "uint";
+            String_Printf(customType, sizeof(customType), "milkrust_matrix_%s_%dx%d", scalarName, rows, columns);
+            return customType;
+        }
+    }
     switch (type.baseType)
     {
     case HLSLBaseType_Void:         return "void";
@@ -88,6 +100,7 @@ static const char* GetTypeName(const HLSLType& type)
     case HLSLBaseType_Sampler2D:    return "sampler2D";
     case HLSLBaseType_Sampler3D:    return "sampler3D";
     case HLSLBaseType_SamplerCube:  return "samplerCube";
+    case HLSLBaseType_Sampler2DShadow: return "sampler2DShadow";
     case HLSLBaseType_Sampler2DMS:  return "sampler2DMS";
     case HLSLBaseType_Sampler2DArray:  return "sampler2DArray";
     case HLSLBaseType_UserDefined:  return type.typeName;
@@ -260,6 +273,20 @@ bool GLSLGenerator::Generate(HLSLTree* tree, Target target, Version version, con
     }
 
     m_writer.WriteLine(0, "int milkrust_loop_budget;");
+
+    // GLSL ES has no integer or boolean matrix types. Store those HLSL values
+    // as row vectors so indexing and component-wise HLSL operators can be
+    // lowered without changing integer/boolean precision.
+    for (const auto scalar : {HLSLBaseType_Bool, HLSLBaseType_Int, HLSLBaseType_Uint}) {
+        const char* scalarName = scalar == HLSLBaseType_Bool ? "bool" : scalar == HLSLBaseType_Int ? "int" : "uint";
+        for (int rows = 2; rows <= 4; ++rows) for (int columns = 2; columns <= 4; ++columns) {
+            const HLSLType rowType(NumericShape(scalar, 0, columns));
+            m_writer.WriteLine(0, "struct milkrust_matrix_%s_%dx%d {", scalarName, rows, columns);
+            for (int row = 0; row < rows; ++row)
+                m_writer.WriteLine(1, "%s r%d;", GetTypeName(rowType), row);
+            m_writer.WriteLine(0, "};");
+        }
+    }
 
     // Output the special function used to access rows in a matrix.
     m_writer.WriteLine(0, "vec3 %s(mat3 m, int i) { return vec3( m[0][i], m[1][i], m[2][i] ); }", m_matrixRowFunction);
@@ -598,6 +625,52 @@ void GLSLGenerator::OutputExpression(HLSLExpression* expression, const HLSLType*
         if ((unaryExpression->unaryOp == HLSLUnaryOp_PreIncrement || unaryExpression->unaryOp == HLSLUnaryOp_PostIncrement ||
              unaryExpression->unaryOp == HLSLUnaryOp_PreDecrement || unaryExpression->unaryOp == HLSLUnaryOp_PostDecrement) &&
             OutputMatrixSelection(unaryExpression->expression, NULL, op[0] == '+' ? "+" : "-", !pre)) return;
+        const HLSLType& sourceType = unaryExpression->expression->expressionType;
+        const HLSLType& resultType = unaryExpression->expressionType;
+        if (IsMatrixType(sourceType.baseType) &&
+            (IsCustomMatrixType(sourceType.baseType) || IsCustomMatrixType(resultType.baseType) || unaryExpression->unaryOp == HLSLUnaryOp_Not)) {
+            const int rows = MatrixRows(resultType.baseType), columns = NumericWidth(resultType.baseType);
+            const int sourceRows = MatrixRows(sourceType.baseType), sourceColumns = NumericWidth(sourceType.baseType);
+            const bool increment = unaryExpression->unaryOp == HLSLUnaryOp_PreIncrement || unaryExpression->unaryOp == HLSLUnaryOp_PostIncrement ||
+                unaryExpression->unaryOp == HLSLUnaryOp_PreDecrement || unaryExpression->unaryOp == HLSLUnaryOp_PostDecrement;
+            const std::string inputType = GetTypeName(sourceType), outputType = GetTypeName(resultType);
+            const std::string parameters = std::string(increment ? "inout " : "") + inputType + " a";
+            std::string body;
+            auto valueAt = [&](int row, int column) {
+                const std::string value = MatrixComponent(sourceType, "a", row, column);
+                if (unaryExpression->unaryOp == HLSLUnaryOp_Not) return "(!bool(" + value + "))";
+                if (unaryExpression->unaryOp == HLSLUnaryOp_Negative) return "(-" + value + ")";
+                if (unaryExpression->unaryOp == HLSLUnaryOp_BitNot) return "(~" + value + ")";
+                return value;
+            };
+            if (increment) body = inputType + " oldValue = a; ";
+            if (IsCustomMatrixType(resultType.baseType)) {
+                if (!increment) body += outputType + " result; ";
+                const HLSLType rowType(NumericShape(ScalarBaseType[resultType.baseType], 0, columns));
+                for (int r = 0; r < rows; ++r) {
+                    if (increment) body += "a.r" + std::to_string(r) + (op[0] == '+' ? "+=" : "-=") + GetTypeName(rowType) + "(1); ";
+                    else {
+                        body += "result.r" + std::to_string(r) + "=" + GetTypeName(rowType) + "(";
+                        for (int c = 0; c < columns; ++c) { if (c) body += ","; body += valueAt(r, c); }
+                        body += "); ";
+                    }
+                }
+                body += increment ? (std::string("return ") + (pre ? "a;" : "oldValue;")) : "return result;";
+            } else {
+                const int count = rows == 1 ? columns : columns == 1 ? rows : rows * columns;
+                body += "return " + outputType + "(";
+                for (int i = 0; i < count; ++i) {
+                    if (i) body += ",";
+                    const int r = rows == 1 ? 0 : columns == 1 ? i : i / columns;
+                    const int c = rows == 1 ? i : columns == 1 ? 0 : i % columns;
+                    body += valueAt(r, c);
+                }
+                body += ");";
+            }
+            const std::string helper = NumericHelper("matrix-unary:" + inputType + outputType + parameters + body,
+                outputType, parameters, body);
+            m_writer.Write("%s(", helper.c_str()); OutputExpression(unaryExpression->expression); m_writer.Write(")"); return;
+        }
         if (unaryExpression->unaryOp == HLSLUnaryOp_Not && IsVectorType(unaryExpression->expressionType)) {
             m_writer.Write("not("); OutputExpression(unaryExpression->expression, &unaryExpression->expressionType); m_writer.Write(")"); return;
         }
@@ -630,7 +703,125 @@ void GLSLGenerator::OutputExpression(HLSLExpression* expression, const HLSLType*
                 binaryExpression->binaryOp == HLSLBinaryOp_LeftShiftAssign ? "<<" : ">>";
             if (OutputMatrixSelection(binaryExpression->expression1, binaryExpression->expression2, operation)) return;
         }
+        const auto lhsBase = binaryExpression->expression1->expressionType.baseType;
+        const auto rhsBase = binaryExpression->expression2->expressionType.baseType;
+        const bool hasMatrix = IsMatrixType(lhsBase) || IsMatrixType(rhsBase) || IsMatrixType(binaryExpression->expressionType.baseType);
+        if (hasMatrix && binaryExpression->binaryOp != HLSLBinaryOp_Assign &&
+                (IsCustomMatrixType(lhsBase) || IsCustomMatrixType(rhsBase) ||
+                IsCustomMatrixType(binaryExpression->expressionType.baseType) ||
+                IsCompareOp(binaryExpression->binaryOp) || IsLogicOp(binaryExpression->binaryOp))) {
+            const bool assign = IsAssignOp(binaryExpression->binaryOp) && binaryExpression->binaryOp != HLSLBinaryOp_Assign;
+            const bool boolComparison = (binaryExpression->binaryOp == HLSLBinaryOp_Equal || binaryExpression->binaryOp == HLSLBinaryOp_NotEqual) &&
+                ScalarBaseType[lhsBase] == HLSLBaseType_Bool && ScalarBaseType[rhsBase] == HLSLBaseType_Bool;
+            const HLSLBaseType comparisonScalar = boolComparison
+                ? lhsBase : CommonNumericType(lhsBase, rhsBase);
+            HLSLType operandType(assign || IsLogicOp(binaryExpression->binaryOp) ? lhsBase : comparisonScalar);
+            if (operandType.baseType == HLSLBaseType_Unknown) throw std::invalid_argument("Invalid HLSL matrix operator type");
+            const HLSLType& resultType = binaryExpression->expressionType;
+            const int rows = MatrixRows(resultType.baseType), columns = NumericWidth(resultType.baseType);
+            const int vectorWidth = rows == 1 ? columns : columns == 1 ? rows : 0;
+            if (!rows || !columns) throw std::invalid_argument("Invalid HLSL matrix operator shape");
+            const std::string resultName = GetTypeName(resultType);
+            const std::string operandName = GetTypeName(operandType);
+            std::string op;
+            switch (binaryExpression->binaryOp) {
+                case HLSLBinaryOp_Add: case HLSLBinaryOp_AddAssign: op = "+"; break;
+                case HLSLBinaryOp_Sub: case HLSLBinaryOp_SubAssign: op = "-"; break;
+                case HLSLBinaryOp_Mul: case HLSLBinaryOp_MulAssign: op = "*"; break;
+                case HLSLBinaryOp_Div: case HLSLBinaryOp_DivAssign: op = "/"; break;
+                case HLSLBinaryOp_Mod: case HLSLBinaryOp_ModAssign: op = "%"; break;
+                case HLSLBinaryOp_BitAnd: case HLSLBinaryOp_BitAndAssign: op = "&"; break;
+                case HLSLBinaryOp_BitOr: case HLSLBinaryOp_BitOrAssign: op = "|"; break;
+                case HLSLBinaryOp_BitXor: case HLSLBinaryOp_BitXorAssign: op = "^"; break;
+                case HLSLBinaryOp_LeftShift: case HLSLBinaryOp_LeftShiftAssign: op = "<<"; break;
+                case HLSLBinaryOp_RightShift: case HLSLBinaryOp_RightShiftAssign: op = ">>"; break;
+                case HLSLBinaryOp_And: op = "&&"; break;
+                case HLSLBinaryOp_Or: op = "||"; break;
+                case HLSLBinaryOp_Less: op = "<"; break;
+                case HLSLBinaryOp_Greater: op = ">"; break;
+                case HLSLBinaryOp_LessEqual: op = "<="; break;
+                case HLSLBinaryOp_GreaterEqual: op = ">="; break;
+                case HLSLBinaryOp_Equal: op = "=="; break;
+                case HLSLBinaryOp_NotEqual: op = "!="; break;
+                default: throw std::invalid_argument("Unsupported HLSL matrix operator");
+            }
+            const std::string leftType = assign ? GetTypeName(binaryExpression->expression1->expressionType) : operandName;
+            const std::string rightType = assign ? leftType : operandName;
+            const std::string parameters = std::string(assign ? "inout " : "") + leftType + " a," + rightType + " b";
+            const bool comparison = IsCompareOp(binaryExpression->binaryOp);
+            const bool logical = IsLogicOp(binaryExpression->binaryOp);
+            auto component = [](const HLSLType& type, const std::string& value, int row, int column) {
+                if (IsMatrixType(type.baseType)) {
+                    const int r = MatrixRows(type.baseType), c = NumericWidth(type.baseType);
+                    if (IsCustomMatrixType(type.baseType))
+                        return value + ".r" + std::to_string(row) + "[" + std::to_string(column) + "]";
+                    if (r > 1 && c > 1)
+                        return value + "[" + std::to_string(column) + "][" + std::to_string(row) + "]";
+                    const int index = r == 1 ? column : row;
+                    return (r == 1 && c == 1) || (r > 1 && c == 1) && index == 0
+                        ? value : value + "[" + std::to_string(index) + "]";
+                }
+                return IsScalarType(type) ? value : value + "[" + std::to_string(column) + "]";
+            };
+            const HLSLType& leftExpressionType = binaryExpression->expression1->expressionType;
+            const HLSLType& rightExpressionType = binaryExpression->expression2->expressionType;
+            std::string body;
+            if (vectorWidth) {
+                const int count = vectorWidth;
+                const HLSLBaseType scalar = ScalarBaseType[resultType.baseType];
+                const std::string vectorType = GetTypeName(HLSLType(NumericShape(scalar, 0, count)));
+                body = "return " + vectorType + "(";
+                for (int c = 0; c < count; ++c) {
+                    if (c) body += ",";
+                    const std::string a = component(assign ? binaryExpression->expression1->expressionType : operandType, "a", rows == 1 ? 0 : c, rows == 1 ? c : 0);
+                    const std::string b = component(assign ? binaryExpression->expression1->expressionType : operandType, "b", rows == 1 ? 0 : c, rows == 1 ? c : 0);
+                    body += logical ? "(bool(" + a + ")" + op + "bool(" + b + "))" : "(" + a + op + b + ")";
+                }
+                body += ");";
+            } else if (IsCustomMatrixType(resultType.baseType)) {
+                const HLSLType rowType(NumericShape(ScalarBaseType[resultType.baseType], 0, columns));
+                if (!assign) body = resultName + " result;";
+                for (int r = 0; r < rows; ++r) {
+                    if (comparison || logical) {
+                        body += "result.r" + std::to_string(r) + "=bvec" + std::to_string(columns) + "(";
+                        for (int c = 0; c < columns; ++c) {
+                            if (c) body += ",";
+                            const std::string a = component(operandType, "a", r, c), b = component(operandType, "b", r, c);
+                            body += logical ? "(bool(" + a + ")" + op + "bool(" + b + "))" : "(" + a + op + b + ")";
+                        }
+                        body += ");";
+                    } else if (assign) {
+                        body += "a.r" + std::to_string(r) + "=a.r" + std::to_string(r) + op + "b.r" + std::to_string(r) + ";";
+                    } else {
+                        const std::string rowName = GetTypeName(rowType);
+                        body += "result.r" + std::to_string(r) + "=" + rowName + "(";
+                        for (int c = 0; c < columns; ++c) {
+                            if (c) body += ",";
+                            body += "(" + component(operandType, "a", r, c) + op + component(operandType, "b", r, c) + ")";
+                        }
+                        body += ");";
+                    }
+                }
+                body += assign ? "return a;" : "return result;";
+            } else if (IsMatrixType(resultType.baseType) && rows > 1 && columns > 1 && !comparison && !logical) {
+                body = "return " + resultName + "(";
+                for (int c = 0; c < columns; ++c) for (int r = 0; r < rows; ++r) {
+                    if (c || r) body += ",";
+                    body += "(" + component(operandType, "a", r, c) + op + component(operandType, "b", r, c) + ")";
+                }
+                body += ");";
+            } else {
+                throw std::invalid_argument("Unsupported HLSL matrix operator shape");
+            }
+            const std::string helper = NumericHelper("matrix-op:" + resultName + parameters + op + body,
+                resultName, parameters, body);
+            m_writer.Write("%s(", helper.c_str());
+            OutputExpression(binaryExpression->expression1, &operandType);
+            m_writer.Write(", "); OutputExpression(binaryExpression->expression2, &operandType);
+            m_writer.Write(")"); return;
+        }
         if (IsMatrixType(binaryExpression->expressionType.baseType) &&
+            MatrixRows(binaryExpression->expressionType.baseType) > 1 && NumericWidth(binaryExpression->expressionType.baseType) > 1 &&
             (binaryExpression->binaryOp == HLSLBinaryOp_Mul || binaryExpression->binaryOp == HLSLBinaryOp_MulAssign)) {
             const bool assign = binaryExpression->binaryOp == HLSLBinaryOp_MulAssign;
             const std::string type = GetTypeName(binaryExpression->expressionType);
@@ -641,11 +832,12 @@ void GLSLGenerator::OutputExpression(HLSLExpression* expression, const HLSLType*
             m_writer.Write(", "); OutputExpression(binaryExpression->expression2, &binaryExpression->expressionType); m_writer.Write(")"); return;
         }
         if ((binaryExpression->binaryOp == HLSLBinaryOp_Mod || binaryExpression->binaryOp == HLSLBinaryOp_ModAssign) &&
+            (!IsMatrixType(binaryExpression->expressionType.baseType) || MatrixRows(binaryExpression->expressionType.baseType) == 1 || NumericWidth(binaryExpression->expressionType.baseType) == 1) &&
             (ScalarBaseType[binaryExpression->expressionType.baseType] == HLSLBaseType_Float || ScalarBaseType[binaryExpression->expressionType.baseType] == HLSLBaseType_Half)) {
             const bool assign = binaryExpression->binaryOp == HLSLBinaryOp_ModAssign;
             const std::string type = GetTypeName(binaryExpression->expressionType);
             std::string value = "a-b*trunc(a/b)";
-            if (IsMatrixType(binaryExpression->expressionType.baseType)) {
+            if (IsMatrixType(binaryExpression->expressionType.baseType) && MatrixRows(binaryExpression->expressionType.baseType) > 1 && NumericWidth(binaryExpression->expressionType.baseType) > 1) {
                 value = type + "(";
                 for (int c = 0; c < NumericWidth(binaryExpression->expressionType.baseType); ++c) {
                     if (c) value += ",";
@@ -1248,22 +1440,19 @@ void GLSLGenerator::LayoutBuffer(HLSLBuffer* buffer, unsigned int& offset)
 
 void GLSLGenerator::LayoutBuffer(const HLSLType& type, unsigned int& offset)
 {
-    LayoutBufferAlign(type, offset);
-
     if (type.array)
     {
-        int arraySize = 0;
-        m_tree->GetExpressionValue(type.arraySize, arraySize);
-
+        const int arraySize = AggregateArrayExtent(*m_tree, type);
+        LayoutBufferAlign(type, offset);
+        HLSLType element = type; element.DropArrayDimension();
         unsigned int elementSize = 0;
-        LayoutBufferElement(type, elementSize);
-
-        unsigned int alignedElementSize = (elementSize + 3) & ~3;
-
-        offset += alignedElementSize * arraySize;
+        LayoutBuffer(element, elementSize);
+        const unsigned int stride = (elementSize + 3) & ~3;
+        offset += stride * static_cast<unsigned int>(arraySize);
     }
     else
     {
+        LayoutBufferAlign(type, offset);
         LayoutBufferElement(type, offset);
     }
 }
@@ -1522,11 +1711,10 @@ unsigned int GLSLGenerator::OutputBufferAccessIndex(HLSLExpression* expression, 
 
         const HLSLType& type = arrayAccess->array->expressionType;
         ASSERT(type.array);
-
+        HLSLType element = type; element.DropArrayDimension();
         unsigned int elementSize = 0;
-        LayoutBufferElement(type, elementSize);
-
-        unsigned int alignedElementSize = (elementSize + 3) & ~3;
+        LayoutBuffer(element, elementSize);
+        const unsigned int alignedElementSize = (elementSize + 3) & ~3;
 
         int arrayIndex = 0;
         if (m_tree->GetExpressionValue(arrayAccess->index, arrayIndex))
@@ -1893,11 +2081,8 @@ void GLSLGenerator::OutputDefaultValue(const HLSLType& type)
 {
     DepthGuard milkrustDepth;
     if (type.array) {
-        int count = 0;
-        if (!type.arraySize || !m_tree->GetExpressionValue(type.arraySize, count) || count < 1 || count > 4096) {
-            Error("Invalid global array bound"); return;
-        }
-        HLSLType element = type; element.array = false; element.arraySize = NULL;
+        const int count = AggregateArrayExtent(*m_tree, type);
+        HLSLType element = type; element.DropArrayDimension();
         m_writer.Write("%s[](", GetTypeName(element));
         for (int i=0; i<count; ++i) {
             CheckBudget(); if (i) m_writer.Write(", "); OutputDefaultValue(element);
@@ -1941,16 +2126,18 @@ void GLSLGenerator::OutputDeclarationBody( const HLSLType& type, const char* nam
 	}
 	else
 	{
-		m_writer.Write( "%s[", GetSafeIdentifierName( name ) );
-		if( type.arraySize != NULL )
-		{
-            int extent = 0;
-            if (!m_tree->GetExpressionValue(type.arraySize, extent) || extent < 1 || extent > 4096) {
-                Error("Invalid constant array extent"); return;
-            }
-            m_writer.Write("%d", extent);
+		m_writer.Write( "%s", GetSafeIdentifierName( name ) );
+		for (int i = 0; i < type.arrayRank; ++i) {
+			m_writer.Write("[");
+			if (type.arraySizes[i] != NULL) {
+				int extent = 0;
+				if (!m_tree->GetExpressionValue(type.arraySizes[i], extent) || extent < 1 || extent > 4096) {
+					Error("Invalid constant array extent"); return;
+				}
+				m_writer.Write("%d", extent);
+			}
+			m_writer.Write("]");
 		}
-		m_writer.Write( "]" );
 	}
 }
 

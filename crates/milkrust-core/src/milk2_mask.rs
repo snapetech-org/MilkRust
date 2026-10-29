@@ -1,0 +1,352 @@
+//! Saved MilkDrop 3 blend-mask generators.
+//!
+//! The `(a,c)` pattern formulas below are a clean-room port of the published
+//! behavioral implementation in M0Rf30/lactea, `md3_blend.rs` and
+//! `blend_patterns.rs` (MIT; attribution and license text are in
+//! `crates/milkrust-core/THIRD_PARTY_NOTICES.md`). The R8 rasterizer is
+//! MilkRust-owned glue that evaluates the documented 64x48 vertex field.
+
+use crate::milk2::TransitionMaskKey;
+
+const GRID_X: usize = 64;
+const GRID_Y: usize = 48;
+const MAX_MASK_PIXELS: u64 = 8 * 1024 * 1024;
+
+#[derive(Clone, Copy)]
+enum Pattern {
+    Zoom,
+    Side,
+    Plasma,
+    Plasma2,
+    Plasma3,
+    Cercle,
+    Square,
+    Snail,
+    Snail2,
+    Snail3,
+    Triangle,
+    Donuts,
+    Corner,
+    Patches,
+    Checkerboard,
+    Bubbles,
+    Stars,
+    Stars2,
+    Clock,
+    Nuclear,
+    Arrow,
+    Cisor,
+    Wave,
+    Curtain,
+    Vertical,
+    Horizontal,
+    LinesVertical,
+    LinesHorizontal,
+    Cross,
+    Cross2,
+}
+
+impl Pattern {
+    fn from_code(code: i32) -> Option<Self> {
+        Some(match code {
+            1 => Self::Zoom,
+            2 => Self::Side,
+            3 => Self::Plasma,
+            4 => Self::Plasma2,
+            5 => Self::Plasma3,
+            6 => Self::Cercle,
+            7 => Self::Square,
+            8 => Self::Snail,
+            9 => Self::Snail2,
+            10 => Self::Snail3,
+            11 => Self::Triangle,
+            12 => Self::Donuts,
+            13 => Self::Corner,
+            14 => Self::Patches,
+            15 => Self::Checkerboard,
+            16 => Self::Bubbles,
+            17 => Self::Stars,
+            18 => Self::Stars2,
+            19 => Self::Clock,
+            20 => Self::Nuclear,
+            21 => Self::Arrow,
+            22 => Self::Cisor,
+            23 => Self::Wave,
+            24 => Self::Curtain,
+            25 => Self::Vertical,
+            26 => Self::Horizontal,
+            27 => Self::LinesVertical,
+            28 => Self::LinesHorizontal,
+            29 => Self::Cross,
+            30 => Self::Cross2,
+            _ => return None,
+        })
+    }
+}
+
+/// Compute the per-vertex `(a,c)` field from MilkDrop 3's saved pattern.
+fn fill_vertices(pattern: Pattern, direction: i32, random: [f32; 5], aspect: (f32, f32), out: &mut [[f32; 2]]) {
+    let gx = GRID_X;
+    let gy = GRID_Y;
+    let width = gx + 1;
+    let (ax, ay) = aspect;
+    let (gxf, gyf) = (gx as f32, gy as f32);
+    let [r1, r2, r3, r4, r5] = random;
+    let flip = direction == -1;
+    let sqrt2 = 2.0f32.sqrt();
+    let band = r1 * 0.14 + 0.02 + r2 * 0.34;
+
+    let each = |out: &mut [[f32; 2]], f: &dyn Fn(f32, f32) -> [f32; 2]| {
+        for y in 0..=gy {
+            for x in 0..=gx {
+                out[y * width + x] = f(x as f32 / gxf, y as f32 / gyf);
+            }
+        }
+    };
+    let banded = |out: &mut [[f32; 2]], width: f32, offset: f32, t: &dyn Fn(f32, f32) -> f32| {
+        let inverse = 1.0 / width;
+        each(out, &|x, y| band_entry(inverse, width + offset, t(x, y)));
+    };
+    let centered = |x: f32, y: f32| ((x - 0.5) * ax, (y - 0.5) * ay);
+    let radius = |dx: f32, dy: f32| (dx * dx + dy * dy).sqrt();
+    let flipped = |value: f32| if flip { 1.0 - value } else { value };
+    let wipe = |u: f32, v: f32, vx: f32, vy: f32| {
+        (((u - 0.5) * vx + (v - 0.5) * vy + 0.5) - 0.5) / sqrt2 + 0.5
+    };
+
+    match pattern {
+        Pattern::Zoom => out.fill([1.0, 0.0]),
+        Pattern::Side => {
+            let angle = r1 * 6.28;
+            let (vx, vy) = (angle.cos(), angle.sin());
+            let width = 0.1 + 0.2 * r2;
+            let inverse = 1.0 / width;
+            each(out, &|x, y| band_entry(inverse, 1.0 + width, wipe(x * ax, y * ay, vx, vy)));
+        }
+        Pattern::Plasma | Pattern::Plasma2 | Pattern::Plasma3 => {
+            let (width, dt) = match pattern {
+                Pattern::Plasma => (0.12 + 0.13 * r1, 0.25),
+                Pattern::Plasma2 => (0.25 + 0.15 * r1, 0.25),
+                _ => (0.25 + 0.15 * r1, 0.75),
+            };
+            let inverse = 1.0 / width;
+            let mut values = vec![0.0f32; (gx + 1) * (gy + 1)];
+            values[0] = r2;
+            values[gx] = r3;
+            values[gy * width_of_grid() + 0] = r4;
+            values[gy * width_of_grid() + gx] = r5;
+            gen_plasma(&mut values, gx, (ax, ay), random, Span { x0: 0, x1: gx, y0: 0, y1: gy }, dt);
+            let seed = if matches!(pattern, Pattern::Plasma3) { 0.5 * values[0] } else { values[0] };
+            let (minimum, maximum) = extent(seed, values.iter().copied());
+            for (value, vertex) in values.iter().zip(out.iter_mut()) {
+                let t = if matches!(pattern, Pattern::Plasma) {
+                    (value - minimum) * (1.0 / (maximum - minimum))
+                } else {
+                    ((value - minimum) * 2.0 / (maximum - minimum)).sin()
+                };
+                let c = band_entry(inverse, 0.0, t)[1];
+                *vertex = [(1.0 + width) / width, c];
+            }
+        }
+        Pattern::Cercle => banded(out, band, 1.0, &|x, y| {
+            let (dx, dy) = centered(x, y);
+            flipped(radius(dx, dy) * 1.41421)
+        }),
+        Pattern::Square => banded(out, band, 1.0, &|x, y| {
+            let (dx, dy) = centered(x, y);
+            (dx.abs() * 1.41421).max(dy.abs() * 1.41421)
+        }),
+        Pattern::Snail | Pattern::Snail2 | Pattern::Snail3 => banded(out, band, 2.0, &|x, y| {
+            let (dx, dy) = centered(x, y);
+            let (rho, theta) = (radius(dx, dy), dy.atan2(dx));
+            match pattern {
+                Pattern::Snail => (theta + 10.0 * rho - 0.2).cos() * rho,
+                Pattern::Snail2 => (theta + 25.0 * rho - 0.2).cos() * rho,
+                _ => (theta + 50.0 * rho + 0.5).sin() * rho,
+            }
+        }),
+        Pattern::Triangle => banded(out, band, 1.0, &|x, y| {
+            let (dx, dy) = centered(x, y);
+            flipped(dx.abs() + dy.abs())
+        }),
+        Pattern::Donuts => banded(out, band, 3.0, &|x, y| {
+            let (dx, dy) = centered(x, y);
+            (10.0 * radius(dx, dy) + 90.0).sin()
+        }),
+        Pattern::Corner => banded(out, band, 1.0, &|x, y| {
+            let dx = ((x - 0.5) + 0.25) * ax;
+            let dy = ((y - 0.5) + 0.35) * ay;
+            flipped((radius(dx, dy) * 1.41421).clamp(0.0, 1.0))
+        }),
+        Pattern::Patches => banded(out, band, 1.0, &|x, y| {
+            let (dx, dy) = centered(x, y);
+            flipped(((10.0 * dy).cos() + (10.0 * dx).sin()) * 0.25 + 0.5)
+        }),
+        Pattern::Checkerboard => banded(out, band, 3.0, &|x, y| {
+            let xs = (x - 1.0) * ax * 10.0 + 90.0;
+            let ys = (y - 0.0) * ay * 10.0 + 90.0;
+            xs.sin() * ys.cos()
+        }),
+        Pattern::Bubbles => each(out, &|x, y| [
+            7.0,
+            2.0 * ((x - 10.0 * r1) * ax * 10.0 + 0.5 * r3).sin()
+                * (0.5 * r4 + (y - 0.5) * ay * 10.0).cos() - 2.0,
+        ]),
+        Pattern::Stars | Pattern::Stars2 | Pattern::Clock | Pattern::Nuclear => banded(out, band, 3.0, &|x, y| {
+            let (dx, dy) = centered(x, y);
+            let theta = dy.atan2(dx);
+            match pattern {
+                Pattern::Stars => (5.0 * theta + 90.0).sin(),
+                Pattern::Stars2 => (10.0 * theta + 90.0).sin(),
+                Pattern::Clock => ((theta + theta) * 0.5).sin(),
+                _ => ((theta + theta) * 1.5).sin(),
+            }
+        }),
+        Pattern::Arrow => banded(out, band, 1.0, &|x, y| {
+            let (dx, dy) = centered(x, y);
+            let limit = |value: f32| value.clamp(-0.9999, 0.9999);
+            let (ax, ay) = (limit(dx).atanh(), limit(dy).atanh());
+            ((4.0 * ay).cos() + ax).sin() * 0.5 + 0.5
+        }),
+        Pattern::Cisor => banded(out, band, 3.0, &|x, y| {
+            let theta = ((y - 0.0) * ay).atan2((x - 1.0) * ax);
+            (5.0 * theta + 90.0).sin()
+        }),
+        Pattern::Wave => banded(out, band, 3.0, &|x, y| {
+            let (dx, dy) = ((x - 1.0) * ax, (y - 0.0) * ay);
+            (10.0 * radius(dx, dy) + 90.0).sin()
+        }),
+        Pattern::Curtain => {
+            let (vx, vy) = (6.28f32.cos(), 6.28f32.sin());
+            let scale = 3.33333325f32;
+            let a = f32::from_bits(0x408a_aaaa);
+            each(out, &|x, y| {
+                let s = ((x * ax - 0.5) * vx + (y * ay - 0.5) * vy + 0.5) * 3.14159274;
+                let h = s.sin() * 0.5 + 0.5;
+                [a, h * scale - scale]
+            });
+        }
+        Pattern::Vertical => {
+            let (vx, vy) = (6.28f32.cos(), 6.28f32.sin());
+            each(out, &|x, y| [6.0, 5.0 * wipe(x * ax, y * ay, vx, vy) - 5.0]);
+        }
+        Pattern::Horizontal => {
+            // Preserve the source's transposed loops and row-major write quirk.
+            let (vx, vy) = (6.28f32.cos(), 6.28f32.sin());
+            let mut k = 0;
+            for i in 0..=gx {
+                for j in 0..=gy {
+                    let (u, v) = (i as f32 / gxf * ax, j as f32 / gyf * ay);
+                    let t = ((((v - 0.5) * vy + (u - 0.5) * vx + 0.5) - 0.5) / sqrt2) + 0.5;
+                    out[k] = [6.0, 5.0 * t - 5.0];
+                    k += 1;
+                }
+            }
+        }
+        Pattern::LinesVertical => each(out, &|x, _| [7.0, 2.0 * ((x - 0.5) * ax * r1 * 60.0).sin() - 2.0]),
+        Pattern::LinesHorizontal => each(out, &|_, y| [7.0, 2.0 * (r1 * 60.0 * (y - 0.5) * ay).sin() - 2.0]),
+        Pattern::Cross | Pattern::Cross2 => {
+            let cut = matches!(pattern, Pattern::Cross2);
+            let inverse = 1.0 / band;
+            each(out, &|x, y| {
+                let (dx, dy) = centered(x, y);
+                let t = (dx.abs() + dx.abs()).min(dy.abs() + dy.abs());
+                if cut && t >= 0.3 { [0.0, 0.0] }
+                else { [(band + 1.0) * inverse, t * inverse - inverse] }
+            });
+        }
+    }
+}
+
+fn width_of_grid() -> usize { GRID_X + 1 }
+
+#[derive(Clone, Copy)]
+struct Span { x0: usize, x1: usize, y0: usize, y1: usize }
+
+fn gen_plasma(values: &mut [f32], gx: usize, aspect: (f32, f32), random: [f32; 5], span: Span, dt: f32) {
+    let Span { x0, x1, y0, y1 } = span;
+    let (ax, ay) = aspect;
+    let width = gx + 1;
+    let (mx, my) = ((x0 + x1) / 2, (y0 + y1) / 2);
+    let at = |values: &mut [f32], x: usize, y: usize| values[y * width + x];
+    let (t00, t01, t10, t11) = (at(values, x0, y0), at(values, x1, y0), at(values, x0, y1), at(values, x1, y1));
+
+    if y1 - y0 >= 2 {
+        if x0 == 0 { values[my * width + x0] = 0.5 * (t00 + t10) + (random[0] * 2.0 - 1.0) * dt * ay; }
+        values[my * width + x1] = 0.5 * (t01 + t11) + (random[1] * 2.0 - 1.0) * dt * ay;
+    }
+    if x1 - x0 >= 2 {
+        if y0 == 0 { values[y0 * width + mx] = 0.5 * (t00 + t01) + (random[2] * 2.0 - 1.0) * dt * ax; }
+        values[y1 * width + mx] = 0.5 * (t10 + t11) + (random[3] * 2.0 - 1.0) * dt * ax;
+    }
+    if y1 - y0 >= 2 && x1 - x0 >= 2 {
+        let (left, right, top, bottom) = (at(values, x0, my), at(values, x1, my), at(values, mx, y0), at(values, mx, y1));
+        values[my * width + mx] = 0.25 * (top + bottom + left + right) + (random[4] * 2.0 - 1.0) * dt;
+        let half = dt * 0.5;
+        for quadrant in [
+            Span { x0, x1: mx, y0, y1: my },
+            Span { x0: mx, x1, y0, y1: my },
+            Span { x0, x1: mx, y0: my, y1 },
+            Span { x0: mx, x1, y0: my, y1 },
+        ] { gen_plasma(values, gx, aspect, random, quadrant, half); }
+    }
+}
+
+fn band_entry(inverse: f32, a_multiplier: f32, t: f32) -> [f32; 2] {
+    [inverse * a_multiplier, t * inverse - inverse]
+}
+
+fn extent(seed: f32, values: impl Iterator<Item = f32>) -> (f32, f32) {
+    let (mut minimum, mut maximum) = (seed, seed);
+    for value in values {
+        if minimum > value { minimum = value; }
+        if maximum < value { maximum = value; }
+    }
+    (minimum, maximum)
+}
+
+pub(super) fn generate(key: TransitionMaskKey) -> Result<Vec<u8>, String> {
+    if Pattern::from_code(key.pattern).is_none() { return Err("Unknown MilkDrop 3 blend pattern".into()); }
+    let progress = f32::from_bits(key.progress);
+    let random = key.random.map(f32::from_bits);
+    if !progress.is_finite() || !(0.0..=1.0).contains(&progress) || random.iter().any(|v| !v.is_finite() || !(0.0..=1.0).contains(v)) {
+        return Err("MilkDrop 3 blend progress or random values are outside their saved domain".into());
+    }
+    if key.width == 0 || key.height == 0 || key.width > 4096 || key.height > 4096
+        || u64::from(key.width) * u64::from(key.height) > MAX_MASK_PIXELS {
+        return Err("MilkDrop 3 transition mask exceeds the 4096-side or 8 Mi-pixel limit".into());
+    }
+    let aspect = ((key.width as f32 / key.height as f32).max(1.0), (key.height as f32 / key.width as f32).max(1.0));
+    let mut vertices = vec![[0.0f32; 2]; (GRID_X + 1) * (GRID_Y + 1)];
+    fill_vertices(Pattern::from_code(key.pattern).expect("validated pattern"), key.direction, random, aspect, &mut vertices);
+    let mut vertex_alpha = Vec::with_capacity(vertices.len());
+    for [a, c] in vertices { vertex_alpha.push((a * progress + c).clamp(0.0, 1.0)); }
+
+    let width = key.width as usize;
+    let height = key.height as usize;
+    let mut mask = vec![0u8; width * height];
+    let stride = GRID_X + 1;
+    for y in 0..height {
+        let gy = ((y as f32 + 0.5) / height as f32 * GRID_Y as f32).clamp(0.0, GRID_Y as f32);
+        let cell_y = (gy.floor() as usize).min(GRID_Y - 1);
+        let fy = gy - cell_y as f32;
+        for x in 0..width {
+            let gx = ((x as f32 + 0.5) / width as f32 * GRID_X as f32).clamp(0.0, GRID_X as f32);
+            let cell_x = (gx.floor() as usize).min(GRID_X - 1);
+            let fx = gx - cell_x as f32;
+            let tl = vertex_alpha[cell_y * stride + cell_x];
+            let tr = vertex_alpha[cell_y * stride + cell_x + 1];
+            let bl = vertex_alpha[(cell_y + 1) * stride + cell_x];
+            let br = vertex_alpha[(cell_y + 1) * stride + cell_x + 1];
+            // The blend mesh uses the same diagonal as the fullscreen grid:
+            // top-left to bottom-right vertices are interpolated as triangles.
+            let alpha = if fy <= fx {
+                tl * (1.0 - fx) + tr * (fx - fy) + br * fy
+            } else {
+                tl * (1.0 - fy) + bl * (fy - fx) + br * fx
+            };
+            mask[y * width + x] = (alpha.clamp(0.0, 1.0) * 255.0).round() as u8;
+        }
+    }
+    Ok(mask)
+}

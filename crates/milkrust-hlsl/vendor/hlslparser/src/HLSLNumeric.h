@@ -4,75 +4,64 @@
 #include "HLSLTree.h"
 #include <algorithm>
 namespace M4 {
+struct HLSLMatrixShape { HLSLBaseType type; int rows; int columns; };
+inline const HLSLMatrixShape* MatrixShapes(size_t& count) {
+    static const HLSLMatrixShape shapes[] = {
+#define MR(s, r, c) { HLSLBaseType_##s##r##x##c, r, c }
+        MR(Float,1,1), MR(Float,1,2), MR(Float,1,3), MR(Float,1,4),
+        MR(Float,2,1), MR(Float,2,2), MR(Float,2,3), MR(Float,2,4),
+        MR(Float,3,1), MR(Float,3,2), MR(Float,3,3), MR(Float,3,4),
+        MR(Float,4,1), MR(Float,4,2), MR(Float,4,3), MR(Float,4,4),
+        MR(Half,1,1), MR(Half,1,2), MR(Half,1,3), MR(Half,1,4),
+        MR(Half,2,1), MR(Half,2,2), MR(Half,2,3), MR(Half,2,4),
+        MR(Half,3,1), MR(Half,3,2), MR(Half,3,3), MR(Half,3,4),
+        MR(Half,4,1), MR(Half,4,2), MR(Half,4,3), MR(Half,4,4),
+        MR(Bool,1,1), MR(Bool,1,2), MR(Bool,1,3), MR(Bool,1,4),
+        MR(Bool,2,1), MR(Bool,2,2), MR(Bool,2,3), MR(Bool,2,4),
+        MR(Bool,3,1), MR(Bool,3,2), MR(Bool,3,3), MR(Bool,3,4),
+        MR(Bool,4,1), MR(Bool,4,2), MR(Bool,4,3), MR(Bool,4,4),
+        MR(Int,1,1), MR(Int,1,2), MR(Int,1,3), MR(Int,1,4),
+        MR(Int,2,1), MR(Int,2,2), MR(Int,2,3), MR(Int,2,4),
+        MR(Int,3,1), MR(Int,3,2), MR(Int,3,3), MR(Int,3,4),
+        MR(Int,4,1), MR(Int,4,2), MR(Int,4,3), MR(Int,4,4),
+        MR(Uint,1,1), MR(Uint,1,2), MR(Uint,1,3), MR(Uint,1,4),
+        MR(Uint,2,1), MR(Uint,2,2), MR(Uint,2,3), MR(Uint,2,4),
+        MR(Uint,3,1), MR(Uint,3,2), MR(Uint,3,3), MR(Uint,3,4),
+        MR(Uint,4,1), MR(Uint,4,2), MR(Uint,4,3), MR(Uint,4,4),
+#undef MR
+    };
+    count = sizeof(shapes) / sizeof(shapes[0]);
+    return shapes;
+}
 inline int MatrixRows(HLSLBaseType type) {
-    if (type == HLSLBaseType_Float2x2) return 2;
-    if (type == HLSLBaseType_Float2x3) return 2;
-    if (type == HLSLBaseType_Float2x4) return 2;
-    if (type == HLSLBaseType_Float3x2) return 3;
-    if (type == HLSLBaseType_Float3x3) return 3;
-    if (type == HLSLBaseType_Float3x4) return 3;
-    if (type == HLSLBaseType_Float4x2) return 4;
-    if (type == HLSLBaseType_Float4x3) return 4;
-    if (type == HLSLBaseType_Float4x4) return 4;
-    if (type == HLSLBaseType_Half2x2) return 2;
-    if (type == HLSLBaseType_Half2x3) return 2;
-    if (type == HLSLBaseType_Half2x4) return 2;
-    if (type == HLSLBaseType_Half3x2) return 3;
-    if (type == HLSLBaseType_Half3x3) return 3;
-    if (type == HLSLBaseType_Half3x4) return 3;
-    if (type == HLSLBaseType_Half4x2) return 4;
-    if (type == HLSLBaseType_Half4x3) return 4;
-    if (type == HLSLBaseType_Half4x4) return 4;
+    size_t count = 0; const auto* shapes = MatrixShapes(count);
+    for (size_t i = 0; i < count; ++i) if (shapes[i].type == type) return shapes[i].rows;
+    return 0;
+}
+inline int MatrixColumns(HLSLBaseType type) {
+    size_t count = 0; const auto* shapes = MatrixShapes(count);
+    for (size_t i = 0; i < count; ++i) if (shapes[i].type == type) return shapes[i].columns;
     return 0;
 }
 inline int NumericWidth(HLSLBaseType type) {
-    if (type == HLSLBaseType_Float2x2) return 2;
-    if (type == HLSLBaseType_Float2x3) return 3;
-    if (type == HLSLBaseType_Float2x4) return 4;
-    if (type == HLSLBaseType_Float3x2) return 2;
-    if (type == HLSLBaseType_Float3x3) return 3;
-    if (type == HLSLBaseType_Float3x4) return 4;
-    if (type == HLSLBaseType_Float4x2) return 2;
-    if (type == HLSLBaseType_Float4x3) return 3;
-    if (type == HLSLBaseType_Float4x4) return 4;
-    if (type == HLSLBaseType_Half2x2) return 2;
-    if (type == HLSLBaseType_Half2x3) return 3;
-    if (type == HLSLBaseType_Half2x4) return 4;
-    if (type == HLSLBaseType_Half3x2) return 2;
-    if (type == HLSLBaseType_Half3x3) return 3;
-    if (type == HLSLBaseType_Half3x4) return 4;
-    if (type == HLSLBaseType_Half4x2) return 2;
-    if (type == HLSLBaseType_Half4x3) return 3;
-    if (type == HLSLBaseType_Half4x4) return 4;
+    if (IsMatrixType(type)) return MatrixColumns(type);
     if (IsScalarType(type)) return 1;
     if (IsVectorType(type)) return int(type) - int(ScalarBaseType[type]) + 1;
     return 0;
 }
-
 inline HLSLBaseType NumericShape(HLSLBaseType scalar, int rows, int width) {
     if (!rows) return width >= 1 && width <= 4 ? HLSLBaseType(int(scalar) + width - 1) : HLSLBaseType_Unknown;
-    const HLSLBaseType types[] = {
-        HLSLBaseType_Float2x2,
-        HLSLBaseType_Float2x3,
-        HLSLBaseType_Float2x4,
-        HLSLBaseType_Float3x2,
-        HLSLBaseType_Float3x3,
-        HLSLBaseType_Float3x4,
-        HLSLBaseType_Float4x2,
-        HLSLBaseType_Float4x3,
-        HLSLBaseType_Float4x4,
-        HLSLBaseType_Half2x2,
-        HLSLBaseType_Half2x3,
-        HLSLBaseType_Half2x4,
-        HLSLBaseType_Half3x2,
-        HLSLBaseType_Half3x3,
-        HLSLBaseType_Half3x4,
-        HLSLBaseType_Half4x2,
-        HLSLBaseType_Half4x3,
-        HLSLBaseType_Half4x4,
-    };
-    for (auto type : types) if (ScalarBaseType[type] == scalar && MatrixRows(type) == rows && NumericWidth(type) == width) return type;
+    size_t count = 0; const auto* shapes = MatrixShapes(count);
+    for (size_t i = 0; i < count; ++i)
+        if (ScalarBaseType[shapes[i].type] == scalar && shapes[i].rows == rows && shapes[i].columns == width)
+            return shapes[i].type;
     return HLSLBaseType_Unknown;
+}
+inline bool IsCustomMatrixType(HLSLBaseType type) {
+    if (!IsMatrixType(type)) return false;
+    const auto scalar = ScalarBaseType[type];
+    return (scalar == HLSLBaseType_Bool || scalar == HLSLBaseType_Int || scalar == HLSLBaseType_Uint) &&
+        MatrixRows(type) > 1 && MatrixColumns(type) > 1;
 }
 inline HLSLBaseType CommonNumericType(HLSLBaseType lhs, HLSLBaseType rhs) {
     const int a = NumericWidth(lhs), b = NumericWidth(rhs);

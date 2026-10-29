@@ -8,6 +8,15 @@ bool GLSLGenerator::OutputLegacyIntrinsic(HLSLFunctionCall* expression) {
     const int rows = MatrixRows(base), width = NumericWidth(base);
     const std::string type = GetTypeName(first->type);
     const std::string resultType = GetTypeName(expression->expressionType);
+    if ((function == "tex2Doffset" || function == "tex3Doffset") && expression->function->numArguments == 3) {
+        auto* sampler = expression->argument;
+        auto* coordinate = sampler->nextExpression;
+        auto* offset = coordinate->nextExpression;
+        m_writer.Write("textureOffset("); OutputExpression(sampler); m_writer.Write(",");
+        OutputExpression(coordinate); m_writer.Write(",");
+        OutputExpression(offset, &first->nextArgument->nextArgument->type);
+        m_writer.Write(")"); return true;
+    }
     if (function == "tex2Dlod" && expression->function->numArguments == 3) {
         auto* sampler = expression->argument;
         auto* coordinate = sampler->nextExpression;
@@ -21,6 +30,42 @@ bool GLSLGenerator::OutputLegacyIntrinsic(HLSLFunctionCall* expression) {
         // parameter would destroy constness, so emit the original expression.
         OutputExpression(offset, &first->nextArgument->nextArgument->type);
         m_writer.Write("))"); return true;
+    }
+    if (function == "tex3Dlod" && expression->function->numArguments == 3) {
+        auto* sampler = expression->argument;
+        auto* coordinate = sampler->nextExpression;
+        auto* offset = coordinate->nextExpression;
+        auto* temporary = LocalTemporary(first->nextArgument->type);
+        m_writer.Write("(%s = ", temporary->name);
+        OutputExpression(coordinate, &temporary->expressionType);
+        m_writer.Write(", textureLodOffset("); OutputExpression(sampler);
+        m_writer.Write(", %s.xyz, %s.w, ", temporary->name, temporary->name);
+        // GLSL requires the offset to remain a constant expression.
+        OutputExpression(offset, &first->nextArgument->nextArgument->type);
+        m_writer.Write("))"); return true;
+    }
+    if ((function == "tex2Dbias" || function == "tex3Dbias") && expression->function->numArguments == 3) {
+        auto* sampler = expression->argument;
+        auto* coordinate = sampler->nextExpression;
+        auto* offset = coordinate->nextExpression;
+        auto* temporary = LocalTemporary(first->nextArgument->type);
+        m_writer.Write("(%s = ", temporary->name);
+        OutputExpression(coordinate, &temporary->expressionType);
+        m_writer.Write(", textureOffset("); OutputExpression(sampler);
+        if (function == "tex2Dbias") m_writer.Write(", %s.xy, ", temporary->name);
+        else m_writer.Write(", %s.xyz, ", temporary->name);
+        OutputExpression(offset, &first->nextArgument->nextArgument->type);
+        m_writer.Write(", %s.w))", temporary->name); return true;
+    }
+    if ((function == "tex2Dgrad" || function == "tex3Dgrad") && expression->function->numArguments == 5) {
+        m_writer.Write("textureGradOffset(");
+        auto* argument = expression->argument;
+        for (int index = 0; argument && index < 5; ++index, argument = argument->nextExpression) {
+            if (index) m_writer.Write(",");
+            if (index == 4) OutputExpression(argument, &first->nextArgument->nextArgument->nextArgument->nextArgument->type);
+            else OutputExpression(argument);
+        }
+        m_writer.Write(")"); return true;
     }
     std::string parameters;
     int count = 0;
@@ -37,13 +82,141 @@ bool GLSLGenerator::OutputLegacyIntrinsic(HLSLFunctionCall* expression) {
     else if (function == "tex3Dproj") body = "return textureProj(a,b);";
     else if (function == "tex2Dsize" || function == "tex3Dsize") body = "return textureSize(a,0);";
     else if (function == "tex2Dfetch") body = "return texelFetch(a,b.xy,b.z);";
-    else if (function == "all" || function == "any") {
+    else if (function == "tex3Dfetch") body = "return texelFetch(a,b.xyz,b.w);";
+    else if (function == "mul" && count == 2) {
+        const HLSLType& left = first->type;
+        const HLSLType& right = first->nextArgument->type;
+        const bool leftMatrix = IsMatrixType(left.baseType), rightMatrix = IsMatrixType(right.baseType);
+        const bool leftVector = IsVectorType(left.baseType), rightVector = IsVectorType(right.baseType);
+        const bool leftScalar = IsScalarType(left), rightScalar = IsScalarType(right);
+        if (!(leftMatrix || leftVector || leftScalar) || !(rightMatrix || rightVector || rightScalar))
+            return false;
+        auto rows = [](const HLSLType& value) { return IsMatrixType(value.baseType) ? MatrixRows(value.baseType) : 1; };
+        auto columns = [](const HLSLType& value) { return IsMatrixType(value.baseType) || IsVectorType(value.baseType) ? NumericWidth(value.baseType) : 1; };
+        auto component = [](const HLSLType& value, const std::string& name, int row, int column, bool rightVectorValue) {
+            if (IsScalarType(value)) return name;
+            if (IsMatrixType(value.baseType)) return MatrixComponent(value, name, row, column);
+            return name + "[" + std::to_string(rightVectorValue ? row : column) + "]";
+        };
+        if (leftVector && rightVector) {
+            body = "return (";
+            for (int i = 0; i < NumericWidth(left.baseType); ++i) {
+                if (i) body += "+";
+                body += "a[" + std::to_string(i) + "]*b[" + std::to_string(i) + "]";
+            }
+            body += ");";
+        } else if (leftScalar || rightScalar) {
+            const HLSLType& shaped = leftScalar ? right : left;
+            const int outRows = rows(shaped), outColumns = columns(shaped);
+            const bool customResult = IsCustomMatrixType(expression->expressionType.baseType);
+            if (customResult) body = resultType + " result;";
+            else if (IsMatrixType(expression->expressionType.baseType) && outRows > 1 && outColumns > 1)
+                body = "return " + resultType + "(";
+            else body = "return " + resultType + "(";
+            auto valueAt = [&](int r, int c) {
+                return leftScalar ? "a*" + component(right, "b", r, c, false)
+                    : component(left, "a", r, c, false) + "*b";
+            };
+            if (customResult) {
+                for (int r = 0; r < outRows; ++r) {
+                    if (r) body += ";";
+                    body += "result.r" + std::to_string(r) + "=" + GetTypeName(HLSLType(NumericShape(ScalarBaseType[expression->expressionType.baseType], 0, outColumns))) + "(";
+                    for (int c = 0; c < outColumns; ++c) { if (c) body += ","; body += valueAt(r, c); }
+                    body += ")";
+                }
+                body += ";return result;";
+            } else if (IsMatrixType(expression->expressionType.baseType) && outRows > 1 && outColumns > 1) {
+                for (int c = 0; c < outColumns; ++c) for (int r = 0; r < outRows; ++r) {
+                    if (c || r) body += ",";
+                    body += valueAt(r, c);
+                }
+                body += ");";
+            } else {
+                const int outCount = outRows * outColumns;
+                for (int i = 0; i < outCount; ++i) {
+                    if (i) body += ",";
+                    const int r = outRows == 1 ? 0 : i;
+                    const int c = outRows == 1 ? i : 0;
+                    body += valueAt(r, c);
+                }
+                body += ");";
+            }
+        } else {
+            const int leftRows = leftMatrix ? rows(left) : 1;
+            const int leftColumns = columns(left);
+            const int rightColumns = rightMatrix ? columns(right) : 1;
+            const bool customResult = IsCustomMatrixType(expression->expressionType.baseType);
+            const int outRows = leftRows, outColumns = rightColumns;
+            const std::string zero = GetTypeName(HLSLType(ScalarBaseType[expression->expressionType.baseType])) + "(0)";
+            auto sum = [&](int r, int c) {
+                std::string value = "(";
+                for (int k = 0; k < leftColumns; ++k) {
+                    if (k) value += "+";
+                    value += component(left, "a", r, k, false) + "*" + component(right, "b", k, c, true);
+                }
+                if (leftColumns == 0) value += zero;
+                return value + ")";
+            };
+            if (customResult) body = resultType + " result;";
+            else body = "return " + resultType + "(";
+            if (customResult) {
+                for (int r = 0; r < outRows; ++r) {
+                    body += "result.r" + std::to_string(r) + "=" + GetTypeName(HLSLType(NumericShape(ScalarBaseType[expression->expressionType.baseType], 0, outColumns))) + "(";
+                    for (int c = 0; c < outColumns; ++c) { if (c) body += ","; body += sum(r, c); }
+                    body += ");";
+                }
+                body += "return result;";
+            } else if (IsMatrixType(expression->expressionType.baseType) && outRows > 1 && outColumns > 1) {
+                for (int c = 0; c < outColumns; ++c) for (int r = 0; r < outRows; ++r) {
+                    if (c || r) body += ",";
+                    body += sum(r, c);
+                }
+                body += ");";
+            } else {
+                for (int i = 0; i < outRows * outColumns; ++i) {
+                    if (i) body += ",";
+                    body += sum(outRows == 1 ? 0 : i, outRows == 1 ? i : 0);
+                }
+                body += ");";
+            }
+        }
+    } else if (function == "transpose" && count == 1 && IsMatrixType(base)) {
+        const int sourceRows = MatrixRows(base), sourceColumns = NumericWidth(base);
+        const int resultRows = sourceColumns, resultColumns = sourceRows;
+        const bool customResult = IsCustomMatrixType(expression->expressionType.baseType);
+        if (customResult) body = resultType + " result;";
+        else if (resultRows > 1 && resultColumns > 1) body = "return " + resultType + "(";
+        else if (resultRows * resultColumns == 1) body = "return a;";
+        else body = "return " + resultType + "(";
+        if (customResult) {
+            for (int r = 0; r < resultRows; ++r) {
+                body += "result.r" + std::to_string(r) + "=" + GetTypeName(HLSLType(NumericShape(ScalarBaseType[expression->expressionType.baseType], 0, resultColumns))) + "(";
+                for (int c = 0; c < resultColumns; ++c) { if (c) body += ","; body += MatrixComponent(first->type, "a", c, r); }
+                body += ");";
+            }
+            body += "return result;";
+        } else if (resultRows > 1 && resultColumns > 1) {
+            for (int c = 0; c < resultColumns; ++c) for (int r = 0; r < resultRows; ++r) {
+                if (c || r) body += ",";
+                body += MatrixComponent(first->type, "a", c, r);
+            }
+            body += ");";
+        } else if (resultRows * resultColumns != 1) {
+            for (int i = 0; i < resultRows * resultColumns; ++i) {
+                if (i) body += ",";
+                body += MatrixComponent(first->type, "a", resultRows == 1 ? i : 0, resultRows == 1 ? 0 : i);
+            }
+            body += ");";
+        }
+    } else if (function == "all" || function == "any") {
         const bool all = function == "all";
         body = "return ";
         if (rows) {
-            for (int c = 0; c < width; ++c) {
-                if (c) body += all ? " && " : " || ";
-                body += function + "(notEqual(a[" + std::to_string(c) + "],vec" + std::to_string(rows) + "(0)))";
+            bool firstComponent = true;
+            for (int r = 0; r < rows; ++r) for (int c = 0; c < width; ++c) {
+                if (!firstComponent) body += all ? " && " : " || ";
+                firstComponent = false;
+                body += "bool(" + MatrixComponent(first->type, "a", r, c) + ")";
             }
         } else if (width > 1) body += function + "(bvec" + std::to_string(width) + "(a))";
         else body += "bool(a)";

@@ -6,7 +6,7 @@ static void AggregateValues(HLSLTree& tree, const HLSLType& type,
     DepthGuard depth;
     if (type.array) {
         const int count = AggregateArrayExtent(tree, type);
-        HLSLType element = type; element.array = false; element.arraySize = NULL;
+        HLSLType element = type; element.DropArrayDimension();
         for (int i = 0; i < count; ++i)
             AggregateValues(tree, element, value + "[" + std::to_string(i) + "]", out);
     } else if (type.baseType == HLSLBaseType_UserDefined) {
@@ -20,8 +20,8 @@ static void AggregateValues(HLSLTree& tree, const HLSLType& type,
         const size_t count = size_t(width * (rows ? rows : 1));
         if (out.size() + count > 4096) throw std::length_error("HLSL aggregate component limit exceeded");
         for (int r = 0; r < (rows ? rows : 1); ++r) for (int c = 0; c < width; ++c)
-            out.push_back(value + (rows ? "[" + std::to_string(c) + "][" + std::to_string(r) + "]" :
-                width > 1 ? "[" + std::to_string(c) + "]" : ""));
+            out.push_back(rows ? MatrixComponent(type, value, r, c) :
+                width > 1 ? value + "[" + std::to_string(c) + "]" : value);
     }
 }
 
@@ -33,7 +33,7 @@ static std::string AggregateValue(HLSLTree& tree, const HLSLType& type,
     if (type.array) {
         const int count = AggregateArrayExtent(tree, type);
         result += "[" + std::to_string(count) + "]";
-        HLSLType element = type; element.array = false; element.arraySize = NULL;
+        HLSLType element = type; element.DropArrayDimension();
         for (int i = 0; i < count; ++i) elements.push_back(AggregateValue(tree, element, values, index));
     } else if (type.baseType == HLSLBaseType_UserDefined) {
         auto* structure = tree.FindGlobalStruct(type.typeName);
@@ -46,7 +46,19 @@ static std::string AggregateValue(HLSLTree& tree, const HLSLType& type,
         const size_t count = size_t(width * (rows ? rows : 1));
         if (index + count > values.size()) throw std::invalid_argument("Incomplete HLSL aggregate value");
         // GLSL matrix constructors consume columns; the input sequence is rows.
-        if (rows) {
+        if (IsCustomMatrixType(type.baseType)) {
+            const auto scalar = ScalarBaseType[type.baseType];
+            const std::string rowType = GetTypeName(HLSLType(NumericShape(scalar, 0, width)));
+            for (int r = 0; r < rows; ++r) {
+                std::string row = rowType + "(";
+                for (int c = 0; c < width; ++c) {
+                    if (c) row += ",";
+                    row += GetTypeName(HLSLType(scalar)) + "(" + values[index + size_t(r * width + c)] + ")";
+                }
+                elements.push_back(row + ")");
+            }
+            index += count;
+        } else if (rows) {
             const std::string scalar = GetTypeName(HLSLType(ScalarBaseType[type.baseType]));
             for (int c = 0; c < width; ++c) for (int r = 0; r < rows; ++r)
                 elements.push_back(scalar + "(" + values[index + size_t(r * width + c)] + ")");
@@ -86,9 +98,16 @@ void GLSLGenerator::OutputAggregateConstructor(HLSLConstructorExpression* expres
 
 void GLSLGenerator::OutputAggregateConversion(HLSLExpression* expression, const HLSLType& type) {
     const auto& source = expression->expressionType;
-    if (source.baseType == type.baseType && source.array == type.array &&
+    bool sameArrayShape = source.arrayRank == type.arrayRank;
+    for (int i = 0; sameArrayShape && i < type.arrayRank; ++i) {
+        int a = 0, b = 0;
+        const bool sizedA = source.arraySizes[i] && m_tree->GetExpressionValue(source.arraySizes[i], a);
+        const bool sizedB = type.arraySizes[i] && m_tree->GetExpressionValue(type.arraySizes[i], b);
+        sameArrayShape = !sizedA || !sizedB || a == b;
+    }
+    if (source.baseType == type.baseType && sameArrayShape &&
         (source.baseType != HLSLBaseType_UserDefined || String_Equal(source.typeName, type.typeName)) &&
-        (!type.array || AggregateArrayExtent(*m_tree, source) == AggregateArrayExtent(*m_tree, type))) {
+        (!type.array || sameArrayShape)) {
         OutputExpression(expression); return;
     }
     std::vector<HLSLBaseType> from, to;

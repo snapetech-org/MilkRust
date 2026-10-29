@@ -59,6 +59,68 @@ const HLSLTypeDimension BaseTypeDimension[HLSLBaseType_Count] =
     HLSLTypeDimension_Vector2,  // HLSLBaseType_Uint2,
     HLSLTypeDimension_Vector3,  // HLSLBaseType_Uint3,
     HLSLTypeDimension_Vector4,  // HLSLBaseType_Uint4,
+    HLSLTypeDimension_Scalar, // HLSLBaseType_Float1x1
+    HLSLTypeDimension_Vector2, // HLSLBaseType_Float1x2
+    HLSLTypeDimension_Vector3, // HLSLBaseType_Float1x3
+    HLSLTypeDimension_Vector4, // HLSLBaseType_Float1x4
+    HLSLTypeDimension_Vector2, // HLSLBaseType_Float2x1
+    HLSLTypeDimension_Vector3, // HLSLBaseType_Float3x1
+    HLSLTypeDimension_Vector4, // HLSLBaseType_Float4x1
+    HLSLTypeDimension_Scalar, // HLSLBaseType_Half1x1
+    HLSLTypeDimension_Vector2, // HLSLBaseType_Half1x2
+    HLSLTypeDimension_Vector3, // HLSLBaseType_Half1x3
+    HLSLTypeDimension_Vector4, // HLSLBaseType_Half1x4
+    HLSLTypeDimension_Vector2, // HLSLBaseType_Half2x1
+    HLSLTypeDimension_Vector3, // HLSLBaseType_Half3x1
+    HLSLTypeDimension_Vector4, // HLSLBaseType_Half4x1
+    HLSLTypeDimension_Scalar, // HLSLBaseType_Bool1x1
+    HLSLTypeDimension_Vector2, // HLSLBaseType_Bool1x2
+    HLSLTypeDimension_Vector3, // HLSLBaseType_Bool1x3
+    HLSLTypeDimension_Vector4, // HLSLBaseType_Bool1x4
+    HLSLTypeDimension_Vector2, // HLSLBaseType_Bool2x1
+    HLSLTypeDimension_Matrix2x2, // HLSLBaseType_Bool2x2
+    HLSLTypeDimension_Matrix2x3, // HLSLBaseType_Bool2x3
+    HLSLTypeDimension_Matrix2x4, // HLSLBaseType_Bool2x4
+    HLSLTypeDimension_Vector3, // HLSLBaseType_Bool3x1
+    HLSLTypeDimension_Matrix3x2, // HLSLBaseType_Bool3x2
+    HLSLTypeDimension_Matrix3x3, // HLSLBaseType_Bool3x3
+    HLSLTypeDimension_Matrix3x4, // HLSLBaseType_Bool3x4
+    HLSLTypeDimension_Vector4, // HLSLBaseType_Bool4x1
+    HLSLTypeDimension_Matrix4x2, // HLSLBaseType_Bool4x2
+    HLSLTypeDimension_Matrix4x3, // HLSLBaseType_Bool4x3
+    HLSLTypeDimension_Matrix4x4, // HLSLBaseType_Bool4x4
+    HLSLTypeDimension_Scalar, // HLSLBaseType_Int1x1
+    HLSLTypeDimension_Vector2, // HLSLBaseType_Int1x2
+    HLSLTypeDimension_Vector3, // HLSLBaseType_Int1x3
+    HLSLTypeDimension_Vector4, // HLSLBaseType_Int1x4
+    HLSLTypeDimension_Vector2, // HLSLBaseType_Int2x1
+    HLSLTypeDimension_Matrix2x2, // HLSLBaseType_Int2x2
+    HLSLTypeDimension_Matrix2x3, // HLSLBaseType_Int2x3
+    HLSLTypeDimension_Matrix2x4, // HLSLBaseType_Int2x4
+    HLSLTypeDimension_Vector3, // HLSLBaseType_Int3x1
+    HLSLTypeDimension_Matrix3x2, // HLSLBaseType_Int3x2
+    HLSLTypeDimension_Matrix3x3, // HLSLBaseType_Int3x3
+    HLSLTypeDimension_Matrix3x4, // HLSLBaseType_Int3x4
+    HLSLTypeDimension_Vector4, // HLSLBaseType_Int4x1
+    HLSLTypeDimension_Matrix4x2, // HLSLBaseType_Int4x2
+    HLSLTypeDimension_Matrix4x3, // HLSLBaseType_Int4x3
+    HLSLTypeDimension_Matrix4x4, // HLSLBaseType_Int4x4
+    HLSLTypeDimension_Scalar, // HLSLBaseType_Uint1x1
+    HLSLTypeDimension_Vector2, // HLSLBaseType_Uint1x2
+    HLSLTypeDimension_Vector3, // HLSLBaseType_Uint1x3
+    HLSLTypeDimension_Vector4, // HLSLBaseType_Uint1x4
+    HLSLTypeDimension_Vector2, // HLSLBaseType_Uint2x1
+    HLSLTypeDimension_Matrix2x2, // HLSLBaseType_Uint2x2
+    HLSLTypeDimension_Matrix2x3, // HLSLBaseType_Uint2x3
+    HLSLTypeDimension_Matrix2x4, // HLSLBaseType_Uint2x4
+    HLSLTypeDimension_Vector3, // HLSLBaseType_Uint3x1
+    HLSLTypeDimension_Matrix3x2, // HLSLBaseType_Uint3x2
+    HLSLTypeDimension_Matrix3x3, // HLSLBaseType_Uint3x3
+    HLSLTypeDimension_Matrix3x4, // HLSLBaseType_Uint3x4
+    HLSLTypeDimension_Vector4, // HLSLBaseType_Uint4x1
+    HLSLTypeDimension_Matrix4x2, // HLSLBaseType_Uint4x2
+    HLSLTypeDimension_Matrix4x3, // HLSLBaseType_Uint4x3
+    HLSLTypeDimension_Matrix4x4, // HLSLBaseType_Uint4x4
     HLSLTypeDimension_None,     // HLSLBaseType_Texture,
     HLSLTypeDimension_None,     // HLSLBaseType_Sampler,           // @@ use type inference to determine sampler type.
     HLSLTypeDimension_None,     // HLSLBaseType_Sampler2D,
@@ -113,6 +175,68 @@ const HLSLBaseType ScalarBaseType[HLSLBaseType_Count] = {
     HLSLBaseType_Uint,          // HLSLBaseType_Uint2,
     HLSLBaseType_Uint,          // HLSLBaseType_Uint3,
     HLSLBaseType_Uint,          // HLSLBaseType_Uint4,
+    HLSLBaseType_Float, // HLSLBaseType_Float1x1
+    HLSLBaseType_Float, // HLSLBaseType_Float1x2
+    HLSLBaseType_Float, // HLSLBaseType_Float1x3
+    HLSLBaseType_Float, // HLSLBaseType_Float1x4
+    HLSLBaseType_Float, // HLSLBaseType_Float2x1
+    HLSLBaseType_Float, // HLSLBaseType_Float3x1
+    HLSLBaseType_Float, // HLSLBaseType_Float4x1
+    HLSLBaseType_Half, // HLSLBaseType_Half1x1
+    HLSLBaseType_Half, // HLSLBaseType_Half1x2
+    HLSLBaseType_Half, // HLSLBaseType_Half1x3
+    HLSLBaseType_Half, // HLSLBaseType_Half1x4
+    HLSLBaseType_Half, // HLSLBaseType_Half2x1
+    HLSLBaseType_Half, // HLSLBaseType_Half3x1
+    HLSLBaseType_Half, // HLSLBaseType_Half4x1
+    HLSLBaseType_Bool, // HLSLBaseType_Bool1x1
+    HLSLBaseType_Bool, // HLSLBaseType_Bool1x2
+    HLSLBaseType_Bool, // HLSLBaseType_Bool1x3
+    HLSLBaseType_Bool, // HLSLBaseType_Bool1x4
+    HLSLBaseType_Bool, // HLSLBaseType_Bool2x1
+    HLSLBaseType_Bool, // HLSLBaseType_Bool2x2
+    HLSLBaseType_Bool, // HLSLBaseType_Bool2x3
+    HLSLBaseType_Bool, // HLSLBaseType_Bool2x4
+    HLSLBaseType_Bool, // HLSLBaseType_Bool3x1
+    HLSLBaseType_Bool, // HLSLBaseType_Bool3x2
+    HLSLBaseType_Bool, // HLSLBaseType_Bool3x3
+    HLSLBaseType_Bool, // HLSLBaseType_Bool3x4
+    HLSLBaseType_Bool, // HLSLBaseType_Bool4x1
+    HLSLBaseType_Bool, // HLSLBaseType_Bool4x2
+    HLSLBaseType_Bool, // HLSLBaseType_Bool4x3
+    HLSLBaseType_Bool, // HLSLBaseType_Bool4x4
+    HLSLBaseType_Int, // HLSLBaseType_Int1x1
+    HLSLBaseType_Int, // HLSLBaseType_Int1x2
+    HLSLBaseType_Int, // HLSLBaseType_Int1x3
+    HLSLBaseType_Int, // HLSLBaseType_Int1x4
+    HLSLBaseType_Int, // HLSLBaseType_Int2x1
+    HLSLBaseType_Int, // HLSLBaseType_Int2x2
+    HLSLBaseType_Int, // HLSLBaseType_Int2x3
+    HLSLBaseType_Int, // HLSLBaseType_Int2x4
+    HLSLBaseType_Int, // HLSLBaseType_Int3x1
+    HLSLBaseType_Int, // HLSLBaseType_Int3x2
+    HLSLBaseType_Int, // HLSLBaseType_Int3x3
+    HLSLBaseType_Int, // HLSLBaseType_Int3x4
+    HLSLBaseType_Int, // HLSLBaseType_Int4x1
+    HLSLBaseType_Int, // HLSLBaseType_Int4x2
+    HLSLBaseType_Int, // HLSLBaseType_Int4x3
+    HLSLBaseType_Int, // HLSLBaseType_Int4x4
+    HLSLBaseType_Uint, // HLSLBaseType_Uint1x1
+    HLSLBaseType_Uint, // HLSLBaseType_Uint1x2
+    HLSLBaseType_Uint, // HLSLBaseType_Uint1x3
+    HLSLBaseType_Uint, // HLSLBaseType_Uint1x4
+    HLSLBaseType_Uint, // HLSLBaseType_Uint2x1
+    HLSLBaseType_Uint, // HLSLBaseType_Uint2x2
+    HLSLBaseType_Uint, // HLSLBaseType_Uint2x3
+    HLSLBaseType_Uint, // HLSLBaseType_Uint2x4
+    HLSLBaseType_Uint, // HLSLBaseType_Uint3x1
+    HLSLBaseType_Uint, // HLSLBaseType_Uint3x2
+    HLSLBaseType_Uint, // HLSLBaseType_Uint3x3
+    HLSLBaseType_Uint, // HLSLBaseType_Uint3x4
+    HLSLBaseType_Uint, // HLSLBaseType_Uint4x1
+    HLSLBaseType_Uint, // HLSLBaseType_Uint4x2
+    HLSLBaseType_Uint, // HLSLBaseType_Uint4x3
+    HLSLBaseType_Uint, // HLSLBaseType_Uint4x4
     HLSLBaseType_Unknown,       // HLSLBaseType_Texture,
     HLSLBaseType_Unknown,       // HLSLBaseType_Sampler,           // @@ use type inference to determine sampler type.
     HLSLBaseType_Unknown,       // HLSLBaseType_Sampler2D,

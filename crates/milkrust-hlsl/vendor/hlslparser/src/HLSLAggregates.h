@@ -8,7 +8,7 @@
 namespace M4 {
 inline int AggregateArrayExtent(HLSLTree& tree, const HLSLType& type) {
     int count = 0;
-    if (!type.arraySize || !tree.GetExpressionValue(type.arraySize, count) || count < 1 || count > 4096)
+    if (!type.arrayRank || !type.arraySizes[0] || !tree.GetExpressionValue(type.arraySizes[0], count) || count < 1 || count > 4096)
         throw std::length_error("HLSL aggregate array bound must be between 1 and 4096");
     return count;
 }
@@ -21,7 +21,7 @@ inline void AggregateScalarTypes(HLSLTree& tree, const HLSLType& type,
     DepthGuard depth;
     if (type.array) {
         const int count = AggregateArrayExtent(tree, type);
-        HLSLType element = type; element.array = false; element.arraySize = NULL;
+        HLSLType element = type; element.DropArrayDimension();
         for (int i = 0; i < count; ++i) AggregateScalarTypes(tree, element, out);
     } else if (type.baseType == HLSLBaseType_UserDefined) {
         auto* structure = tree.FindGlobalStruct(type.typeName);

@@ -77,6 +77,20 @@ static int SwizzleIndex(char c) {
     return p ? int(p - alphabet) : -1;
 }
 
+static std::string MatrixComponent(const HLSLType& type, const std::string& value, int row, int column) {
+    if (IsMatrixType(type.baseType)) {
+        const int rows = MatrixRows(type.baseType), columns = NumericWidth(type.baseType);
+        if (IsCustomMatrixType(type.baseType))
+            return value + ".r" + std::to_string(row) + "[" + std::to_string(column) + "]";
+        if (rows > 1 && columns > 1)
+            return value + "[" + std::to_string(column) + "][" + std::to_string(row) + "]";
+        if (rows == 1 && columns == 1) return value;
+        return value + "[" + std::to_string(rows == 1 ? column : row) + "]";
+    }
+    if (IsScalarType(type)) return value;
+    return value + "[" + std::to_string(column) + "]";
+}
+
 static bool SelectMatrix(HLSLExpression* expression, MatrixSelection& out) {
     DepthGuard depth;
     if (expression->nodeType == HLSLNodeType_MemberAccess) {
@@ -152,30 +166,58 @@ bool GLSLGenerator::OutputMatrixSelection(HLSLExpression* expression, HLSLExpres
     const bool write = operation != NULL;
     if (write && selection.index && selection.scalarSwizzleWidth > 1)
         throw std::invalid_argument("Matrix assignment repeats a destination component");
-    const std::string matrixType = GetTypeName(selection.matrix->expressionType);
+    const HLSLType& matrixHlslType = selection.matrix->expressionType;
+    const int rows = MatrixRows(matrixHlslType.baseType), columns = NumericWidth(matrixHlslType.baseType);
+    const bool custom = IsCustomMatrixType(matrixHlslType.baseType);
+    const std::string matrixType = GetTypeName(matrixHlslType);
     const std::string type = GetTypeName(expression->expressionType);
     std::string parameters = (write ? "inout " : "") + matrixType + " m";
     if (selection.row) parameters += ", int i";
     if (selection.index) parameters += ", int j";
     if (value) parameters += ", " + type + " v";
     std::vector<std::string> components;
-    std::string read = count == 1 ? "" : "vec" + std::to_string(count) + "(";
+    std::vector<std::string> targets;
+    const std::string rowVectorType = selection.row && selection.index
+        ? GetTypeName(HLSLType(NumericShape(ScalarBaseType[matrixHlslType.baseType], 0, columns))) : type;
+    std::string read = count == 1 ? "" : rowVectorType + "(";
     for (int n = 0; n < count; ++n) {
         const auto item = selection.components[n];
-        const std::string component = "m[" + std::to_string(item.second) + "][" + (item.first < 0 ? "i" : std::to_string(item.first)) + "]";
-        if (write && !selection.index && std::find(components.begin(), components.end(), component) != components.end())
+        std::string component;
+        std::string target;
+        if (item.first >= 0) {
+            component = MatrixComponent(matrixHlslType, "m", item.first, item.second);
+            target = component;
+        } else if (!selection.row || rows == 1) {
+            component = MatrixComponent(matrixHlslType, "m", 0, item.second);
+            target = rows == 1 && !selection.index ? "m[" + std::to_string(item.second) + "]" : MatrixComponent(matrixHlslType, "m", 0, item.second);
+        } else if (custom) {
+            component = "(";
+            for (int r = rows - 1; r >= 0; --r) {
+                if (r != rows - 1) component += ":";
+                component += "i==" + std::to_string(r) + "?m.r" + std::to_string(r) + "[" + std::to_string(item.second) + "]";
+            }
+            component += ":" + GetTypeName(HLSLType(ScalarBaseType[matrixHlslType.baseType])) + "(0))";
+            target = "dynamic-row:" + std::to_string(item.second);
+        } else if (columns == 1) {
+            component = "m[i]";
+            target = "m[i]";
+        } else {
+            component = "m[" + std::to_string(item.second) + "][i]";
+            target = component;
+        }
+        if (write && !selection.index && std::find(targets.begin(), targets.end(), target) != targets.end())
             throw std::invalid_argument("Matrix assignment repeats a destination component");
-        components.push_back(component);
+        components.push_back(component); targets.push_back(target);
         if (n) read += ",";
         read += component;
     }
     if (count > 1) read += ")";
-    if (selection.index) {
+    if (selection.index && !(rows > 1 && columns == 1)) {
         read = "(" + read + ")[j]";
         if (selection.scalarSwizzleWidth > 1) read = type + "(" + read + ")";
     }
     std::string body;
-    if (selection.row) body += "if (i < 0 || i >= " + std::to_string(MatrixRows(selection.matrix->expressionType.baseType)) + ") return " + type + "(0); ";
+    if (selection.row) body += "if (i < 0 || i >= " + std::to_string(rows) + ") return " + type + "(0); ";
     if (selection.index) body += "if (j < 0 || j >= " + std::to_string(count) + ") return " + type + "(0); ";
     if (!write) body += "return " + read + ";";
     else {
@@ -185,8 +227,21 @@ bool GLSLGenerator::OutputMatrixSelection(HLSLExpression* expression, HLSLExpres
         else if (strcmp(operation, "%") == 0) body += "oldValue - v * trunc(oldValue / v); ";
         else body += "oldValue " + std::string(operation) + " " + (value ? "v" : type + "(1)") + "; ";
         for (int n = 0; n < count; ++n) {
+            const std::string rhs = (selection.index || count == 1) ? "nextValue" : "nextValue[" + std::to_string(n) + "]";
             if (selection.index) body += "if (j == " + std::to_string(n) + ") ";
-            body += components[n] + " = nextValue" + (selection.index || count == 1 ? "" : "[" + std::to_string(n) + "]") + "; ";
+            if (selection.row && rows == 1) {
+                body += "m[" + std::to_string(selection.components[n].second) + "] = " + rhs + "; ";
+            } else if (selection.row && custom) {
+                body += "if (i == 0) m.r0[" + std::to_string(selection.components[n].second) + "] = " + rhs + "; ";
+                for (int r = 1; r < rows; ++r)
+                    body += "else if (i == " + std::to_string(r) + ") m.r" + std::to_string(r) + "[" + std::to_string(selection.components[n].second) + "] = " + rhs + "; ";
+            } else if (selection.row && columns == 1) {
+                body += "m[i] = " + rhs + "; ";
+            } else if (selection.row) {
+                body += "m[" + std::to_string(selection.components[n].second) + "][i] = " + rhs + "; ";
+            } else {
+                body += components[n] + " = " + rhs + "; ";
+            }
         }
         body += std::string("return ") + (postfix ? "oldValue;" : "nextValue;");
     }
@@ -302,36 +357,109 @@ bool GLSLGenerator::OutputCallWithCopyOut(HLSLFunctionCall* expression) {
 }
 
 void GLSLGenerator::OutputConversion(HLSLExpression* expression, const HLSLType& type) {
-    const auto source = expression->expressionType.baseType;
+    const HLSLType sourceType = expression->expressionType;
+    const auto source = sourceType.baseType;
     const auto target = type.baseType;
-    if (expression->expressionType.array || type.array || source == HLSLBaseType_UserDefined || target == HLSLBaseType_UserDefined) {
+    if (sourceType.array || type.array || source == HLSLBaseType_UserDefined || target == HLSLBaseType_UserDefined) {
         OutputAggregateConversion(expression, type); return;
     }
     if (IsMatrixType(target) && IsScalarType(source)) {
-        const std::string matrix = GetTypeName(type);
-        std::string body = "return " + matrix + "(";
-        for (int c = 0; c < NumericWidth(target); ++c) {
-            if (c) body += ",";
-            body += "vec" + std::to_string(MatrixRows(target)) + "(s)";
+        const std::string targetName = GetTypeName(type);
+        const auto scalar = ScalarBaseType[target];
+        const int rows = MatrixRows(target), columns = NumericWidth(target);
+        std::string body = "return " + targetName + "(";
+        if (IsCustomMatrixType(target)) {
+            const std::string rowType = GetTypeName(HLSLType(NumericShape(scalar, 0, columns)));
+            for (int r = 0; r < rows; ++r) {
+                if (r) body += ",";
+                body += rowType + "(";
+                for (int c = 0; c < columns; ++c) {
+                    if (c) body += ",";
+                    body += GetTypeName(HLSLType(scalar)) + "(s)";
+                }
+                body += ")";
+            }
+        } else {
+            for (int i = 0; i < rows * columns; ++i) {
+                if (i) body += ",";
+                body += GetTypeName(HLSLType(scalar)) + "(s)";
+            }
         }
         body += ");";
-        const auto name = NumericHelper("splat:" + matrix, matrix, "float s", body);
-        m_writer.Write("%s(", name.c_str()); OutputExpression(expression, &kFloatType); m_writer.Write(")");
+        const std::string scalarName = GetTypeName(HLSLType(source));
+        const std::string helper = NumericHelper("splat:" + targetName + scalarName,
+            targetName, scalarName + " s", body);
+        m_writer.Write("%s(", helper.c_str()); OutputExpression(expression); m_writer.Write(")");
+        return;
+    }
+    if (IsMatrixType(source)) {
+        const int sourceRows = MatrixRows(source), sourceColumns = NumericWidth(source);
+        const int sourceCount = sourceRows * sourceColumns;
+        const std::string sourceName = GetTypeName(sourceType);
+        const std::string targetName = GetTypeName(type);
+        const bool targetMatrix = IsMatrixType(target);
+        const bool targetVector = IsVectorType(target);
+        const bool targetScalar = IsScalarType(target);
+        if (!targetMatrix && !targetVector && !targetScalar)
+            throw std::invalid_argument("Unsupported HLSL matrix conversion target");
+        const int targetRows = targetMatrix ? MatrixRows(target) : 1;
+        const int targetColumns = targetMatrix ? NumericWidth(target) : targetVector ? NumericWidth(target) : 1;
+        if (targetRows * targetColumns > sourceCount)
+            throw std::invalid_argument("HLSL matrix conversion cannot expand its source");
+        const HLSLBaseType targetScalarType = ScalarBaseType[target];
+        std::string body;
+        if (IsCustomMatrixType(target)) {
+            const std::string rowType = GetTypeName(HLSLType(NumericShape(targetScalarType, 0, targetColumns)));
+            body = "return " + targetName + "(";
+            for (int r = 0; r < targetRows; ++r) {
+                if (r) body += ",";
+                body += rowType + "(";
+                for (int c = 0; c < targetColumns; ++c) {
+                    if (c) body += ",";
+                    const int linear = r * targetColumns + c;
+                    const std::string value = MatrixComponent(sourceType, "m", linear / sourceColumns, linear % sourceColumns);
+                    body += GetTypeName(HLSLType(targetScalarType)) + "(" + value + ")";
+                }
+                body += ")";
+            }
+            body += ");";
+        } else if (targetMatrix && targetRows > 1 && targetColumns > 1) {
+            body = "return " + targetName + "(";
+            for (int c = 0; c < targetColumns; ++c) for (int r = 0; r < targetRows; ++r) {
+                if (c || r) body += ",";
+                const int linear = r * targetColumns + c;
+                const std::string value = MatrixComponent(sourceType, "m", linear / sourceColumns, linear % sourceColumns);
+                body += GetTypeName(HLSLType(targetScalarType)) + "(" + value + ")";
+            }
+            body += ");";
+        } else if (targetMatrix) {
+            body = "return " + targetName + "(";
+            for (int i = 0; i < targetRows * targetColumns; ++i) {
+                if (i) body += ",";
+                const std::string value = MatrixComponent(sourceType, "m", i / sourceColumns, i % sourceColumns);
+                body += GetTypeName(HLSLType(targetScalarType)) + "(" + value + ")";
+            }
+            body += ");";
+        } else if (targetScalar) {
+            body = "return " + targetName + "(" + GetTypeName(HLSLType(targetScalarType)) + "(" +
+                MatrixComponent(sourceType, "m", 0, 0) + "));";
+        } else {
+            body = "return " + targetName + "(";
+            for (int c = 0; c < targetColumns; ++c) {
+                if (c) body += ",";
+                const int linear = c;
+                const std::string value = MatrixComponent(sourceType, "m", linear / sourceColumns, linear % sourceColumns);
+                body += GetTypeName(HLSLType(targetScalarType)) + "(" + value + ")";
+            }
+            body += ");";
+        }
+        const std::string helper = NumericHelper("matrix-convert:" + sourceName + ":" + targetName + body,
+            targetName, sourceName + " m", body);
+        m_writer.Write("%s(", helper.c_str()); OutputExpression(expression); m_writer.Write(")");
         return;
     }
     m_writer.Write("%s(", GetTypeName(type));
-    if (IsScalarType(target) && (IsVectorType(source) || IsMatrixType(source))) {
-        m_writer.Write("("); OutputExpression(expression); m_writer.Write(IsMatrixType(source) ? ")[0][0]" : ").x");
-    } else if (IsVectorType(target) && IsMatrixType(source)) {
-        const std::string matrix = GetTypeName(expression->expressionType);
-        const int count = NumericWidth(target);
-        if (count > NumericWidth(source)) throw std::invalid_argument("Invalid matrix to vector truncation");
-        std::string body = "return " + std::string(GetTypeName(type)) + "(";
-        for (int c = 0; c < count; ++c) { if (c) body += ","; body += "m[" + std::to_string(c) + "][0]"; }
-        body += ");";
-        const auto name = NumericHelper("rowcast:" + matrix + GetTypeName(type), GetTypeName(type), matrix + " m", body);
-        m_writer.Write("%s(", name.c_str()); OutputExpression(expression); m_writer.Write(")");
-    } else OutputExpression(expression);
+    OutputExpression(expression);
     m_writer.Write(")");
 }
 
@@ -351,16 +479,27 @@ void GLSLGenerator::OutputMatrixConstructor(HLSLConstructorExpression* expressio
         parameters += std::string(GetTypeName(a->expressionType)) + " " + name;
         const int rows = MatrixRows(a->expressionType.baseType), width = NumericWidth(a->expressionType.baseType);
         if (!width || a->expressionType.array) throw std::invalid_argument("Matrix constructor requires numeric arguments");
-        if (rows) for (int r = 0; r < rows; ++r) for (int c = 0; c < width; ++c) values.push_back(name + "[" + std::to_string(c) + "][" + std::to_string(r) + "]");
+        if (rows) for (int r = 0; r < rows; ++r) for (int c = 0; c < width; ++c) values.push_back(MatrixComponent(a->expressionType, name, r, c));
         else for (int c = 0; c < width; ++c) values.push_back(name + (width == 1 ? "" : "[" + std::to_string(c) + "]"));
     }
     const int rows = MatrixRows(matrix), width = NumericWidth(matrix);
     if (int(values.size()) != rows * width) throw std::invalid_argument("Incorrect matrix constructor component count");
     const std::string type = GetTypeName(expression->type);
+    const HLSLBaseType scalar = ScalarBaseType[matrix];
     std::string body = "return " + type + "(";
-    for (int c = 0; c < width; ++c) for (int r = 0; r < rows; ++r) {
-        if (c || r) body += ",";
-        body += "float(" + values[r * width + c] + ")";
+    if (IsCustomMatrixType(matrix)) {
+        const std::string rowType = GetTypeName(HLSLType(NumericShape(scalar, 0, width)));
+        for (int r = 0; r < rows; ++r) {
+            if (r) body += ",";
+            body += rowType + "(";
+            for (int c = 0; c < width; ++c) { if (c) body += ","; body += GetTypeName(HLSLType(scalar)) + "(" + values[r * width + c] + ")"; }
+            body += ")";
+        }
+    } else {
+        for (int c = 0; c < width; ++c) for (int r = 0; r < rows; ++r) {
+            if (c || r) body += ",";
+            body += GetTypeName(HLSLType(scalar)) + "(" + values[r * width + c] + ")";
+        }
     }
     body += ");";
     const auto name = NumericHelper("ctor:" + type + parameters, type, parameters, body);

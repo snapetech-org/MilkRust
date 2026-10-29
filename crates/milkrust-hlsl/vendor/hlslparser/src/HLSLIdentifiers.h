@@ -50,6 +50,7 @@ public:
         if (found != names.end()) return found->second;
         if (!reserved.count(original) && std::strncmp(original, "gl_", 3) != 0 &&
             std::strncmp(original, "webgl_", 6) != 0 && std::strncmp(original, "_webgl_", 7) != 0 &&
+            std::strncmp(original, "milkrust_matrix_", 16) != 0 &&
             !std::strstr(original, "__")) return original;
         if (names.size() >= 8192) throw std::length_error("HLSL renamed identifier limit exceeded");
         std::string replacement;
@@ -64,7 +65,8 @@ public:
     void VisitType(HLSLType& type) override {
         DepthGuard depth;
         if (type.baseType == HLSLBaseType_UserDefined) type.typeName = Name(type.typeName);
-        if (type.arraySize) VisitExpression(type.arraySize);
+        for (int i = 0; i < type.arrayRank; ++i)
+            if (type.arraySizes[i]) VisitExpression(type.arraySizes[i]);
     }
     void VisitDeclaration(HLSLDeclaration* node) override {
         node->name = Name(node->name); HLSLTreeVisitor::VisitDeclaration(node);

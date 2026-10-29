@@ -11,7 +11,7 @@ GPU capture or device run was performed for this source-only continuation.
   shape/wave/sprite keys, bounded input and explicit read/encoding/parse failures.
   The corpus denominator retains unreadable and unsupported files.
 - Saved sprites have bounded independent equations/lifetimes, relative texture
-  dependencies, transforms, eleven blend modes, burn/display layers and keyed
+  dependencies, transforms, the five classic MilkDrop blend modes, burn/display layers and keyed
   texels before linear filtering. WebGL retains frames during image admission.
   See [sprite semantics and reference limits](docs/EMBEDDED_SPRITES.md).
 - Classic display controls and full feedback-coordinate transforms reach both
@@ -57,9 +57,9 @@ GPU capture or device run was performed for this source-only continuation.
   filtering/wrapping; q registers, frame uniforms, texture sizes and random/roam
   vectors. Missing resources and compiler/driver errors do not become a placeholder.
 - A bounded `.milk2` wrapper parser, round-trip metadata preservation, two
-  independent states and deterministic masks for all documented pattern names.
-  [Format and reference-source limits](docs/MILK2_FORMAT.md) explain what those
-  independently authored masks do and do not establish.
+  independent states, all 30 saved-pattern formulas, and the documented sprite
+  field/runtime paths for native and WebGL. Formula provenance and the remaining
+  pixel-qualification boundary are in [the format notes](docs/MILK2_FORMAT.md).
 - Deterministic archives with integrity indexes and per-file provenance/notices;
   a signed catalog publisher, quorum/sequence/expiry/revocation handling,
   qualification gates, protected-environment signing configuration and public
@@ -90,21 +90,22 @@ GPU capture or device run was performed for this source-only continuation.
 - First compiler/link/build checks, native/WebGL driver execution, corpus captures
   and reference-image comparisons. Source acceptance or a nonempty frame is not
   visual conformance. None of the new platform/preset cells is qualified.
-- Exact MilkDrop HLSL environment and noise/blur/reference semantics, remaining
-  legacy emitter gaps and shader-model coverage. Known source limits include
-  integer/Boolean and one-row/one-column matrices, arrays of arrays,
-  resource-bearing structs and the separate WGSL translator.
-  Modern DirectX resources are
-  outside the legacy pixel-shader profile; the separate WGSL path remains limited.
-- Reference-equivalent `.milk2` masks and remaining sprite-field/layer semantics. The
-  available upstream source snapshot does not implement the saved wrapper; the
-  independent masks are not a port of its unavailable saved-pattern renderer.
+- Reference captures for MilkDrop shader resources and `.milk2` compositing,
+  R8 mask rasterization, five classic sprite blend modes/filtering and layer ordering. The typed HLSL
+  profile now lowers common `Texture2D`/`Texture3D` sampling methods and direct
+  resource parameters/fields, including the static offset overloads supported
+  by GLSL ES 3.00. It still rejects non-2D/3D resources, non-RGBA element types,
+  resource arrays or arrays of arrays, initialized/nested resource structs,
+  resource-bearing struct parameters, custom sampler-state definitions,
+  comparison/gather methods and mip-level `GetDimensions`. The compiler remains
+  a bounded pixel-shader profile, not all HLSL shader models. The separate WGSL
+  path remains limited.
 - Complete format/EEL/texture behavior for every corpus file, including other legacy
   encodings, other executable extensions and unsupported formats. UTF-8, BOM-marked UTF-16
   and Windows-1252 now have bounded decoders; preserve every remaining exception.
-- Compiler/driver process/device hang containment, browser-process OOM isolation
-  for native codec internals, recovery qualification, long-run resource/performance
-  and accessibility evidence. Worker termination only bounds JS-side decoder
+- OS-level compiler/driver process/device hang containment, browser-process OOM
+  isolation for native codec internals, recovery qualification, long-run
+  resource/performance and accessibility evidence. Worker termination only bounds JS-side decoder
   waiting; it cannot sandbox browser-process memory failure or a wedged GPU driver.
 - Qualified broader archives, rights review for historical collections, production
   key custody, committed public roots, signed publication and installed-app checks.

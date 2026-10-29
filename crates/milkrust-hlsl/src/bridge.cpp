@@ -15,9 +15,13 @@ public:
     void VisitType(M4::HLSLType& type) override {
         M4::CheckBudget();
         if (type.array) {
-            int count = 0;
-            if (!type.arraySize || !tree.GetExpressionValue(type.arraySize, count) || count < 1 || count > 4096)
-                throw std::length_error("HLSL array must have a constant bound between 1 and 4096");
+            const int rank = type.arrayRank > 0 ? type.arrayRank : 1;
+            for (int dimension = 0; dimension < rank; ++dimension) {
+                int count = 0;
+                M4::HLSLExpression* bound = type.arrayRank > 0 ? type.arraySizes[dimension] : type.arraySize;
+                if (!bound || !tree.GetExpressionValue(bound, count) || count < 1 || count > 4096)
+                    throw std::length_error("HLSL array dimensions must have constant bounds between 1 and 4096");
+            }
         }
     }
 };

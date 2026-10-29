@@ -115,10 +115,10 @@ try {
       const background = [0.1,0.2,0.3], sourceColor = [64/255,128/255,192/255];
       const expected = (mode) => sourceColor.map((s,i) => {
         const d = background[i];
-        return Math.min(1, Math.max(0, [s,s,d+s,s*s+d*(1-s),s,d*s,d*(1-s),1-s,0,d*Math.min(1,0.5+s),d+2*s][mode]))*255;
+        return Math.min(1, Math.max(0, [s,s,d+s,s*s+d*(1-s),s][mode]))*255;
       });
-      for (let mode=0; mode<=10; mode++) {
-        const sprite = `\n[SPRITE0_BEGIN]\nSpriteName=art.tga\nSpriteBlend=${mode}\nSpriteBurn=0\nSpriteSX=-0.75\nSpriteSY=-0.75\n[SPRITE0_END]\n`;
+      for (let mode=0; mode<=4; mode++) {
+        const sprite = `\n[SPRITE1_BEGIN]\nSpriteName=art.tga\nSpriteBlend=${mode}\nSpriteBurn=0\nSpriteSX=-0.75\nSpriteSY=-0.75\n[SPRITE1_END]\n`;
         engine.loadPresetText(preset('shader_body { ret=float3(0.1,0.2,0.3); }')+sprite, `sprite-${mode}.milk`, JSON.stringify({'art.tga':spriteTexture}));
         for(let frame=0;frame<3;frame++) engine.render(frame/30,0,0,0,'','',0,0.5,0.5,0,0);
         if(JSON.parse(engine.renderStatusJson()).state!=='preview') throw new Error(`Sprite ${mode} failed`);
@@ -145,11 +145,14 @@ try {
         const texel = isKey ? [0,0,0] : sourceColor;
         const textureAlpha = isKey ? 0 : alpha/255;
         const wanted = texel.map((v,i)=> {
-          const src=v*packed[i], premul=v*packedPremultiplied[i], dst=background[i];
-          const blend=mode===4 ? textureAlpha*packedAlpha : packedAlpha;
-          return Math.min(1,Math.max(0,[src*blend+dst*(1-blend),premul,dst+premul,v*v+dst*(1-v),src*blend+dst*(1-blend)][mode]))*255;
+          const dst=background[i];
+          const diffuse=mode===1||mode===2?packedPremultiplied[i]:mode===3?1:packed[i];
+          const stage=mode===3?v:v*diffuse;
+          const blend=mode===0?packedAlpha:mode===4?textureAlpha*packedAlpha:1;
+          const result=mode===1?stage:mode===2?dst+stage:mode===3?stage*stage+dst*(1-stage):stage*blend+dst*(1-blend);
+          return Math.min(1,Math.max(0,result))*255;
         });
-        const records = `\n[SPRITE0_BEGIN]\nSpriteName=rgba.tga\nSpriteBlend=${mode}\nSpriteBurn=0\nSpriteColorKey=${key}\nSpriteR=${tint[0]}\nSpriteG=${tint[1]}\nSpriteB=${tint[2]}\nSpriteAlpha=${opacity}\n[SPRITE0_END]\n`;
+        const records = `\n[SPRITE1_BEGIN]\nSpriteName=rgba.tga\nSpriteBlend=${mode}\nSpriteBurn=0\nSpriteColorKey=${key}\nSpriteR=${tint[0]}\nSpriteG=${tint[1]}\nSpriteB=${tint[2]}\nSpriteAlpha=${opacity}\n[SPRITE1_END]\n`;
         engine.loadPresetText(preset('shader_body { ret=float3(0.1,0.2,0.3); }')+records, 'sprite-alpha.milk', JSON.stringify({'rgba.tga':rgbaSprite([64,128,192,alpha])}));
         for(let frame=0;frame<3;frame++) engine.render(frame/30,0,0,0,'','',0,0.5,0.5,0,0);
         if(JSON.parse(engine.renderStatusJson()).state!=='preview') throw new Error('Sprite alpha control failed');
@@ -158,7 +161,7 @@ try {
         if(wanted.some((v,i)=>Math.abs(v-pixel[i])>3)) throw new Error(`Sprite alpha mode=${mode} alpha=${alpha} keyed=${keyed}: ${pixel}`);
         spriteAlphaRows.push({mode,alpha,keyed,center:Array.from(pixel),status:'pass'});
       }
-      const once = '\n[SPRITE0_BEGIN]\nSpriteName=art.tga\nSpriteBurn=0\ncode_1=done=1;\n[SPRITE0_END]\n';
+      const once = '\n[SPRITE1_BEGIN]\nSpriteName=art.tga\nSpriteBurn=0\ncode_1=done=1;\n[SPRITE1_END]\n';
       engine.loadPresetText(preset('shader_body { ret=0; }')+once, 'one-frame-sprite.milk', JSON.stringify({'art.tga':spriteTexture}));
       engine.render(0,0,0,0,'','',0,0.5,0.5,0,0); // texture admission holds this frame
       engine.render(1/30,0,0,0,'','',0,0.5,0.5,0,0);
@@ -197,7 +200,7 @@ try {
   }, { cases, invalid });
   assert.equal(report.rows.length, cases.length + 1);
   assert.equal(report.spriteRows.length, 11);
-  assert.equal(report.spriteAlphaRows.length, 30);
+  assert.equal(report.spriteAlphaRows.length, 66);
   if (process.env.RUNNER_TEMP) await writeFile(resolve(process.env.RUNNER_TEMP, 'milkrust-hlsl-browser.json'), JSON.stringify(report, null, 2) + '\n');
   console.log(JSON.stringify(report));
 } finally {

@@ -37,7 +37,7 @@ community-preset compatibility result.
 Source is bounded to 128 KiB at import, 256 KiB after preprocessing; tokens,
 macro expansions, conditional depth, compiler recursion, cumulative allocation,
 operations and elapsed compilation time are bounded. Array declarations require
-constant bounds of 1–4096 elements; integer overflow and division by zero in
+constant one-dimensional bounds of 1–4096 elements; integer overflow and division by zero in
 constant evaluation return errors across the ABI. Diagnostics are capped at
 8 KiB and compiler output at 1 MiB (renderer input remains 256 KiB). A bounded
 per-thread cache avoids repeat native compilation. GPU loop execution shares a
@@ -178,10 +178,17 @@ The typed parser and both renderer compiler builds now share numeric shape
 rules. Vector comparisons truncate to the common width and convert component
 types; vector logical operations and integer/unsigned/Boolean conditionals use
 component selection. `~` is bitwise complement. Matrix constructors consume
-HLSL row order, scalar-to-matrix conversion fills every component, `*`/`*=` are
-componentwise, and `mul(vector, vector)` is a dot product. All float/half matrix shapes from 2×2 through 4×4 have
-typed constructors, indexing, transpose and dimension-compatible `mul` overloads.
-Rectangular row and column bounds are distinct.
+HLSL row order, scalar-to-matrix conversion fills every component, and `*`/`*=`
+are componentwise. Float/half matrices support every 1×1 through 4×4 shape;
+integer matrices support dimension-compatible `mul` and `transpose`; Boolean
+matrices support `transpose`; and Boolean, signed, and unsigned matrix values
+use typed row storage for componentwise operators. One-row and one-column
+matrices preserve their HLSL shape while lowering to GLSL scalar/vector
+storage. `mul` uses HLSL row/column-vector rules and all legal shape products.
+Rectangular row and column bounds are distinct. These rules follow Microsoft's
+legacy [`mul`](https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl/dx-graphics-hlsl-mul)
+and [`transpose`](https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl/dx-graphics-hlsl-transpose)
+type tables; MilkRust's half-matrix overloads are retained as an extension.
 
 Matrix element masks and indexed rows support reads, assignments, compound
 updates and prefix/postfix increments. Generated helpers evaluate the matrix
@@ -200,6 +207,11 @@ closes these specific emitter gaps; it is not a claim of all HLSL models or
 reference conformance. Rules were checked against Microsoft's
 [per-component math documentation](https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl/dx-graphics-hlsl-per-component-math)
 and [conversion specification](https://microsoft.github.io/hlsl-specs/specs/4-Conv.html).
+
+Boolean, signed and unsigned multi-row/multi-column matrices use typed GLSL row
+structures. Conditional selection preserves the GLSL ES scalar-Boolean
+short-circuit rule for both native matrix types and those row structures.
+One-row and one-column forms lower to scalar/vector storage.
 
 ## Legacy operators and intrinsics checkpoint
 
@@ -258,8 +270,24 @@ signed overflow, invalid shifts, cyclic definitions and nonconstant bounds
 fail within the compiler's existing budgets. GLSL array extents are emitted as
 validated integers, independent of whether a readonly local is a GLSL constant.
 The `declarations.hlsl` pixel control and malformed-input cases are authored
-but unrun. This does not add integer/Boolean matrices, one-row/one-column
-matrices, multidimensional arrays or modern resource-object syntax.
+but unrun. Fixed arrays have one dimension; array aliases preserve their extent,
+and arrays inside structure fields remain supported. A second dimension,
+including one appended to an array typedef, is rejected because [ESSL 3.00
+forbids arrays of arrays](https://registry.khronos.org/OpenGL/specs/es/3.0/GLSL_ES_Specification_3.00.pdf).
+Common `Texture2D<T>` and `Texture3D<T>` declarations with `float4`, `half4`,
+or `min16float4` elements lower to the renderer's legacy RGBA sampler bindings.
+`Sample`, `SampleLevel`, `SampleBias`, `SampleGrad`, `Load`, and base-level
+`GetDimensions` lower to matching legacy operations. Static integer offsets on
+`Sample`, `SampleLevel`, and `SampleBias` use GLSL ES 3.00 offset lookups; the
+offset overload of `SampleGrad` uses GLSL ES 3.00 `textureGradOffset`.
+Direct texture parameters and direct texture fields in global structs are
+supported; fields bind as `sampler_<object>_<field>` unless their name already
+begins with `sampler_`. Simple `SamplerState` names are accepted, while
+filtering and wrapping still come from MilkDrop sampler prefixes. `Texture1D`,
+cube/array/multisample resources, custom sampler-state definitions, resource
+arrays, initialized resource instances, nested resource-bearing structs, and
+resource-bearing struct parameters remain outside the profile. The separate
+WGSL path remains limited.
 
 Semantic references: Microsoft's [vector types](https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl/dx-graphics-hlsl-vector),
 [user-defined types](https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl/dx-graphics-hlsl-user-defined)
@@ -311,8 +339,14 @@ array/struct flattening and truncation, and per-component scalar conversion.
 Same-type struct/array copies preserve their type instead of generating an
 invalid GLSL scalar constructor. Aggregate expansion is limited to 4096 scalar
 components, in addition to the existing depth, operation, temporary and output
-budgets. Arrays of arrays and resource-bearing structs remain outside the
-profile. `aggregates.hlsl` covers nested fields, arbitrary brace grouping,
+budgets. Single-dimensional arrays and direct global sampler fields in structs
+are supported within the compiler budgets. Direct `Texture2D`/`Texture3D`
+object declarations and parameters lower through the same sampler model; their
+common sampling methods are supported and `GetDimensions` accepts only the
+base-level output form. Resource arrays, initialized resource instances,
+nested resource-bearing structs, resource-bearing struct parameters, non-2D/3D
+texture kinds and custom sampler-state definitions remain unsupported.
+`aggregates.hlsl` covers nested fields, arbitrary brace grouping,
 row-major reconstruction, inferred arrays, copies, scalar splats and
 single-evaluation side effects; the native and browser cases are unrun.
 

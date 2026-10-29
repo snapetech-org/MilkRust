@@ -2,9 +2,247 @@
 use crate::milk2;
 use std::collections::BTreeMap;
 
+fn is_identifier(token: &str) -> bool {
+    token.chars().next().is_some_and(|ch| ch.is_ascii_alphabetic() || ch == '_')
+        && token.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+}
+
+fn split_hlsl_call(tokens: &[String], open: usize) -> Result<(Vec<Vec<String>>, usize), String> {
+    if tokens.get(open).map(String::as_str) != Some("(") {
+        return Err("Malformed HLSL resource method call".into());
+    }
+    let mut parens = 1i32;
+    let mut brackets = 0i32;
+    let mut braces = 0i32;
+    let mut start = open + 1;
+    let mut args = Vec::new();
+    let mut index = open + 1;
+    while index < tokens.len() {
+        match tokens[index].as_str() {
+            "(" => parens += 1,
+            ")" => {
+                parens -= 1;
+                if parens == 0 {
+                    if index > start || !args.is_empty() { args.push(tokens[start..index].to_vec()); }
+                    return Ok((args, index + 1));
+                }
+            }
+            "[" => brackets += 1,
+            "]" => brackets -= 1,
+            "{" => braces += 1,
+            "}" => braces -= 1,
+            "," if parens == 1 && brackets == 0 && braces == 0 => {
+                args.push(tokens[start..index].to_vec());
+                start = index + 1;
+            }
+            _ => {}
+        }
+        if parens < 1 || brackets < 0 || braces < 0 { return Err("Unbalanced HLSL resource method arguments".into()); }
+        index += 1;
+    }
+    Err("Unterminated HLSL resource method call".into())
+}
+
+/// Lower the common HLSL resource-object surface into the legacy sampler
+/// intrinsics already represented in the typed AST. Resource arrays and custom
+/// sampler-state objects need different host binding models and fail explicitly.
+fn lower_modern_resource_syntax(tokens: &mut Vec<String>) -> Result<(), String> {
+    let mut dimensions = BTreeMap::<String, Option<u8>>::new();
+    let mut index = 0;
+    while index < tokens.len() {
+        let dimension = match tokens[index].as_str() {
+            "Texture2D" => Some(2),
+            "Texture3D" => Some(3),
+            "Texture1D" | "Texture1DArray" | "Texture2DArray" | "Texture2DMS" | "Texture2DMSArray"
+            | "TextureCube" | "TextureCubeArray" | "SamplerComparisonState" => {
+                return Err(format!("{} is outside the 2D/3D MilkRust texture profile", tokens[index]));
+            }
+            _ => None,
+        };
+        if let Some(dimension) = dimension {
+            let type_index = index;
+            let mut after_type = index + 1;
+            if tokens.get(after_type).map(String::as_str) == Some("<") {
+                let Some(relative_end) = tokens[after_type + 1..].iter().position(|token| token == ">") else {
+                    return Err("Unterminated HLSL texture element type".into());
+                };
+                let end = after_type + 1 + relative_end;
+                if end == after_type + 1 || tokens[after_type + 1..end].iter().any(|token| matches!(token.as_str(), "<" | ";" | "{")) {
+                    return Err("Unsupported HLSL texture element type".into());
+                }
+                let element_type = &tokens[after_type + 1..end];
+                if element_type.len() != 1 || !matches!(element_type[0].as_str(),
+                    "float4" | "half4" | "min16float4") {
+                    return Err("MilkRust texture objects require float4/half4 color elements".into());
+                }
+                tokens.drain(after_type..=end);
+            }
+            if tokens.get(after_type).is_some_and(|token| token == "(") {
+                return Err("Texture objects cannot be returned from HLSL functions".into());
+            }
+            let Some(name) = tokens.get(after_type).filter(|token| is_identifier(token)) else {
+                return Err("Malformed HLSL texture object declaration".into());
+            };
+            if tokens.get(after_type + 1).map(String::as_str) == Some("[") {
+                return Err("HLSL texture resource arrays are unsupported".into());
+            }
+            if tokens.get(after_type + 1).map(String::as_str) == Some("=") {
+                return Err("Initialized HLSL texture objects are unsupported".into());
+            }
+            dimensions.entry(name.clone()).and_modify(|previous| {
+                if *previous != Some(dimension) { *previous = None; }
+            }).or_insert(Some(dimension));
+            tokens[type_index] = if dimension == 2 { "sampler2D" } else { "sampler3D" }.into();
+            index = after_type + 1;
+            continue;
+        }
+        if tokens[index] == "SamplerState" {
+            let Some(name) = tokens.get(index + 1).filter(|token| is_identifier(token)) else {
+                return Err("Malformed HLSL SamplerState declaration".into());
+            };
+            if matches!(tokens.get(index + 2).map(String::as_str), Some("=") | Some("{")) {
+                return Err("Explicit HLSL SamplerState definitions are unsupported; use the preset sampler prefix".into());
+            }
+            // Sampling state is selected by the MilkDrop sampler naming
+            // convention on both hosts. A dummy integer preserves parameter
+            // lists; Sample* lowering removes the state argument itself.
+            let _ = name;
+            tokens[index] = "int".into();
+        }
+        index += 1;
+    }
+
+    // Reject sampler arrays in globals, function signatures, and structs
+    // before they can be lowered as one unrelated texture binding.
+    for index in 0..tokens.len().saturating_sub(2) {
+        if matches!(tokens[index].as_str(), "sampler" | "sampler2D" | "sampler3D")
+            && is_identifier(&tokens[index + 1]) && tokens[index + 2] == "[" {
+            return Err("HLSL texture resource arrays are unsupported".into());
+        }
+    }
+    let (resource_fields, _, resource_instances) = resource_struct_fields(tokens)?;
+
+    let mut rewritten = Vec::with_capacity(tokens.len());
+    let mut index = 0;
+    while index < tokens.len() {
+        if tokens[index] != "." || index + 2 >= tokens.len() || tokens[index + 2] != "(" {
+            rewritten.push(tokens[index].clone());
+            index += 1;
+            continue;
+        }
+        let method = tokens[index + 1].as_str();
+        if !matches!(method, "Sample" | "SampleLevel" | "SampleBias" | "SampleGrad" | "Load" | "GetDimensions") {
+            if matches!(method,
+                "SampleCmp" | "SampleCmpLevelZero" | "Gather" | "GatherRed" | "GatherGreen"
+                | "GatherBlue" | "GatherAlpha" | "GatherCmp" | "GatherCmpRed"
+                | "GatherCmpGreen" | "GatherCmpBlue" | "GatherCmpAlpha"
+                | "CalculateLevelOfDetail" | "CalculateLevelOfDetailUnclamped" | "GetSamplePosition") {
+                return Err(format!("HLSL texture method {method} is not supported by the legacy renderer"));
+            }
+            rewritten.push(tokens[index].clone());
+            index += 1;
+            continue;
+        }
+        if index == 0 || !is_identifier(&tokens[index - 1]) {
+            return Err("HLSL resource methods require a named texture object".into());
+        }
+        let mut base_start = index - 1;
+        while base_start >= 2 && tokens[base_start - 1] == "." && is_identifier(&tokens[base_start - 2]) {
+            base_start -= 2;
+        }
+        let base_name = tokens[index - 1].clone();
+        let dimension = if index >= base_start + 3 && tokens.get(base_start + 1).map(String::as_str) == Some(".") {
+            let structure = resource_instances.get(&tokens[base_start]);
+            let field_name = &tokens[index - 1];
+            structure.and_then(|structure| resource_fields.iter().find(|field|
+                &field.structure == structure && &field.field == field_name))
+                .map(|field| if field.sampler_type == "sampler3D" { 3 } else { 2 })
+        } else {
+            dimensions.get(&base_name).copied().flatten()
+        }.ok_or_else(|| format!("HLSL resource method receiver {base_name} has no unambiguous Texture2D/Texture3D declaration"))?;
+        let (args, end) = split_hlsl_call(tokens, index + 2)?;
+        if method == "GetDimensions" {
+            let expected = usize::from(dimension);
+            if args.len() != expected || args.iter().any(Vec::is_empty) {
+                return Err("Only base-level HLSL GetDimensions output arguments are supported".into());
+            }
+            if tokens.get(end).map(String::as_str) != Some(";") {
+                return Err("HLSL GetDimensions must be a standalone statement in this profile".into());
+            }
+            rewritten.truncate(rewritten.len().saturating_sub(index - base_start));
+            for (axis, target) in args.iter().enumerate() {
+                rewritten.extend(target.clone());
+                rewritten.push("=".into());
+                rewritten.push(if dimension == 2 { "tex2Dsize" } else { "tex3Dsize" }.into());
+                rewritten.push("(".into());
+                rewritten.extend_from_slice(&tokens[base_start..index]);
+                rewritten.push(")".into());
+                rewritten.push(".".into());
+                rewritten.push(["x", "y", "z"][axis].into());
+                rewritten.push(";".into());
+            }
+            index = end + 1;
+            continue;
+        }
+        let (intrinsic, coordinate): (&str, Vec<String>) = match (method, args.len(), dimension) {
+            ("Sample", 2, 2) => ("tex2D", args[1].clone()),
+            ("Sample", 2, 3) => ("tex3D", args[1].clone()),
+            ("Sample", 3, 2) => ("tex2Doffset", args[1].clone()),
+            ("Sample", 3, 3) => ("tex3Doffset", args[1].clone()),
+            ("SampleLevel", 3 | 4, 2) => ("tex2Dlod", args[1].clone()),
+            ("SampleLevel", 3 | 4, 3) => ("tex3Dlod", args[1].clone()),
+            ("SampleBias", 3 | 4, 2) => ("tex2Dbias", args[1].clone()),
+            ("SampleBias", 3 | 4, 3) => ("tex3Dbias", args[1].clone()),
+            ("SampleGrad", 4 | 5, 2) => ("tex2Dgrad", args[1].clone()),
+            ("SampleGrad", 4 | 5, 3) => ("tex3Dgrad", args[1].clone()),
+            ("Load", 1, 2) => ("tex2Dfetch", args[0].clone()),
+            ("Load", 1, 3) => ("tex3Dfetch", args[0].clone()),
+            _ => return Err(format!("Invalid argument count for HLSL texture method {method}")),
+        };
+        if args.iter().any(Vec::is_empty) { return Err(format!("Empty argument to HLSL texture method {method}")); }
+        rewritten.truncate(rewritten.len().saturating_sub(index - base_start));
+        rewritten.push(intrinsic.into());
+        rewritten.push("(".into());
+        rewritten.extend_from_slice(&tokens[base_start..index]);
+        rewritten.push(",".into());
+        if method == "SampleLevel" || method == "SampleBias" {
+            rewritten.push("float4".into());
+            rewritten.push("(".into());
+            rewritten.extend(coordinate);
+            if dimension == 2 { rewritten.push(",".into()); rewritten.push("0.0".into()); }
+            rewritten.push(",".into());
+            rewritten.extend(args[2].clone());
+            rewritten.push(")".into());
+        } else {
+            rewritten.extend(coordinate);
+        }
+        if method == "SampleGrad" {
+            rewritten.push(",".into());
+            rewritten.extend(args[2].clone());
+            rewritten.push(",".into());
+            rewritten.extend(args[3].clone());
+        }
+        let offset_index = match (method, args.len()) {
+            ("Sample", 3) => Some(2),
+            ("SampleLevel", 4) | ("SampleBias", 4) => Some(3),
+            ("SampleGrad", 5) => Some(4),
+            _ => None,
+        };
+        if let Some(offset) = offset_index.and_then(|offset| args.get(offset)) {
+            rewritten.push(",".into());
+            rewritten.extend(offset.clone());
+        }
+        rewritten.push(")".into());
+        index = end;
+    }
+    *tokens = rewritten;
+    Ok(())
+}
+
 pub(crate) fn sampler_names(source: &str) -> Result<Vec<String>, String> {
     let source = milkrust_hlsl::preprocess(source)?;
-    let tokens = milkrust_hlsl::tokenize(&source)?;
+    let mut tokens = milkrust_hlsl::tokenize(&source)?;
+    lower_modern_resource_syntax(&mut tokens)?;
     let mut names = Vec::new();
     let mut sampler_parameters = Vec::new();
     let mut parens = 0i32;
@@ -66,8 +304,227 @@ pub(crate) fn sampler_names(source: &str) -> Result<Vec<String>, String> {
             if base != "main" && !crate::resources::VECTOR_UNIFORMS.contains(&token.as_str()) && !names.contains(&name) { names.push(name); }
         }
     }
+    for name in resource_field_bindings(&tokens)? {
+        if !names.contains(&name) { names.push(name); }
+    }
     if names.len() > 15 { return Err("Shader exceeds 15 additional samplers".into()); }
     Ok(names)
+}
+
+#[derive(Clone)]
+struct ResourceStructField {
+    structure: String,
+    field: String,
+    sampler_type: String,
+    declaration: std::ops::Range<usize>,
+}
+
+fn resource_struct_fields(tokens: &[String]) -> Result<(Vec<ResourceStructField>, BTreeMap<String, String>, BTreeMap<String, String>), String> {
+    let mut fields = Vec::new();
+    let mut structures = BTreeMap::new();
+    let mut structure_ranges = Vec::new();
+    let mut i = 0;
+    let mut depth = 0i32;
+    while i + 2 < tokens.len() {
+        if tokens[i] == "{" { depth += 1; i += 1; continue; }
+        if tokens[i] == "}" { depth -= 1; i += 1; continue; }
+        if depth != 0 || tokens[i] != "struct" { i += 1; continue; }
+        let name = tokens[i + 1].clone();
+        let Some(open) = tokens[i + 2..].iter().position(|token| token == "{").map(|offset| i + 2 + offset) else {
+            return Err("Malformed HLSL struct declaration".into());
+        };
+        let mut level = 1i32;
+        let mut close = open + 1;
+        while close < tokens.len() && level > 0 {
+            if tokens[close] == "{" { level += 1; }
+            if tokens[close] == "}" { level -= 1; }
+            close += 1;
+        }
+        if level != 0 { return Err("Unterminated HLSL struct declaration".into()); }
+        structures.insert(name.clone(), String::new());
+        structure_ranges.push(i..close);
+        let mut field_index = open + 1;
+        while field_index + 1 < close - 1 {
+            if !matches!(tokens[field_index].as_str(), "sampler" | "sampler2D" | "sampler3D") {
+                field_index += 1;
+                continue;
+            }
+            let sampler_type = tokens[field_index].clone();
+            let field_name = tokens[field_index + 1].clone();
+            let Some(end_offset) = tokens[field_index + 2..close - 1].iter().position(|token| token == ";") else {
+                return Err("Malformed sampler field in HLSL struct".into());
+            };
+            let end = field_index + 2 + end_offset;
+            if tokens[field_index + 2..end].iter().any(|token| matches!(token.as_str(), "[" | "=")) {
+                return Err("Sampler arrays and initialized sampler fields in structs are unsupported".into());
+            }
+            let mut field_names = vec![field_name];
+            let mut cursor = field_index + 2;
+            while cursor < end {
+                if tokens[cursor] == "," {
+                    let Some(next_name) = tokens.get(cursor + 1).filter(|token| token.as_str() != ";") else {
+                        return Err("Malformed sampler field declaration in HLSL struct".into());
+                    };
+                    field_names.push(next_name.clone());
+                    cursor += 2;
+                } else { cursor += 1; }
+            }
+            let declaration_start = if field_index > open + 1 && tokens[field_index - 1] == "uniform" { field_index - 1 } else { field_index };
+            for field_name in field_names {
+                fields.push(ResourceStructField {
+                    structure: name.clone(), field: field_name, sampler_type: sampler_type.clone(),
+                    declaration: declaration_start..end + 1,
+                });
+            }
+            field_index = end + 1;
+        }
+        i = close;
+    }
+    if fields.is_empty() { return Ok((fields, BTreeMap::new(), BTreeMap::new())); }
+
+    let mut instances = BTreeMap::new();
+    depth = 0;
+    let mut parens = 0i32;
+    let mut i = 0;
+    while i + 2 < tokens.len() {
+        if let Some(range) = structure_ranges.iter().find(|range| range.start == i) {
+            i = range.end;
+            continue;
+        }
+        if depth == 0 && parens == 0 && structures.contains_key(&tokens[i])
+            && tokens.get(i + 1).is_some_and(|name| name.chars().next().is_some_and(|c| c.is_ascii_alphabetic() || c == '_')) {
+            let structure = tokens[i].clone();
+            let mut declaration = i + 1;
+            loop {
+                let variable = tokens[declaration].clone();
+                let next = tokens.get(declaration + 1).map(String::as_str);
+                if next == Some("[") { return Err("Arrays of resource-bearing structs are unsupported".into()); }
+                if next == Some("=") { return Err("Initialized resource-bearing struct instances are unsupported".into()); }
+                instances.insert(variable, structure.clone());
+                match next {
+                    Some(",") => declaration += 2,
+                    Some(";") => break,
+                    _ => { instances.remove(&tokens[declaration]); break; }
+                }
+            }
+        }
+        if tokens[i] == "{" { depth += 1; }
+        if tokens[i] == "}" { depth -= 1; }
+        if tokens[i] == "(" { parens += 1; }
+        if tokens[i] == ")" { parens -= 1; }
+        i += 1;
+    }
+
+    let mut bindings = BTreeMap::new();
+    for window in tokens.windows(3) {
+        if window[1] != "." { continue; }
+        let field = fields.iter().find(|field| field.field == window[2]);
+        let Some(structure) = instances.get(&window[0]) else {
+            if field.is_some() { return Err("Resource struct fields must be accessed through a global struct instance".into()); }
+            continue;
+        };
+        if let Some(field) = fields.iter().find(|field| &field.structure == structure && field.field == window[2]) {
+            let name = if field.field.starts_with("sampler_") { field.field.clone() }
+                else { format!("sampler_{}_{}", window[0], field.field) };
+            if field.sampler_type == "sampler2D" && crate::resources::texture_kind(&name).is_volume()
+                || field.sampler_type == "sampler3D" && !crate::resources::texture_kind(&name).is_volume() {
+                return Err(format!("Sampler field {}.{} disagrees with its bound texture dimension", window[0], field.field));
+            }
+            bindings.insert(format!("{}.{}", window[0], field.field), name.clone());
+        }
+    }
+    Ok((fields, bindings, instances))
+}
+
+fn resource_field_bindings(tokens: &[String]) -> Result<Vec<String>, String> {
+    let (_, bindings, _) = resource_struct_fields(tokens)?;
+    let mut names = Vec::new();
+    for window in tokens.windows(3) {
+        if window[1] == "." {
+            if let Some(name) = bindings.get(&format!("{}.{}", window[0], window[2])) {
+                if !names.contains(name) { names.push(name.clone()); }
+            }
+        }
+    }
+    Ok(names)
+}
+
+fn lower_resource_struct_fields(tokens: &mut Vec<String>) -> Result<(), String> {
+    let (fields, bindings, instances) = resource_struct_fields(tokens)?;
+    if fields.is_empty() { return Ok(()); }
+    let resource_struct_names: Vec<String> = fields.iter().map(|field| field.structure.clone()).collect();
+    let mut removed = vec![false; tokens.len()];
+    for field in fields {
+        for index in field.declaration { removed[index] = true; }
+    }
+    let mut empty_structs = Vec::new();
+    let mut struct_ranges = Vec::new();
+    let mut index = 0;
+    while index + 2 < tokens.len() {
+        if tokens[index] != "struct" { index += 1; continue; }
+        let name = tokens[index + 1].clone();
+        let Some(open) = tokens[index + 2..].iter().position(|token| token == "{").map(|offset| index + 2 + offset) else { break; };
+        let mut level = 1i32;
+        let mut close = open + 1;
+        while close < tokens.len() && level > 0 {
+            if tokens[close] == "{" { level += 1; }
+            if tokens[close] == "}" { level -= 1; }
+            close += 1;
+        }
+        if level != 0 { return Err("Unterminated HLSL struct declaration".into()); }
+        if resource_struct_names.contains(&name) && (open + 1..close - 1).all(|field| removed[field]) {
+            empty_structs.push(name);
+            let end = if tokens.get(close).map(String::as_str) == Some(";") { close + 1 } else { close };
+            for token in index..end { removed[token] = true; }
+            struct_ranges.push(index..end);
+            index = end;
+        } else { index = close; }
+    }
+    for (object, structure) in &instances {
+        if !empty_structs.contains(structure) { continue; }
+        let mut index = 0;
+        let mut depth = 0i32;
+        let mut parens = 0i32;
+        while index < tokens.len() {
+            if let Some(range) = struct_ranges.iter().find(|range| range.start == index) {
+                index = range.end;
+                continue;
+            }
+            if removed[index] { index += 1; continue; }
+            if depth == 0 && parens == 0 && tokens[index] == *structure && tokens.get(index + 1) == Some(object)
+                && matches!(tokens.get(index + 2).map(String::as_str), Some(";") | Some(",")) {
+                let end = tokens[index + 2..].iter().position(|token| token == ";")
+                    .map(|offset| index + 2 + offset).ok_or_else(|| "Unterminated resource struct declaration".to_string())?;
+                for token in index..=end { removed[token] = true; }
+                index = end + 1;
+                continue;
+            }
+            if tokens[index] == *object {
+                if tokens.get(index + 1).map(String::as_str) != Some(".")
+                    || tokens.get(index + 2).map_or(true, |field| !bindings.contains_key(&format!("{object}.{field}"))) {
+                    return Err("Resource-only struct instances must be accessed through declared sampler fields".into());
+                }
+            }
+            if tokens[index] == "{" { depth += 1; }
+            if tokens[index] == "}" { depth -= 1; }
+            if tokens[index] == "(" { parens += 1; }
+            if tokens[index] == ")" { parens -= 1; }
+            index += 1;
+        }
+    }
+    let mut rewritten = Vec::with_capacity(tokens.len());
+    let mut index = 0;
+    while index < tokens.len() {
+        if index + 2 < tokens.len() && tokens[index + 1] == "." {
+            if let Some(name) = bindings.get(&format!("{}.{}", tokens[index], tokens[index + 2])) {
+                rewritten.push(name.clone()); index += 3; continue;
+            }
+        }
+        if !removed[index] { rewritten.push(tokens[index].clone()); }
+        index += 1;
+    }
+    *tokens = rewritten;
+    Ok(())
 }
 
 pub(crate) fn needs_environment(source: &str) -> bool {
@@ -113,6 +570,8 @@ pub(crate) fn compile(source: &str, legacy_feedback: bool) -> Result<String, Str
     // Rename any user entry before the emitter adds its GLSL main.
     aliases.insert("main".into(), "milkrust_user_entry".into());
     let mut tokens = milkrust_hlsl::tokenize(&source)?;
+    lower_modern_resource_syntax(&mut tokens)?;
+    lower_resource_struct_fields(&mut tokens)?;
     for pair in tokens.windows(2) {
         if matches!(pair[0].as_str(), "float" | "double" | "half") && matches!(pair[1].as_str(), "M_PI" | "M_PI_2" | "M_INV_PI_2" | "M_INV_PI") {
             aliases.remove(&pair[1]);
@@ -339,4 +798,5 @@ mod tests {
         assert!(sampler_names("ret=mytex2D(sampler_ignored,uv);").unwrap().is_empty());
         assert_eq!(sampler_names("float3 sample(sampler2D s,float2 p){return tex2D(s,p).rgb;} shader_body {ret=sample(sampler_cloud,uv);}").unwrap(), vec!["sampler_cloud"]);
     }
+
 }

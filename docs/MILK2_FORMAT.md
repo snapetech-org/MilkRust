@@ -15,52 +15,44 @@ other executable trailer content remains gated. Progress is a frozen blend posit
 does not advance as a transition timer. Each preset retains its own
 equation/register state and feedback targets.
 
-`milk2.rs` is an independent bounded parser of these format facts. The wrapper
-layout was observed in MDropDX12's `ParseMilk2File` and `SaveMilk2ToPath` at the
-revision recorded below; no renderer algorithm or source code from that
-CC-BY-NC implementation is copied into MilkRust. See also the upstream MilkDrop3
-README's documented saved progress, direction and random values.
+`milk2.rs` is an independent bounded parser of the documented wrapper. The
+saved-blend and sprite behavior is implemented from the compatible MIT
+behavioral specification identified in
+`crates/milkrust-core/THIRD_PARTY_NOTICES.md` and the public MilkDrop3 format
+documentation. No noncommercial renderer implementation is incorporated.
 
 The WebGL and native GL/GLES renderers consume the saved pattern name, progress,
-direction, and five saved random values. MilkRust contains deterministic spatial
-masks for the documented patterns (`Fade`, `zoom`, `side`, `plasma`, `cercle`,
-`plasma2/3`, `snail/2/3`, `triangle`, `donuts`, `corner`, `patches`,
-`checkerboard`, `bubbles`, `stars`, `cisor`, `wave`, `curtain`, `vertical`,
-`horizontal`, `linesvertical/horizontal`, `square`, `stars2`, `clock`, `nuclear`,
-`arrow`, `cross`, and `cross2`). These are independent procedural formulas
-based on the documented names and saved fields, not a port of MilkDrop3's
-transition renderer. The Canvas fallback rejects spatial patterns instead of
-silently showing a uniform cross-fade. Active saved sprite blocks now execute on
-native GL/GLES and WebGL; see [EMBEDDED_SPRITES.md](EMBEDDED_SPRITES.md).
-Bounded `NAME=` metadata and well-formed sprite blocks explicitly disabled by
-saved `sprite=0` are preserved without execution. Unknown flag values, unmatched/nested blocks
-and unrelated trailer records remain gated. The wrapper enforces the same
-2 MiB source budget even when called independently of the preset importer.
+direction and five saved random values. The 30 MD3 `(a,c)` blend-mask formulas
+are implemented on the documented 64x48 vertex grid with aspect correction,
+saved progress and the random block. These formulas are a clean-room port of the
+behavioral implementation/specification in M0Rf30/lactea; its MIT attribution
+is retained in `crates/milkrust-core/THIRD_PARTY_NOTICES.md`. Hosts rasterize the
+vertex alpha field to a cached R8 texture for native and browser shaders. The
+Canvas fallback rejects spatial patterns instead of silently showing a uniform
+cross-fade. Saved sprite blocks execute on native GL/GLES and WebGL; see
+[EMBEDDED_SPRITES.md](EMBEDDED_SPRITES.md).
 
-Parsing and rendering these masks do not imply visual equivalence. Exact
-per-pattern semantics, saved-file comparisons against reference GPU output,
-pattern-specific progress behavior, embedded extension behavior, and generic
-renderer/device qualification remain open. Regression cases are source only and
-have not run. Full `.milk2` compatibility remains open until those comparisons
-pass.
+Bounded `NAME=` metadata and well-formed trailing sprite blocks disabled by
+`sprite=0` or an omitted sprite flag are preserved without execution. A trailing
+sprite executes only with `sprite=1`. Unknown flag values, unmatched/nested
+blocks and unrelated trailer records remain gated. The wrapper enforces the same
+2 MiB source budget when called independently of the preset importer.
 
-Observed format source: [MDropDX12 564407e](https://github.com/shanevbg/MDropDX12/tree/564407e127c4bef5c5dfbb23fb8f5d1d8afb6120), `src/mDropDX12/engine_presets.cpp` and `engine.cpp`. This citation records format facts, not permission to incorporate its rendering implementation.
+The mask arithmetic includes the `-1` direction rule for the four
+direction-aware patterns and the non-square `horizontal` mesh behavior. Saved
+sprite handling includes per-owner scopes, flip UVs, saved offsets/repeats,
+rotation modes, byte-wrapped alpha, layer and burn ordering, and the five
+classic saved blend modes. These are source-level implementations. R8 rasterization,
+compositing, sprite filtering and draw order still need reference captures to
+qualify pixel behavior on each renderer. The Canvas and WGSL paths explicitly
+reject unsupported spatial masks or saved sprites. Unknown trailing extensions
+remain gated.
 
 ## Reference-source boundary
 
-The inspected [MilkDrop3 source snapshot at `6b39088`](https://github.com/milkdrop2077/MilkDrop3/tree/6b39088f789441e18cc1665519ee7ffe439cece5/code/vis_milk2) documents `.milk2` blending in its README, but the checked-in renderer source does not contain a consumer for the saved wrapper/header records described above. It has a randomized preset-transition helper; that helper is not evidence for the frozen, serialized `.milk2` blend field. The available source snapshot therefore cannot serve as a complete implementation reference for the saved patterns. This is a source-availability finding, not a claim that MilkDrop3 itself lacks the feature. A port still needs authoritative per-pattern semantics and reference output for real saved files.
+The inspected [MilkDrop3 source snapshot at `6b39088`](https://github.com/milkdrop2077/MilkDrop3/tree/6b39088f789441e18cc1665519ee7ffe439cece5/code/vis_milk2) documents saved wrapper fields and version-specific pattern changes, but its checked-in renderer source does not consume the saved wrapper. The per-pattern behavioral specification used for the clean-room implementation comes from Lactea's published analysis and compatible MIT implementation; it is not an official MilkDrop3 renderer release. Compare real saved files against the reference renderer before claiming pixel parity.
 
-The saved sprite records are interpreted independently in `sprites.rs`. Unknown
-fields and malformed blocks fail import; the source checkpoint includes runtime,
-GPU passes and regression sources, not executed conformance evidence.
-
-
-The 2026-10-29 reference recheck still points to the same official commit. Its
-classic `RandomizeBlendPattern` routine is not the saved-pattern implementation.
-The official README also describes version-specific changes to `corner`,
-`patches`, `stars2` and `arrow`, and a `cross2` exception to normal completion.
-MilkRust's current independently authored masks, including their common endpoint
-rules, have not been replaced with those exact semantics. Pattern names alone
-do not specify formulas. The checked foo_vis_milk2 source contains the classic
-transition helper, and the MIT SoundVisualizer candidate likewise does not
-supply this missing MD3 renderer. None is a basis for declaring the gap closed.
+Saved sprite records are parsed and executed independently in `sprites.rs`.
+Unknown fields, malformed blocks and unsupported trailing extensions fail
+import. Source support is implemented for the documented saved fields in this
+profile; compiler, renderer and device conformance remain unrun.

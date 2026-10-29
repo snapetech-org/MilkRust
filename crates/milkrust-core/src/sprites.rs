@@ -12,10 +12,19 @@ const DEFAULT_COLOR_KEY_ARGB: u32 = 0xff00_0000;
 #[derive(Clone, Debug, PartialEq)]
 pub struct Definition {
     pub index: u32,
+    /// Zero-based owner preset. A trailing sprite block in a `.milk2` belongs to PRESET2.
+    pub preset_index: usize,
     pub texture: String,
     pub color_key: u32,
+    pub layer: i32,
+    pub blend_mode: i32,
+    pub alpha: f64,
+    pub burn_mode: i32,
+    pub rotation_mode: f64,
+    pub rotation_speed: f64,
     pub offset: [f64; 2],
     pub size_offset: [f64; 2],
+    pub repeat_multiplier: [f64; 2],
     pub values: BTreeMap<String, MilkRustValue>,
     pub init: String,
     pub code: String,
@@ -42,28 +51,46 @@ pub fn extract(source: &str, enabled: bool) -> Result<Blocks, String> {
     crate::input_limits::validate_preset_source(source)?;
     let mut result = Blocks::default();
     let mut definitions = BTreeMap::new();
-    let mut current: Option<u32> = None;
+    let mut current: Option<(u32, usize, bool)> = None;
+    let mut preset_state = 0u8;
     let mut records = BTreeMap::new();
     let mut blocks = 0usize;
     let normalized = source.replace("\r\n", "\n").replace('\r', "\n");
     for raw in normalized.lines() {
         let line = raw.trim();
+        if current.is_none() {
+            match line.to_ascii_uppercase().as_str() {
+                "[PRESET1_BEGIN]" => preset_state = 1,
+                "[PRESET1_END]" => preset_state = 2,
+                "[PRESET2_BEGIN]" => preset_state = 3,
+                "[PRESET2_END]" => preset_state = 4,
+                _ => {}
+            }
+        }
         if let Some(index) = marker(line, "_BEGIN]") {
             if current.is_some() { return Err("Nested embedded sprite block".into()); }
             blocks += 1;
             if blocks > MAX_SPRITE_RECORDS { return Err("More than 64 saved sprite records".into()); }
-            current = Some(index);
+            // MD3 reads the trailing sprite block as PRESET2's sprite; blocks
+            // inside either preset half are inert. Ordinary `.milk` blocks
+            // belong to the only preset at index zero.
+            let owner = if preset_state == 4 { 1 } else { 0 };
+            let executable = enabled && !matches!(preset_state, 1 | 3);
+            current = Some((index, owner, executable));
             records.clear();
         } else if let Some(index) = marker(line, "_END]") {
-            if current != Some(index) { return Err("Mismatched embedded sprite block end".into()); }
-            if enabled { definitions.insert(index, definition(index, &records)?); }
+            let Some((active_index, owner, executable)) = current else {
+                return Err("Mismatched embedded sprite block end".into());
+            };
+            if active_index != index { return Err("Mismatched embedded sprite block end".into()); }
+            if executable { definitions.insert(index, definition(index, owner, &records)?); }
             result.source.push_str(raw);
             result.source.push('\n');
             current = None;
             continue;
         } else if line.to_ascii_uppercase().starts_with("[SPRITE") {
             return Err("Invalid embedded sprite marker".into());
-        } else if current.is_some() && enabled && !line.is_empty() && !line.starts_with([';', '#']) && !line.starts_with("//") {
+        } else if current.is_some_and(|(_, _, executable)| executable) && !line.is_empty() && !line.starts_with([';', '#']) && !line.starts_with("//") {
             let (key, value) = line.split_once('=').ok_or("Invalid embedded sprite record")?;
             records.insert(key.trim().to_ascii_lowercase(), value.trim().to_string());
         }
@@ -79,18 +106,23 @@ pub fn extract(source: &str, enabled: bool) -> Result<Blocks, String> {
 
 /// The saved enable flag belongs to the envelope/header, not to sprite code.
 pub fn enabled(source: &str) -> bool {
+    let milk2 = source.lines().any(|line| line.trim().eq_ignore_ascii_case("[PRESET1_BEGIN]"));
     for line in source.lines() {
         let line = line.trim();
         if line.starts_with('[') { break; }
         if let Some((key, value)) = line.split_once('=') {
-            if key.trim().eq_ignore_ascii_case("sprite") { return value.trim() != "0"; }
+            if key.trim().eq_ignore_ascii_case("sprite") {
+                return value.trim() == "1";
+            }
         }
     }
-    true
+    // Ordinary `.milk` files execute saved sprite blocks by default. The
+    // trailing block in a `.milk2` envelope is opt-in through `sprite=1`.
+    !milk2
 }
 
-fn definition(index: u32, records: &BTreeMap<String, String>) -> Result<Definition, String> {
-    if index >= MAX_SPRITES as u32 { return Err("Embedded sprite index exceeds MilkDrop's 16 preset slots".into()); }
+fn definition(index: u32, preset_index: usize, records: &BTreeMap<String, String>) -> Result<Definition, String> {
+    if !(1..=MAX_SPRITES as u32).contains(&index) { return Err("Embedded sprite index must be between 1 and 16".into()); }
     let texture = records.get("spritename").or_else(|| records.get("img"))
         .ok_or("Embedded sprite has no image name")?.trim_matches(['\'', '"']).replace('\\', "/");
     if texture.is_empty() || texture.len() > 512 || texture.starts_with('/') || texture.contains(':')
@@ -110,12 +142,19 @@ fn definition(index: u32, records: &BTreeMap<String, String>) -> Result<Definiti
     };
     let mut values = BTreeMap::new();
     for (key, fallback) in [("x", 0.5), ("y", 0.5), ("sx", 1.0), ("sy", 1.0), ("rot", 0.0),
-        ("speed", 0.0), ("repeatx", 1.0), ("repeaty", 1.0), ("r", 1.0), ("g", 1.0), ("b", 1.0),
-        ("a", 1.0), ("burn", 1.0), ("blendmode", 0.0), ("layer", 0.0), ("flipx", 0.0), ("flipy", 0.0), ("done", 0.0)] {
+        ("repeatx", 1.0), ("repeaty", 1.0), ("r", 1.0), ("g", 1.0), ("b", 1.0),
+        ("a", 1.0), ("burn", 1.0), ("flipx", 0.0), ("flipy", 0.0), ("done", 0.0)] {
         values.insert(key.into(), MilkRustValue::Number(fallback));
     }
+    let mut layer = 0i32;
+    let mut blend_mode = 0i32;
+    let mut alpha = 1.0;
+    let mut burn_mode = 2i32;
+    let mut rotation_mode = 0.0;
+    let mut rotation_speed = 0.0;
+    let mut repeat_multiplier = [1.0; 2];
     let mut offset = [0.0; 2];
-    let mut size_offset = [0.0; 2];
+    let mut size_offset = [-0.5; 2];
     let mut init = BTreeMap::new();
     let mut code = BTreeMap::new();
     for (key, value) in records {
@@ -131,37 +170,58 @@ fn definition(index: u32, records: &BTreeMap<String, String>) -> Result<Definiti
             if key.starts_with("sprites") { size_offset[axis] = number; } else { offset[axis] = number; }
             continue;
         }
+        if matches!(key.as_str(), "spritelayer" | "layer") {
+            layer = value.parse::<i32>().map_err(|_| "Invalid sprite layer")?;
+            continue;
+        }
+        if matches!(key.as_str(), "spriteblend" | "blendmode") {
+            blend_mode = value.parse::<i32>().map_err(|_| "Invalid sprite blend mode")?;
+            continue;
+        }
+        if matches!(key.as_str(), "spriteburn" | "burnmode") {
+            burn_mode = value.parse::<i32>().map_err(|_| "Invalid sprite burn mode")?;
+            continue;
+        }
+        if key == "spritealpha" {
+            alpha = value.parse::<f64>().ok().filter(|v| v.is_finite() && v.abs() <= 1.0e9)
+                .ok_or("Invalid sprite alpha")?;
+            continue;
+        }
+        if key == "spriterot" {
+            rotation_mode = value.parse::<f64>().ok().filter(|v| v.is_finite() && v.abs() <= 1.0e9)
+                .ok_or("Invalid sprite rotation mode")?;
+            continue;
+        }
+        if key == "spritespeed" {
+            rotation_speed = value.parse::<f64>().ok().filter(|v| v.is_finite() && v.abs() <= 1.0e9)
+                .ok_or("Invalid sprite rotation speed")?;
+            continue;
+        }
+        if matches!(key.as_str(), "spriterepeatx" | "spriterepeaty") {
+            let number = value.parse::<f64>().ok().filter(|v| v.is_finite() && v.abs() <= 1.0e9)
+                .ok_or("Invalid sprite repeat multiplier")?;
+            repeat_multiplier[usize::from(key.ends_with('y'))] = number;
+            continue;
+        }
         let variable = match key.as_str() {
-            "spritealpha" => "a", "spriteblend" => "blendmode",
             key => key.strip_prefix("sprite").unwrap_or(key),
         };
         if !values.contains_key(variable) { return Err(format!("Unsupported embedded sprite field: {key}")); }
         let number = value.parse::<f64>().ok().filter(|v| v.is_finite() && v.abs() <= 1.0e9).ok_or("Non-finite or oversized sprite value")?;
-        // A saved SpriteRot=1 is the UI's neutral default, not one radian.
-        // Explicit script `rot` still uses radians and overrides this seed.
-        let number = if key == "spriterot" && number == 1.0 { 0.0 } else { number };
         values.insert(variable.into(), MilkRustValue::Number(number));
     }
+    values.insert("blendmode".into(), MilkRustValue::Number(f64::from(blend_mode)));
     let join = |lines: BTreeMap<u32, &str>| lines.into_values().collect::<Vec<_>>().join("\n");
-    let result = Definition { index, texture, color_key, offset, size_offset, values, init: join(init), code: join(code) };
-    validate_mode(&result.values)?;
+    let result = Definition { index, preset_index, texture, color_key, layer, blend_mode, alpha, burn_mode,
+        rotation_mode, rotation_speed, offset, size_offset, repeat_multiplier, values, init: join(init), code: join(code) };
     crate::validate_expression_source(&result.init)?;
     crate::validate_expression_source(&result.code)?;
     Ok(result)
 }
 
-fn validate_mode(scope: &BTreeMap<String, MilkRustValue>) -> Result<(), String> {
-    for (key, maximum) in [("blendmode", 10.0), ("layer", 4.0)] {
-        let value = scope.get(key).and_then(MilkRustValue::as_number).unwrap_or(0.0);
-        if !value.is_finite() || value != value.floor() || !(0.0..=maximum).contains(&value) {
-            return Err(format!("Unsupported sprite {key}: {value}"));
-        }
-    }
-    Ok(())
-}
-
 #[derive(Clone, Debug, PartialEq)]
 pub struct Frame {
+    pub preset_index: usize,
     pub texture: String,
     pub color_key: u32,
     pub blend_mode: i32,
@@ -173,7 +233,11 @@ pub struct Frame {
     pub center: [f64; 2],
     pub scale: [f64; 2],
     pub repeat: [f64; 2],
+    /// EEL flip selectors mirror the sampled image around its center.
+    pub flip: [bool; 2],
     pub rotation: f64,
+    /// Last frame of a burning sprite receives MD3's aspect correction.
+    pub final_burn: bool,
 }
 
 impl Frame {
@@ -191,6 +255,8 @@ impl Frame {
         let image_aspect = image.0.max(1) as f64 / image.1.max(1) as f64;
         let screen_aspect = screen.0.max(1) as f64 / screen.1.max(1) as f64;
         let (sin, cos) = self.rotation.sin_cos();
+        let flip_x = if self.flip[0] { -1.0 } else { 1.0 };
+        let flip_y = if self.flip[1] { -1.0 } else { 1.0 };
         let mut positions = Vec::with_capacity(8);
         let mut uvs = Vec::with_capacity(8);
         for (x, y) in [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)] {
@@ -198,7 +264,17 @@ impl Frame {
             let local_y = y * self.scale[1] / image_aspect.max(1.0);
             positions.push((local_x * cos - local_y * sin + self.center[0] * 2.0 - 1.0) / screen_aspect.min(1.0));
             positions.push((local_x * sin + local_y * cos + 1.0 - self.center[1] * 2.0) * screen_aspect.max(1.0));
-            uvs.extend_from_slice(&[0.5 + x * 0.5 * self.repeat[0], 0.5 + y * 0.5 * self.repeat[1]]);
+            uvs.extend_from_slice(&[
+                0.5 + x * 0.5 * self.repeat[0] * flip_x,
+                0.5 + y * 0.5 * self.repeat[1] * flip_y,
+            ]);
+        }
+        if self.final_burn {
+            let burn_aspect = screen.0.max(1) as f64 / (screen.1.max(1) as f64 * 4.0 / 3.0);
+            for position in positions.chunks_exact_mut(2) {
+                if burn_aspect >= 1.0 { position[1] /= burn_aspect; }
+                else { position[0] *= burn_aspect; }
+            }
         }
         (positions, uvs)
     }
@@ -212,6 +288,10 @@ pub struct Runtime { instances: Vec<Instance>, start: Option<f64>, previous: Opt
 
 impl Runtime {
     pub fn render(&mut self, definitions: &[Definition], parent: &BTreeMap<String, MilkRustValue>, time: f64, progress: f64) -> Result<Vec<Frame>, String> {
+        self.render_with_parents(definitions, std::slice::from_ref(parent), time, progress)
+    }
+
+    pub fn render_with_parents(&mut self, definitions: &[Definition], parents: &[BTreeMap<String, MilkRustValue>], time: f64, progress: f64) -> Result<Vec<Frame>, String> {
         if !time.is_finite() { return Err("Non-finite sprite time".into()); }
         if definitions.len() > MAX_SPRITES { return Err("Sprite instance limit exceeded".into()); }
         self.instances.resize_with(definitions.len(), Instance::default);
@@ -222,8 +302,12 @@ impl Runtime {
         let fps = if delta > 0.0 { 1.0 / delta } else { 60.0 };
         let mut frames = Vec::new();
         for (definition, instance) in definitions.iter().zip(&mut self.instances) {
+            // MD3 does not evaluate or draw a sprite on an unsupported layer.
+            if !(0..=4).contains(&definition.layer) { continue; }
             if instance.dead { continue; }
             if !instance.initialized { instance.scope = definition.values.clone(); }
+            let parent = parents.get(definition.preset_index).or_else(|| parents.first())
+                .ok_or("Sprite has no owning preset scope")?;
             for key in ["bass", "mid", "treb", "bass_att", "mid_att", "treb_att"] {
                 instance.scope.insert(key.into(), MilkRustValue::Number(milkrust_scope_number(parent, key, 0.0)));
             }
@@ -236,26 +320,45 @@ impl Runtime {
             }
             instance.scope = evaluate_milkrust_equations(&definition.code, &instance.scope)?;
             let value = |key: &str| instance.scope.get(key).and_then(MilkRustValue::as_number).unwrap_or(0.0);
-            for key in ["x", "y", "sx", "sy", "rot", "speed", "repeatx", "repeaty", "r", "g", "b", "a", "burn", "done", "flipx", "flipy", "blendmode", "layer"] {
+            for key in ["x", "y", "sx", "sy", "rot", "repeatx", "repeaty", "r", "g", "b", "a", "burn", "blendmode", "done", "flipx", "flipy"] {
                 if !value(key).is_finite() { return Err(format!("Non-finite sprite variable: {key}")); }
             }
-            // Preserve the script's accumulated angle. Wrapping the persistent
-            // register breaks conditions such as done=above(rot,2*$pi).
-            let rotation = value("rot") + value("speed").clamp(-1000.0, 1000.0) / fps;
+            // SpriteRot is an outer mode: 1/2 add/subtract elapsed time times
+            // SpriteSpeed. EEL `rot` remains an independent persistent value.
+            let spin = elapsed * definition.rotation_speed;
+            let rotation = value("rot") + if definition.rotation_mode == 1.0 { spin }
+                else if definition.rotation_mode == 2.0 { -spin } else { 0.0 };
+            let done = value("done") != 0.0;
+            let burn = match definition.burn_mode {
+                0 => false,
+                1 => true,
+                _ => value("burn") != 0.0,
+            };
+            let x = ((value("x") * 2.0 - 1.0).clamp(-1000.0, 1000.0) + definition.offset[0] + 1.0) * 0.5;
+            let y = ((value("y") * 2.0 - 1.0).clamp(-1000.0, 1000.0) + definition.offset[1] + 1.0) * 0.5;
+            // MilkDrop truncates the EEL value to int and clamps to its five
+            // classic sprite blend modes.
+            let requested_blend_mode = value("blendmode").trunc() as i32;
+            let blend_mode = requested_blend_mode.clamp(0, 4);
             frames.push(Frame {
+                preset_index: definition.preset_index,
                 texture: definition.texture.clone(), color_key: definition.color_key,
-                blend_mode: value("blendmode").clamp(0.0, 10.0) as i32, layer: (value("layer") + 0.5).floor().clamp(0.0, 4.0) as usize, burn: value("burn") != 0.0,
-                color: [value("r").clamp(0.0, 1.0), value("g").clamp(0.0, 1.0), value("b").clamp(0.0, 1.0), value("a").clamp(0.0, 1.0)],
-                center: [value("x").clamp(-500.0, 500.0) + definition.offset[0] * 0.5,
-                    value("y").clamp(-500.0, 500.0) + definition.offset[1] * 0.5],
-                scale: [(value("sx") + definition.size_offset[0]).clamp(-1000.0, 1000.0) * if value("flipx") == 0.0 { 1.0 } else { -1.0 },
-                    (value("sy") + definition.size_offset[1]).clamp(-1000.0, 1000.0) * if value("flipy") == 0.0 { 1.0 } else { -1.0 }],
-                repeat: [value("repeatx").clamp(0.01, 100.0), value("repeaty").clamp(0.01, 100.0)],
+                blend_mode, layer: definition.layer as usize, burn,
+                // RGB is saturated by the D3DCOLOR-compatible shader packer;
+                // script alpha is clamped before SpriteAlpha multiplies it,
+                // then left unclamped for the legacy low-byte conversion.
+                color: [value("r").clamp(0.0, 1.0), value("g").clamp(0.0, 1.0), value("b").clamp(0.0, 1.0), value("a").clamp(0.0, 1.0) * definition.alpha],
+                center: [x, y],
+                scale: [value("sx").clamp(-1000.0, 1000.0) + definition.size_offset[0],
+                    value("sy").clamp(-1000.0, 1000.0) + definition.size_offset[1]],
+                repeat: [value("repeatx").clamp(0.01, 100.0) * definition.repeat_multiplier[0],
+                    value("repeaty").clamp(0.01, 100.0) * definition.repeat_multiplier[1]],
+                flip: [value("flipx") != 0.0, value("flipy") != 0.0],
                 rotation,
+                final_burn: done && burn,
             });
             // The final frame may burn before the instance is retired.
-            instance.dead = value("done") != 0.0;
-            instance.scope.insert("rot".into(), MilkRustValue::Number(rotation));
+            instance.dead = done;
         }
         frames.sort_by_key(|frame| frame.layer);
         self.frame = self.frame.saturating_add(1);
@@ -264,8 +367,8 @@ impl Runtime {
 }
 
 /// Common native/WebGL sprite compositing; destination is a distinct snapshot,
-/// never the texture attached to the draw framebuffer. Modes 5..10 implement
-/// the named arithmetic operators; visual parity is tracked separately.
+/// never the texture attached to the draw framebuffer. The five mode IDs
+/// follow MilkDrop 3's fixed-function `DrawUserSprites` blend table.
 pub const FRAGMENT: &str = r#"#version 300 es
 precision highp float;
 uniform sampler2D spriteImage;
@@ -294,34 +397,37 @@ vec4 sprite_sample(vec2 coordinate) {
     return mix(mix(sprite_texel(origin,size), sprite_texel(origin+ivec2(1,0),size), weight.x),
         mix(sprite_texel(origin+ivec2(0,1),size), sprite_texel(origin+ivec2(1,1),size), weight.x), weight.y);
 }
+float sprite_byte(float value) {
+    // D3DCOLOR converts by truncation and stores the low eight bits. Alpha is
+    // intentionally allowed to wrap when SpriteAlpha takes it outside 0..1.
+    return mod(trunc(value * 255.0), 256.0) / 255.0;
+}
+vec4 sprite_diffuse(int mode) {
+    vec3 rgb = clamp(spriteTint.rgb, 0.0, 1.0);
+    float alpha = spriteTint.a;
+    if (mode == 1 || mode == 2) {
+        return vec4(sprite_byte(rgb.r * alpha), sprite_byte(rgb.g * alpha),
+            sprite_byte(rgb.b * alpha), 1.0);
+    }
+    if (mode == 3) return vec4(1.0);
+    return vec4(sprite_byte(rgb.r), sprite_byte(rgb.g), sprite_byte(rgb.b), sprite_byte(alpha));
+}
 void main() {
     vec4 sampleColor = sprite_sample(uv);
     vec4 background = texture(spriteBackground, gl_FragCoord.xy / spriteResolution);
-    vec3 raw = sampleColor.rgb;
-    // The five classic modes have distinct alpha sources. In modes 0..3
-    // texture alpha is ignored, including non-keyed transparent texels.
-    if (spriteBlend >= 5 && sampleColor.a <= 0.0) discard;
-    // Legacy vertex colors are packed to bytes by truncation. Modes using
-    // opacity in RGB multiply BEFORE packing (not after separate quantization).
-    vec4 tint = floor(clamp(spriteTint, 0.0, 1.0) * 255.0) / 255.0;
-    vec3 premultiplied = raw * floor(clamp(spriteTint.rgb * spriteTint.a, 0.0, 1.0) * 255.0) / 255.0;
-    vec3 src = raw * tint.rgb;
+    int mode = clamp(spriteBlend, 0, 4);
+    vec4 diffuse = sprite_diffuse(mode);
+    vec3 texel = sampleColor.rgb;
+    vec3 stage = diffuse.rgb * texel;
     vec3 dst = background.rgb;
-    float alpha = sampleColor.a * tint.a;
+    float alpha = diffuse.a;
+    if (mode == 3) stage = texel;
+    else if (mode == 4) alpha *= sampleColor.a;
     vec3 result;
-    if (spriteBlend == 1) result = premultiplied;
-    else if (spriteBlend == 2) result = dst + premultiplied;
-    else if (spriteBlend == 3) result = raw * raw + dst * (vec3(1.0) - raw);
-    else if (spriteBlend == 4) {
-        result = mix(dst, src, alpha);
-    }
-    else if (spriteBlend == 5) result = dst * src;
-    else if (spriteBlend == 6) result = dst * (vec3(1.0) - premultiplied);
-    else if (spriteBlend == 7) result = vec3(1.0) - src;
-    else if (spriteBlend == 8) result = vec3(0.0);
-    else if (spriteBlend == 9) result = dst * min(vec3(1.0), vec3(0.5) + src);
-    else if (spriteBlend == 10) result = dst + 2.0 * premultiplied;
-    else result = mix(dst, src, tint.a);
+    if (mode == 1) result = stage; // decal: blending disabled
+    else if (mode == 2) result = dst + stage;
+    else if (mode == 3) result = stage * stage + dst * (vec3(1.0) - stage);
+    else result = mix(dst, stage, alpha);
     outColor = vec4(clamp(result, 0.0, 1.0), background.a);
 }
 "#;
@@ -330,17 +436,17 @@ void main() {
 mod tests {
     use super::*;
     fn block(records: &str) -> String {
-        format!("[SPRITE2_BEGIN]\nSpriteName=sprites/burst.png\n{records}\n[SPRITE2_END]\n")
+        format!("[SPRITE1_BEGIN]\nSpriteName=sprites/burst.png\n{records}\n[SPRITE1_END]\n")
     }
 
     #[test]
-    fn neutral_saved_rotation_and_speed_do_not_accumulate_elapsed_twice() {
+    fn saved_rotation_mode_adds_absolute_time_without_mutating_eel_rot() {
         let definitions=extract(&block("SpriteRot=1\nSpriteSpeed=1"),true).unwrap().definitions;
         let mut runtime=Runtime::default();
         let first=runtime.render(&definitions,&BTreeMap::new(),0.0,0.0).unwrap();
         let second=runtime.render(&definitions,&BTreeMap::new(),0.5,0.0).unwrap();
-        assert!((first[0].rotation-1.0/60.0).abs()<1.0e-9);
-        assert!((second[0].rotation-1.0/60.0-0.5).abs()<1.0e-9);
+        assert_eq!(first[0].rotation, 0.0);
+        assert_eq!(second[0].rotation, 0.5);
     }
     #[test]
     fn rotation_register_can_cross_full_turns_and_retire_the_sprite() {
@@ -352,14 +458,16 @@ mod tests {
     }
 
     #[test]
-    fn scripted_mode_and_layer_use_legacy_integer_conversion_and_clamping() {
-        for (code, mode, layer) in [("blendmode=9.8;layer=2.7;", 9, 3),
-            ("blendmode=-2;layer=-1;", 0, 0), ("blendmode=99;layer=99;", 10, 4)] {
-            let definitions = extract(&block(&format!("code_1={code}")), true).unwrap().definitions;
+    fn saved_blend_and_layer_follow_the_preset_controls() {
+        for (records, mode, layer) in [("SpriteBlend=9\nSpriteLayer=2", 4, 2),
+            ("SpriteBlend=-2\nSpriteLayer=0", 0, 0), ("SpriteBlend=99\nSpriteLayer=4", 4, 4)] {
+            let definitions = extract(&block(records), true).unwrap().definitions;
             let frames = Runtime::default().render(&definitions, &BTreeMap::new(), 0.0, 0.0).unwrap();
             assert_eq!(frames[0].blend_mode, mode);
             assert_eq!(frames[0].layer, layer);
         }
+        let hidden = extract(&block("SpriteLayer=5\ncode_1=x=0;"), true).unwrap().definitions;
+        assert!(Runtime::default().render(&hidden, &BTreeMap::new(), 0.0, 0.0).unwrap().is_empty());
     }
 
     #[test]
@@ -379,13 +487,13 @@ mod tests {
 
     #[test]
     fn bounds_and_paths_are_checked_before_allocating_or_loading() {
-        for records in ["SpriteBlend=11", "SpriteX=NaN", "SpriteLayer=5", "code_999999=x=1;",
+        for records in ["SpriteBlend=bad", "SpriteX=NaN", "SpriteLayer=bad", "code_999999=x=1;",
             "SpriteName=../escape.png", "SpriteName=C:\\escape.png", "SpriteName=https://host/image.png", "unknown=1"] {
             assert!(extract(&block(records), true).is_err(), "{records}");
         }
-        assert!(extract(&block("").replace("[SPRITE2_END]", "[SPRITE3_END]"), true).is_err());
+        assert!(extract(&block("").replace("[SPRITE1_END]", "[SPRITE2_END]"), true).is_err());
         assert!(extract(&block("[SPRITE1_BEGIN]"), true).is_err());
-        let many = (0..=MAX_SPRITES).map(|i| block("").replace("SPRITE2_", &format!("SPRITE{i}_"))).collect::<String>();
+        let many = (1..=MAX_SPRITES + 1).map(|i| block("").replace("SPRITE1_", &format!("SPRITE{i}_"))).collect::<String>();
         assert!(extract(&many, true).is_err());
     }
 
@@ -423,8 +531,8 @@ mod tests {
     }
 
     #[test]
-    fn all_saved_modes_are_explicit_and_runtime_errors_propagate() {
-        for mode in 0..=10 {
+    fn all_classic_saved_modes_are_explicit_and_runtime_errors_propagate() {
+        for mode in 0..=4 {
             let blocks = extract(&block(&format!("SpriteBlend={mode}\nSpriteLayer=4")), true).unwrap();
             let frames = Runtime::default().render(&blocks.definitions, &BTreeMap::new(), 0.0, 0.5).unwrap();
             assert_eq!(frames[0].blend_mode, mode);

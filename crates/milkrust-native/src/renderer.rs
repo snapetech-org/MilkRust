@@ -34,6 +34,7 @@ impl Drop for Program { fn drop(&mut self) { unsafe { (self.gl.delete_program)(s
 struct Shader { gl: Gl, id: u32 }
 impl Drop for Shader { fn drop(&mut self) { unsafe { (self.gl.delete_shader)(self.id); } } }
 struct Texture { gl: Gl, id: u32, pixels: u64, width: u32, height: u32 }
+type TransitionMask = (milk2::TransitionMaskKey, Texture);
 struct Samplers { gl: Gl, ids: [u32; 4] }
 impl Drop for Samplers { fn drop(&mut self) { unsafe { (self.gl.delete_samplers)(4, self.ids.as_ptr()); } } }
 impl Drop for Texture { fn drop(&mut self) { unsafe { (self.gl.delete_textures)(1, &self.id); } } }
@@ -135,6 +136,27 @@ impl Texture {
         }
         Ok(texture)
     }
+
+    fn new_transition_mask(gl: Gl, width: u32, height: u32, data: &[u8]) -> Result<Self, String> {
+        if data.len() as u64 != u64::from(width) * u64::from(height) {
+            return Err("Invalid R8 transition mask length".into());
+        }
+        let mut id = 0;
+        unsafe { (gl.gen_textures)(1, &mut id); }
+        if id == 0 { return Err("GL could not allocate a transition mask".into()); }
+        let texture = Self { gl, id, pixels: u64::from(width) * u64::from(height), width, height };
+        unsafe {
+            (gl.active_texture)(TEXTURE0); (gl.bind_texture)(TEXTURE_2D, id);
+            (gl.pixel_store)(0x0CF5, 1);
+            (gl.tex_parameter)(TEXTURE_2D, 0x2801, 0x2600); // NEAREST
+            (gl.tex_parameter)(TEXTURE_2D, 0x2800, 0x2600);
+            (gl.tex_parameter)(TEXTURE_2D, 0x2802, 0x812F);
+            (gl.tex_parameter)(TEXTURE_2D, 0x2803, 0x812F);
+            (gl.tex_image)(TEXTURE_2D, 0, 0x8229, width as i32, height as i32, 0, 0x1903, 0x1401, data.as_ptr().cast());
+            if (gl.get_error)() != 0 { return Err("GL transition mask allocation/upload failed".into()); }
+        }
+        Ok(texture)
+    }
 }
 impl Target {
     fn new(gl: Gl, width: u32, height: u32) -> Result<Self, String> {
@@ -157,6 +179,7 @@ pub struct Renderer {
     gl: Gl, gles: bool, copy: Program, color: Program, textured: Program, blur_program: Program, samplers: Samplers, noise: BTreeMap<String, (Texture, u32)>,
     buffer: u32, vao: u32, max_texture: i32, texture_units: usize,
     width: u32, height: u32, capture: Option<(u32, u32, Target)>, layers: Vec<Layer>, textures: BTreeMap<String, Texture>,
+    transition_mask: Option<TransitionMask>,
 }
 impl Drop for Renderer {
     fn drop(&mut self) { unsafe { (self.gl.delete_buffers)(1, &self.buffer); (self.gl.delete_vertex_arrays)(1, &self.vao); } }
@@ -189,7 +212,7 @@ impl Renderer {
             (gl.gen_buffers)(1, &mut buffer); (gl.gen_vertex_arrays)(1, &mut vao);
         }
         let result = Self { sprite_program, sprite_snapshot: None, gl, gles, copy, color, textured, blur_program, samplers, noise: BTreeMap::new(), buffer, vao, max_texture, texture_units: units.max(0) as usize,
-            width: 0, height: 0, capture: None, layers: Vec::new(), textures: BTreeMap::new() };
+            width: 0, height: 0, capture: None, layers: Vec::new(), textures: BTreeMap::new(), transition_mask: None };
         if buffer == 0 || vao == 0 || max_texture < 64 || units < 4 { return Err("Insufficient OpenGL context resources".into()); }
         unsafe {
             (gl.disable)(0x0B71); (gl.disable)(0x0B44); (gl.disable)(0x0C11); // depth, cull, scissor
@@ -198,7 +221,7 @@ impl Renderer {
         Ok(result)
     }
 
-    pub fn reset(&mut self) { self.sprite_snapshot = None; self.layers.clear(); self.textures.clear(); self.noise.clear(); self.capture = None; self.width = 0; self.height = 0; }
+    pub fn reset(&mut self) { self.sprite_snapshot = None; self.layers.clear(); self.textures.clear(); self.noise.clear(); self.capture = None; self.transition_mask = None; self.width = 0; self.height = 0; }
 
     pub fn texture(&mut self, name: &str, width: u32, height: u32, bytes: &[u8]) -> Result<(), String> {
         dimensions(width, height, self.max_texture)?;
@@ -235,6 +258,19 @@ impl Renderer {
     fn prepare(&mut self, frames: &MilkRustFrameSet, width: u32, height: u32) -> Result<(), String> {
         dimensions(width, height, self.max_texture)?;
         if frames.entries.is_empty() || frames.entries.len() > 2 { return Err("Expected one or two preset layers".into()); }
+        let mask_key = frames.entries.get(1).and_then(|entry| {
+            let pattern = milk2::blend_pattern_code(&entry.blend_pattern)?;
+            (pattern != 0).then(|| milk2::TransitionMaskKey::new(pattern, entry.blend_alpha as f32,
+                entry.blend_direction, entry.blend_random.map(|value| value as f32), width, height))
+        });
+        if let Some(key) = mask_key {
+            if self.transition_mask.as_ref().is_none_or(|(cached, _)| *cached != key) {
+                let pixels = milk2::generate_transition_mask(key)?;
+                self.transition_mask = Some((key, Texture::new_transition_mask(self.gl, width, height, &pixels)?));
+            }
+        } else {
+            self.transition_mask = None;
+        }
         if frames.sprites.len() > milkrust_core::sprites::MAX_SPRITES { return Err("Too many sprite frames".into()); }
         for sprite in &frames.sprites { self.named_texture(&sprite.texture)?; }
         if !frames.sprites.is_empty() && self.sprite_snapshot.as_ref().is_none_or(|texture| texture.width != width || texture.height != height) {
@@ -250,7 +286,7 @@ impl Renderer {
             if vertices > MAX_VERTICES { return Err("Frame geometry exceeds 262144 vertices".into()); }
             for stage in [&frame.shader_stages.warp, &frame.shader_stages.composite] {
                 if stage.required && stage.source.is_empty() { return Err("Required shader could not be translated".into()); }
-                if stage.texture_samplers.len() + 1 > self.texture_units { return Err("Shader exceeds available texture units".into()); }
+                if stage.texture_samplers.len() + 2 > self.texture_units { return Err("Shader exceeds available texture units after reserving history and transition-mask units".into()); }
                 for name in &stage.texture_samplers {
                     match resources::texture_kind(name) {
                         TextureKind::Asset => { self.named_texture(name)?; }
@@ -403,6 +439,16 @@ impl Renderer {
             }
             program.integer(&format!("shaderTexture{index}"), (index + 1) as i32);
         }
+        let transition_unit = self.texture_units.saturating_sub(1);
+        program.integer("u_transitionMask", transition_unit as i32);
+        if transition.pattern != 0 {
+            let texture = &self.transition_mask.as_ref().ok_or("Missing generated transition mask")?.1;
+            unsafe {
+                (self.gl.active_texture)(TEXTURE0 + transition_unit as u32);
+                (self.gl.bind_sampler)(transition_unit as u32, 0);
+                (self.gl.bind_texture)(TEXTURE_2D, texture.id);
+            }
+        }
         unsafe { (self.gl.active_texture)(TEXTURE0); }
         Ok(())
     }
@@ -519,7 +565,7 @@ impl Renderer {
                     MilkRustDrawCommand::Textured(index) => self.draw_textured(frame.textured_primitives.get(index).ok_or("Invalid textured draw index")?, layer.targets[layer.read].texture.id)?,
                 }
             }
-            for sprite in frames.sprites.iter().filter(|sprite| sprite.burn && sprite.layer > 0) {
+            for sprite in frames.sprites.iter().filter(|sprite| sprite.preset_index == index && sprite.burn && sprite.layer > 0) {
                 self.draw_sprite(sprite)?;
             }
             self.build_resources(frame, layer, layer.targets[write].texture.id)?;
@@ -544,13 +590,15 @@ impl Renderer {
             // Back-layer burns become history for the next frame, after the
             // current composite has sampled it. Equations still ran only once.
             unsafe { (self.gl.bind_framebuffer)(FRAMEBUFFER, layer.targets[write].id); }
-            for sprite in frames.sprites.iter().filter(|sprite| sprite.burn && sprite.layer == 0) {
+            for sprite in frames.sprites.iter().filter(|sprite| sprite.preset_index == index && sprite.burn && sprite.layer == 0) {
                 self.draw_sprite(sprite)?;
             }
             self.layers[index].read = write;
         }
         unsafe { (self.gl.bind_framebuffer)(FRAMEBUFFER, output); }
-        for sprite in frames.sprites.iter().filter(|sprite| !sprite.burn) { self.draw_sprite(sprite)?; }
+        // All layers get their display draw. Burning layers were also stamped
+        // into feedback above, matching MD3's two draws for burn-enabled sprites.
+        for sprite in &frames.sprites { self.draw_sprite(sprite)?; }
         unsafe {
             (self.gl.disable)(BLEND); (self.gl.active_texture)(TEXTURE0);
             if (self.gl.get_error)() != 0 { return Err("OpenGL failed while rendering a preset pass".into()); }

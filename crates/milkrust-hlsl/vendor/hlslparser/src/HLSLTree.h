@@ -5,6 +5,7 @@
 #include "Engine.h"
 
 #include <new>
+#include <stdexcept>
 
 namespace M4
 {
@@ -122,7 +123,69 @@ enum HLSLBaseType
     HLSLBaseType_Ushort3,
     HLSLBaseType_Ushort4,*/
     HLSLBaseType_LastInteger = HLSLBaseType_Uint4,
-    HLSLBaseType_LastNumeric = HLSLBaseType_Uint4,
+    HLSLBaseType_Float1x1,
+    HLSLBaseType_Float1x2,
+    HLSLBaseType_Float1x3,
+    HLSLBaseType_Float1x4,
+    HLSLBaseType_Float2x1,
+    HLSLBaseType_Float3x1,
+    HLSLBaseType_Float4x1,
+    HLSLBaseType_Half1x1,
+    HLSLBaseType_Half1x2,
+    HLSLBaseType_Half1x3,
+    HLSLBaseType_Half1x4,
+    HLSLBaseType_Half2x1,
+    HLSLBaseType_Half3x1,
+    HLSLBaseType_Half4x1,
+    HLSLBaseType_Bool1x1,
+    HLSLBaseType_Bool1x2,
+    HLSLBaseType_Bool1x3,
+    HLSLBaseType_Bool1x4,
+    HLSLBaseType_Bool2x1,
+    HLSLBaseType_Bool2x2,
+    HLSLBaseType_Bool2x3,
+    HLSLBaseType_Bool2x4,
+    HLSLBaseType_Bool3x1,
+    HLSLBaseType_Bool3x2,
+    HLSLBaseType_Bool3x3,
+    HLSLBaseType_Bool3x4,
+    HLSLBaseType_Bool4x1,
+    HLSLBaseType_Bool4x2,
+    HLSLBaseType_Bool4x3,
+    HLSLBaseType_Bool4x4,
+    HLSLBaseType_Int1x1,
+    HLSLBaseType_Int1x2,
+    HLSLBaseType_Int1x3,
+    HLSLBaseType_Int1x4,
+    HLSLBaseType_Int2x1,
+    HLSLBaseType_Int2x2,
+    HLSLBaseType_Int2x3,
+    HLSLBaseType_Int2x4,
+    HLSLBaseType_Int3x1,
+    HLSLBaseType_Int3x2,
+    HLSLBaseType_Int3x3,
+    HLSLBaseType_Int3x4,
+    HLSLBaseType_Int4x1,
+    HLSLBaseType_Int4x2,
+    HLSLBaseType_Int4x3,
+    HLSLBaseType_Int4x4,
+    HLSLBaseType_Uint1x1,
+    HLSLBaseType_Uint1x2,
+    HLSLBaseType_Uint1x3,
+    HLSLBaseType_Uint1x4,
+    HLSLBaseType_Uint2x1,
+    HLSLBaseType_Uint2x2,
+    HLSLBaseType_Uint2x3,
+    HLSLBaseType_Uint2x4,
+    HLSLBaseType_Uint3x1,
+    HLSLBaseType_Uint3x2,
+    HLSLBaseType_Uint3x3,
+    HLSLBaseType_Uint3x4,
+    HLSLBaseType_Uint4x1,
+    HLSLBaseType_Uint4x2,
+    HLSLBaseType_Uint4x3,
+    HLSLBaseType_Uint4x4,
+    HLSLBaseType_LastNumeric = HLSLBaseType_Uint4x4,
     HLSLBaseType_Texture,
     HLSLBaseType_Sampler,           // @@ use type inference to determine sampler type.
     HLSLBaseType_Sampler2D,
@@ -156,7 +219,8 @@ inline bool IsSamplerType(HLSLBaseType baseType)
 inline bool IsMatrixType(HLSLBaseType baseType)
 {
     return (baseType >= HLSLBaseType_Float2x2 && baseType <= HLSLBaseType_Float3x4) ||
-        (baseType >= HLSLBaseType_Half2x2 && baseType <= HLSLBaseType_Half3x4);
+        (baseType >= HLSLBaseType_Half2x2 && baseType <= HLSLBaseType_Half3x4) ||
+        (baseType >= HLSLBaseType_Float1x1 && baseType <= HLSLBaseType_Uint4x4);
 }
 
 inline bool IsScalarType( HLSLBaseType baseType )
@@ -340,6 +404,7 @@ struct HLSLAttribute;
 
 struct HLSLType
 {
+    static const int MaxArrayRank = 16;
     explicit HLSLType(HLSLBaseType _baseType = HLSLBaseType_Unknown)
     {
         baseType    = _baseType;
@@ -347,6 +412,8 @@ struct HLSLType
         typeName    = NULL;
         array       = false;
         arraySize   = NULL;
+        arrayRank   = 0;
+        for (int i = 0; i < MaxArrayRank; ++i) arraySizes[i] = NULL;
         flags       = 0;
         addressSpace = HLSLAddressSpace_Undefined;
     }
@@ -355,8 +422,36 @@ struct HLSLType
     const char*         typeName;       // For user defined types.
     bool                array;
     HLSLExpression*     arraySize;
+    int                 arrayRank;
+    HLSLExpression*     arraySizes[MaxArrayRank];
     int                 flags;
     HLSLAddressSpace    addressSpace;
+
+    void InsertArrayDimension(int position, HLSLExpression* size)
+    {
+        if (arrayRank >= MaxArrayRank) throw std::length_error("HLSL array rank limit exceeded");
+        if (position < 0 || position > arrayRank) throw std::out_of_range("Invalid HLSL array dimension");
+        for (int i = arrayRank; i > position; --i) arraySizes[i] = arraySizes[i - 1];
+        arraySizes[position] = size;
+        ++arrayRank;
+        array = true;
+        arraySize = arraySizes[0];
+    }
+    void DropArrayDimension()
+    {
+        if (arrayRank <= 0) return;
+        for (int i = 1; i < arrayRank; ++i) arraySizes[i - 1] = arraySizes[i];
+        arraySizes[--arrayRank] = NULL;
+        array = arrayRank != 0;
+        arraySize = array ? arraySizes[0] : NULL;
+    }
+    void ClearArrayDimensions()
+    {
+        for (int i = 0; i < arrayRank; ++i) arraySizes[i] = NULL;
+        arrayRank = 0;
+        array = false;
+        arraySize = NULL;
+    }
 };
 
 inline bool IsSamplerType(const HLSLType & type)

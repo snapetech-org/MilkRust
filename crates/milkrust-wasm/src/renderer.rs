@@ -112,6 +112,7 @@ pub struct MilkRustWebGlRendererSet {
 
 struct MilkRustWebGlRenderer {
     sprite_pass: RefCell<Option<sprites::SpritePass>>,
+    transition_mask: RefCell<Option<(milk2::TransitionMaskKey, web_sys::WebGlTexture)>>,
     shader_resources: RefCell<ShaderResources>,
     buffer: web_sys::WebGlBuffer,
     feedback_targets: RefCell<MilkRustFeedbackTargets>,
@@ -262,8 +263,12 @@ impl MilkRustWebGlRendererSet {
             }
         }
         self.gl.bind_framebuffer(web_sys::WebGl2RenderingContext::FRAMEBUFFER, None);
-        if let Some(renderer) = renderers.first() {
-            for sprite in frame_set.sprites.iter().filter(|sprite| !sprite.burn) { renderer.draw_sprite(sprite)?; }
+        for sprite in &frame_set.sprites {
+            let renderer = renderers.get(sprite.preset_index)
+                .ok_or_else(|| JsValue::from_str("Sprite owner has no active preset renderer"))?;
+            // Burning sprites were also stamped into their owner's feedback
+            // above; every sprite receives the matching display-layer draw.
+            renderer.draw_sprite(sprite)?;
         }
         Ok(true)
     }
@@ -391,6 +396,7 @@ impl MilkRustWebGlRenderer {
 
         Ok(Self {
             sprite_pass: RefCell::new(None),
+            transition_mask: RefCell::new(None),
             u_color: gl.get_uniform_location(&program, "u_color"),
             u_counts: gl.get_uniform_location(&program, "u_counts"),
             u_display_only: gl.get_uniform_location(&program, "u_displayOnly"),
@@ -448,6 +454,7 @@ impl MilkRustWebGlRenderer {
         );
         let drawing_width = self.gl.drawing_buffer_width().max(1);
         let drawing_height = self.gl.drawing_buffer_height().max(1);
+        self.prepare_transition_mask(entry, drawing_width as u32, drawing_height as u32)?;
         let mut targets = self.feedback_targets.borrow_mut();
         if targets.width != drawing_width || targets.height != drawing_height {
             let next_targets = create_milkrust_feedback_targets(&self.gl, drawing_width, drawing_height)?;
@@ -491,7 +498,7 @@ impl MilkRustWebGlRenderer {
                 MilkRustDrawCommand::Textured(index) => self.draw_textured_primitives(std::slice::from_ref(frame.textured_primitives.get(index).ok_or_else(|| JsValue::from_str("Invalid textured draw index"))?), &targets.targets[read_index].texture)?,
             }
         }
-        for sprite in sprites.iter().filter(|sprite| sprite.burn && sprite.layer > 0) { self.draw_sprite(sprite)?; }
+        for sprite in sprites.iter().filter(|sprite| sprite.preset_index == entry.index && sprite.burn && sprite.layer > 0) { self.draw_sprite(sprite)?; }
         self.shader_resources.borrow_mut().build(frame, &targets.targets[write_index].texture);
 
         self.gl
@@ -530,7 +537,7 @@ impl MilkRustWebGlRenderer {
             self.gl.disable(web_sys::WebGl2RenderingContext::BLEND);
         }
         self.gl.bind_framebuffer(web_sys::WebGl2RenderingContext::FRAMEBUFFER, Some(&targets.targets[write_index].framebuffer));
-        for sprite in sprites.iter().filter(|sprite| sprite.burn && sprite.layer == 0) { self.draw_sprite(sprite)?; }
+        for sprite in sprites.iter().filter(|sprite| sprite.preset_index == entry.index && sprite.burn && sprite.layer == 0) { self.draw_sprite(sprite)?; }
         self.gl.bind_framebuffer(web_sys::WebGl2RenderingContext::FRAMEBUFFER, None);
         targets.read_index = write_index;
         if self.gl.get_error() != web_sys::WebGl2RenderingContext::NO_ERROR {
@@ -635,11 +642,66 @@ impl MilkRustWebGlRenderer {
         Ok(())
     }
 
+    fn prepare_transition_mask(&self, entry: &MilkRustCompositeFrame, width: u32, height: u32) -> Result<(), JsValue> {
+        let Some(pattern) = milk2::blend_pattern_code(&entry.blend_pattern).filter(|pattern| *pattern != 0) else {
+            if let Some((_, texture)) = self.transition_mask.borrow_mut().take() {
+                self.gl.delete_texture(Some(&texture));
+            }
+            return Ok(());
+        };
+        let key = milk2::TransitionMaskKey::new(pattern, entry.blend_alpha as f32, entry.blend_direction,
+            entry.blend_random.map(|value| value as f32), width, height);
+        if self.transition_mask.borrow().as_ref().is_some_and(|(cached, _)| *cached == key) { return Ok(()); }
+        let pixels = milk2::generate_transition_mask(key).map_err(|error| JsValue::from_str(&error))?;
+        let texture = self.gl.create_texture().ok_or_else(|| JsValue::from_str("WebGL transition mask allocation failed"))?;
+        self.gl.bind_texture(web_sys::WebGl2RenderingContext::TEXTURE_2D, Some(&texture));
+        self.gl.pixel_storei(web_sys::WebGl2RenderingContext::UNPACK_ALIGNMENT, 1);
+        self.gl.tex_parameteri(web_sys::WebGl2RenderingContext::TEXTURE_2D,
+            web_sys::WebGl2RenderingContext::TEXTURE_MIN_FILTER, web_sys::WebGl2RenderingContext::NEAREST as i32);
+        self.gl.tex_parameteri(web_sys::WebGl2RenderingContext::TEXTURE_2D,
+            web_sys::WebGl2RenderingContext::TEXTURE_MAG_FILTER, web_sys::WebGl2RenderingContext::NEAREST as i32);
+        self.gl.tex_parameteri(web_sys::WebGl2RenderingContext::TEXTURE_2D,
+            web_sys::WebGl2RenderingContext::TEXTURE_WRAP_S, web_sys::WebGl2RenderingContext::CLAMP_TO_EDGE as i32);
+        self.gl.tex_parameteri(web_sys::WebGl2RenderingContext::TEXTURE_2D,
+            web_sys::WebGl2RenderingContext::TEXTURE_WRAP_T, web_sys::WebGl2RenderingContext::CLAMP_TO_EDGE as i32);
+        let upload = self.gl.tex_image_2d_with_i32_and_i32_and_i32_and_format_and_type_and_opt_u8_array(
+            web_sys::WebGl2RenderingContext::TEXTURE_2D, 0, web_sys::WebGl2RenderingContext::R8 as i32,
+            width as i32, height as i32, 0, web_sys::WebGl2RenderingContext::RED,
+            web_sys::WebGl2RenderingContext::UNSIGNED_BYTE, Some(&pixels));
+        self.gl.pixel_storei(web_sys::WebGl2RenderingContext::UNPACK_ALIGNMENT, 4);
+        if let Err(error) = upload {
+            self.gl.delete_texture(Some(&texture));
+            return Err(error);
+        }
+        if self.gl.get_error() != web_sys::WebGl2RenderingContext::NO_ERROR {
+            self.gl.delete_texture(Some(&texture));
+            return Err(JsValue::from_str("WebGL transition mask upload failed"));
+        }
+        if let Some((_, previous)) = self.transition_mask.borrow_mut().replace((key, texture)) {
+            self.gl.delete_texture(Some(&previous));
+        }
+        Ok(())
+    }
+
+    fn bind_transition_mask(&self, program: &web_sys::WebGlProgram, transition: TransitionUniforms) {
+        let unit = self.max_texture_units.saturating_sub(1) as u32;
+        let texture = if transition.pattern == 0 {
+            &self.placeholder_texture
+        } else {
+            self.transition_mask.borrow().as_ref().map(|(_, texture)| texture).unwrap_or(&self.placeholder_texture)
+        };
+        self.gl.active_texture(web_sys::WebGl2RenderingContext::TEXTURE0 + unit);
+        self.gl.bind_texture(web_sys::WebGl2RenderingContext::TEXTURE_2D, Some(texture));
+        self.gl.bind_sampler(unit, None);
+        self.gl.uniform1i(self.gl.get_uniform_location(program, "u_transitionMask").as_ref(), unit as i32);
+        self.gl.active_texture(web_sys::WebGl2RenderingContext::TEXTURE0);
+    }
+
     fn prepare_stages(&self, frame: &MilkRustFrame) -> Result<(Option<web_sys::WebGlProgram>, Option<web_sys::WebGlProgram>), JsValue> {
         let units = self.max_texture_units;
-        if frame.shader_stages.warp.texture_samplers.len() + 1 > units ||
-            frame.shader_stages.composite.texture_samplers.len() + 1 > units {
-            return Err(JsValue::from_str("Preset exceeds the GPU texture-unit limit"));
+        if frame.shader_stages.warp.texture_samplers.len() + 2 > units ||
+            frame.shader_stages.composite.texture_samplers.len() + 2 > units {
+            return Err(JsValue::from_str("Preset exceeds the GPU texture-unit limit after reserving history and transition-mask units"));
         }
         let warp = self.translated_program_for(&frame.shader_stages.warp, &self.translated_warp_program,
             frame.warp_mesh.is_some()).map_err(|e| JsValue::from_str(&format!("Warp shader: {}", e.as_string().unwrap_or_default())))?;
@@ -749,6 +811,7 @@ impl MilkRustWebGlRenderer {
         self.gl.uniform1f(uniform("feedback").as_ref(), feedback);
         self.gl.uniform1f(uniform("outputAlpha").as_ref(), output_alpha);
         set_transition_uniforms(&self.gl, program, transition, drawing_width, drawing_height);
+        self.bind_transition_mask(program, transition);
         self.gl.uniform1f(uniform("isWarp").as_ref(), if warp { 1.0 } else { 0.0 });
         self.gl.uniform4f(uniform("motion").as_ref(), frame.rotation as f32, frame.zoom as f32,
             frame.dx as f32, frame.dy as f32);
@@ -904,6 +967,7 @@ impl MilkRustWebGlRenderer {
         self.gl
             .uniform1f(self.u_output_alpha.as_ref(), output_alpha);
         set_transition_uniforms(&self.gl, &self.program, transition, drawing_width, drawing_height);
+        self.bind_transition_mask(&self.program, transition);
         self.gl.uniform2f(
             self.u_resolution.as_ref(),
             drawing_width as f32,
@@ -1217,6 +1281,7 @@ impl Drop for MilkRustWebGlRenderer {
             if let Some(program) = cache.get_mut().take() { self.gl.delete_program(Some(&program.program)); }
         }
         self.gl.delete_texture(Some(&self.placeholder_texture));
+        if let Some((_, texture)) = self.transition_mask.get_mut().take() { self.gl.delete_texture(Some(&texture)); }
         self.named_textures.get_mut().clear();
     }
 }
