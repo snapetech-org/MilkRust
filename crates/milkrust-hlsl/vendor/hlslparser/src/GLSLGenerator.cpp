@@ -1011,8 +1011,8 @@ void GLSLGenerator::OutputStatements(int indent, HLSLStatement* statement, const
                 statement = statement->nextStatement;
                 continue;
             }
-            const bool deferred = indent == 0 && m_milkdropGlobals &&
-                (declaration->type.flags & HLSLTypeFlag_Const) == 0;
+            const bool deferred = indent == 0 && !IsSamplerType(declaration->type.baseType) &&
+                (m_milkdropGlobals || declaration->assignment != NULL) && !DirectConstantDeclaration(declaration);
 
             // GLSL doesn't seem have texture uniforms, so just ignore them.
             if (declaration->type.baseType != HLSLBaseType_Texture)
@@ -1725,7 +1725,11 @@ void GLSLGenerator::OutputEntryCaller(HLSLFunction* entryFunction)
             if (declaration->assignment) {
                 if (declaration->type.array) {
                     m_writer.Write("%s[]( ", GetTypeName(declaration->type));
-                    OutputExpressionList(declaration->assignment);
+                    HLSLType element = declaration->type; element.array = false; element.arraySize = NULL;
+                    for (auto* value = declaration->assignment; value; value = value->nextExpression) {
+                        OutputExpression(value, &element);
+                        if (value->nextExpression) m_writer.Write(", ");
+                    }
                     m_writer.Write(" )");
                 } else OutputExpression(declaration->assignment, &declaration->type);
             } else OutputDefaultValue(declaration->type);
@@ -1854,7 +1858,11 @@ void GLSLGenerator::OutputDeclaration(HLSLDeclaration* declaration, bool skipIni
         int value=0;
         constantIntegers = item->assignment && m_tree->GetExpressionValue(item->assignment, value);
     }
-    if (constantIntegers) declaredType.flags |= HLSLTypeFlag_Static;
+    bool directConstant = !skipInitializer;
+    for (auto* item = declaration; directConstant && item; item = item->nextDeclaration)
+        directConstant = DirectConstantDeclaration(item);
+    declaredType.flags &= ~(HLSLTypeFlag_Const | HLSLTypeFlag_Static);
+    if (directConstant || constantIntegers) declaredType.flags |= HLSLTypeFlag_Const | HLSLTypeFlag_Static;
     OutputDeclarationType(declaredType);
 
 	HLSLDeclaration* lastDecl = nullptr;

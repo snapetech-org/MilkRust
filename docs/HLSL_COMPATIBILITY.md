@@ -262,3 +262,16 @@ swizzles, with indices evaluated once. Single-component writes remain writable;
 repeated destinations still fail. Boolean scalar swizzles have typed helpers.
 The identifier pixel control and extended numeric/rejection cases are source
 only and have not run.
+
+## Readonly initializer lowering
+
+HLSL `const` and `static const` declarations no longer force GLSL `const` when
+matrix constructors, scalar swizzles or helper calls make their lowered
+initializer a runtime expression. Those globals initialize in declaration order
+inside the generated fragment entry, after the MilkDrop adapter supplies the
+shared environment. Locals retain their normal declaration location. Direct
+scalar/vector constant expressions retain GLSL const, including named texture
+LOD offsets, while array bounds are independently folded from the HLSL AST.
+Deferred array initializers convert each element to its declared type. The
+existing declaration and sampling controls now exercise these cases; they
+remain unrun.

@@ -1,5 +1,55 @@
 // Independently authored HLSL-to-GLSL numeric lowering. Included in the M4
 // namespace after GetTypeName, with the same compiler/output budgets.
+// HLSL readonly locals/globals may require helper calls during lowering.
+// Only retain GLSL const when the emitted expression is still a GLSL constant
+// expression. Array extents are independently folded from the typed HLSL AST.
+static bool DirectConstantExpression(HLSLExpression* expression);
+static bool DirectConstantDeclaration(HLSLDeclaration* declaration) {
+    DepthGuard depth;
+    if (!declaration || !(declaration->type.flags & HLSLTypeFlag_Const) || !declaration->assignment) return false;
+    for (auto* value = declaration->assignment; value; value = value->nextExpression)
+        if (!DirectConstantExpression(value)) return false;
+    return true;
+}
+static bool DirectConstantExpression(HLSLExpression* expression) {
+    DepthGuard depth;
+    if (!expression || !(expression->expressionType.flags & HLSLTypeFlag_Const) ||
+        IsMatrixType(expression->expressionType.baseType) || expression->expressionType.baseType == HLSLBaseType_UserDefined) return false;
+    switch (expression->nodeType) {
+        case HLSLNodeType_LiteralExpression: return true;
+        case HLSLNodeType_IdentifierExpression:
+            return DirectConstantDeclaration(static_cast<HLSLIdentifierExpression*>(expression)->declaration);
+        case HLSLNodeType_ConstructorExpression: {
+            for (auto* a = static_cast<HLSLConstructorExpression*>(expression)->argument; a; a = a->nextExpression)
+                if (!DirectConstantExpression(a)) return false;
+            return true;
+        }
+        case HLSLNodeType_CastingExpression:
+            return DirectConstantExpression(static_cast<HLSLCastingExpression*>(expression)->expression);
+        case HLSLNodeType_UnaryExpression: {
+            auto* unary = static_cast<HLSLUnaryExpression*>(expression);
+            if (unary->unaryOp != HLSLUnaryOp_Positive && unary->unaryOp != HLSLUnaryOp_Negative &&
+                unary->unaryOp != HLSLUnaryOp_Not && unary->unaryOp != HLSLUnaryOp_BitNot) return false;
+            return DirectConstantExpression(unary->expression);
+        }
+        case HLSLNodeType_BinaryExpression: {
+            auto* binary = static_cast<HLSLBinaryExpression*>(expression);
+            if (IsAssignOp(binary->binaryOp) ||
+                (IsLogicOp(binary->binaryOp) && IsVectorType(binary->expressionType)) ||
+                (binary->binaryOp == HLSLBinaryOp_Mod &&
+                    (ScalarBaseType[binary->expressionType.baseType] == HLSLBaseType_Float ||
+                     ScalarBaseType[binary->expressionType.baseType] == HLSLBaseType_Half))) return false;
+            return DirectConstantExpression(binary->expression1) && DirectConstantExpression(binary->expression2);
+        }
+        case HLSLNodeType_ConditionalExpression: {
+            auto* conditional = static_cast<HLSLConditionalExpression*>(expression);
+            return IsScalarType(conditional->condition->expressionType) && DirectConstantExpression(conditional->condition) &&
+                DirectConstantExpression(conditional->trueExpression) && DirectConstantExpression(conditional->falseExpression);
+        }
+        default: return false;
+    }
+}
+
 struct MatrixSelection {
     HLSLExpression* matrix = NULL;
     HLSLExpression* row = NULL;
