@@ -29,11 +29,16 @@ static bool ConvertConstant(ScalarConstant& value, HLSLBaseType type) {
     return true;
 }
 
+static bool EvaluateScalar(HLSLTree& tree, HLSLExpression* expression, ScalarConstant& result);
+static bool EvaluateComponent(HLSLTree& tree, HLSLExpression* expression, size_t component, ScalarConstant& result);
+
 static bool EvaluateScalar(HLSLTree& tree, HLSLExpression* expression, ScalarConstant& result) {
     DepthGuard depth;
     if (!expression || !(expression->expressionType.flags & HLSLTypeFlag_Const) ||
         expression->expressionType.array || !IsScalarType(expression->expressionType)) return false;
     const auto output = expression->expressionType.baseType;
+    if (expression->nodeType == HLSLNodeType_MemberAccess || expression->nodeType == HLSLNodeType_ArrayAccess)
+        return EvaluateComponent(tree, expression, 0, result) && ConvertConstant(result, output);
     if (expression->nodeType == HLSLNodeType_LiteralExpression) {
         const auto* literal = static_cast<HLSLLiteralExpression*>(expression);
         result.type = output;
@@ -52,12 +57,12 @@ static bool EvaluateScalar(HLSLTree& tree, HLSLExpression* expression, ScalarCon
     }
     if (expression->nodeType == HLSLNodeType_CastingExpression) {
         auto* cast = static_cast<HLSLCastingExpression*>(expression);
-        return EvaluateScalar(tree, cast->expression, result) && ConvertConstant(result, output);
+        return EvaluateComponent(tree, cast->expression, 0, result) && ConvertConstant(result, output);
     }
     if (expression->nodeType == HLSLNodeType_ConstructorExpression) {
         auto* constructor = static_cast<HLSLConstructorExpression*>(expression);
         if (!constructor->argument || constructor->argument->nextExpression) return false;
-        return EvaluateScalar(tree, constructor->argument, result) && ConvertConstant(result, output);
+        return EvaluateComponent(tree, constructor->argument, 0, result) && ConvertConstant(result, output);
     }
     if (expression->nodeType == HLSLNodeType_ConditionalExpression) {
         auto* conditional = static_cast<HLSLConditionalExpression*>(expression);
@@ -146,4 +151,141 @@ static bool EvaluateScalar(HLSLTree& tree, HLSLExpression* expression, ScalarCon
     }
     result = ScalarConstant(output, isUnsigned ? double(static_cast<std::uint32_t>(value)) : double(CheckedConstant(value)));
     return true;
+}
+
+static HLSLLiteralExpression ConstantLiteral(const ScalarConstant& value) {
+    HLSLLiteralExpression literal;
+    literal.nodeType = HLSLNodeType_LiteralExpression;
+    literal.fileName = NULL; literal.line = 0;
+    literal.type = value.type; literal.expressionType = HLSLType(value.type);
+    literal.expressionType.flags = HLSLTypeFlag_Const;
+    if (value.type == HLSLBaseType_Bool) literal.bValue = value.value != 0;
+    else if (value.type == HLSLBaseType_Float || value.type == HLSLBaseType_Half) literal.fValue = static_cast<float>(value.value);
+    else {
+        const auto bits = static_cast<std::uint32_t>(static_cast<std::int64_t>(value.value));
+        literal.iValue = int(bits <= 0x7fffffffu ? std::int64_t(bits) : std::int64_t(bits) - 0x100000000ll);
+    }
+    return literal;
+}
+
+static size_t ConstantComponentCount(HLSLTree& tree, const HLSLType& type) {
+    std::vector<HLSLBaseType> components;
+    AggregateScalarTypes(tree, type, components);
+    return components.size();
+}
+
+static size_t ConstantCastComponent(const HLSLType& source, const HLSLType& target, size_t index) {
+    if (!source.array && IsScalarType(source)) return 0;
+    if (!source.array && !target.array && IsMatrixType(source.baseType) && IsMatrixType(target.baseType)) {
+        const size_t row = index / size_t(NumericWidth(target.baseType));
+        const size_t column = index % size_t(NumericWidth(target.baseType));
+        if (row >= size_t(MatrixRows(source.baseType)) || column >= size_t(NumericWidth(source.baseType)))
+            throw std::invalid_argument("Invalid constant matrix cast shape");
+        return row * size_t(NumericWidth(source.baseType)) + column;
+    }
+    return index;
+}
+
+static bool EvaluateComponent(HLSLTree& tree, HLSLExpression* expression, size_t component, ScalarConstant& result) {
+    DepthGuard depth;
+    if (!expression || !(expression->expressionType.flags & HLSLTypeFlag_Const)) return false;
+    const auto& type = expression->expressionType;
+    if (!type.array && IsScalarType(type) && expression->nodeType != HLSLNodeType_MemberAccess &&
+        expression->nodeType != HLSLNodeType_ArrayAccess)
+        return component == 0 && EvaluateScalar(tree, expression, result);
+    std::vector<HLSLBaseType> components;
+    AggregateScalarTypes(tree, type, components);
+    if (component >= components.size()) throw std::invalid_argument("HLSL constant component is out of bounds");
+    const auto output = components[component];
+    if (expression->nodeType == HLSLNodeType_IdentifierExpression) {
+        auto* identifier = static_cast<HLSLIdentifierExpression*>(expression);
+        auto* declaration = identifier->declaration ? identifier->declaration : tree.FindGlobalDeclaration(identifier->name);
+        return declaration && (declaration->type.flags & HLSLTypeFlag_Const) &&
+            EvaluateComponent(tree, declaration->assignment, component, result) && ConvertConstant(result, output);
+    }
+    if (expression->nodeType == HLSLNodeType_ConstructorExpression) {
+        auto* constructor = static_cast<HLSLConstructorExpression*>(expression);
+        if (!constructor->initializer && constructor->argument && !constructor->argument->nextExpression) {
+            auto* argument = constructor->argument;
+            return EvaluateComponent(tree, argument, ConstantCastComponent(argument->expressionType, type, component), result) && ConvertConstant(result, output);
+        }
+        for (auto* argument = constructor->argument; argument; argument = argument->nextExpression) {
+            const size_t count = ConstantComponentCount(tree, argument->expressionType);
+            if (component < count) return EvaluateComponent(tree, argument, component, result) && ConvertConstant(result, output);
+            component -= count;
+        }
+        return false;
+    }
+    if (expression->nodeType == HLSLNodeType_CastingExpression) {
+        auto* cast = static_cast<HLSLCastingExpression*>(expression);
+        return EvaluateComponent(tree, cast->expression, ConstantCastComponent(cast->expression->expressionType, type, component), result) && ConvertConstant(result, output);
+    }
+    if (expression->nodeType == HLSLNodeType_MemberAccess) {
+        auto* member = static_cast<HLSLMemberAccess*>(expression);
+        const auto& object = member->object->expressionType;
+        size_t selected = 0;
+        if (!object.array && object.baseType == HLSLBaseType_UserDefined) {
+            auto* structure = tree.FindGlobalStruct(object.typeName);
+            auto* field = structure ? structure->field : NULL;
+            for (; field && !String_Equal(field->name, member->field); field = field->nextField)
+                selected += ConstantComponentCount(tree, field->type);
+            if (!field) return false;
+            selected += component;
+        } else if (!object.array && IsMatrixType(object.baseType)) {
+            const char* p = member->field;
+            for (size_t i = 0; i <= component; ++i) {
+                if (*p++ != '_') return false;
+                const int base = *p == 'm' ? (++p, '0') : '1';
+                if (!p[0] || !p[1]) return false;
+                const int row = p[0] - base, column = p[1] - base;
+                if (row < 0 || column < 0 || row >= MatrixRows(object.baseType) || column >= NumericWidth(object.baseType)) return false;
+                selected = size_t(row * NumericWidth(object.baseType) + column); p += 2;
+            }
+        } else if (!object.array && (IsScalarType(object) || IsVectorType(object))) {
+            if (component >= strlen(member->field)) return false;
+            const char* alphabet = "xyzw";
+            const char* found = strchr(alphabet, member->field[component]);
+            if (!found) { alphabet = "rgba"; found = strchr(alphabet, member->field[component]); }
+            if (!found) return false;
+            selected = size_t(found - alphabet);
+        } else return false;
+        return EvaluateComponent(tree, member->object, selected, result) && ConvertConstant(result, output);
+    }
+    if (expression->nodeType == HLSLNodeType_ArrayAccess) {
+        auto* access = static_cast<HLSLArrayAccess*>(expression);
+        ScalarConstant index;
+        if (!EvaluateScalar(tree, access->index, index) || !ConvertConstant(index, HLSLBaseType_Int)) return false;
+        const auto& array = access->array->expressionType;
+        const int extent = array.array ? AggregateArrayExtent(tree, array) :
+            IsMatrixType(array.baseType) ? MatrixRows(array.baseType) : NumericWidth(array.baseType);
+        if (index.value < 0 || index.value >= extent) throw std::invalid_argument("HLSL constant index is out of bounds");
+        return EvaluateComponent(tree, access->array, size_t(index.value) * components.size() + component, result) && ConvertConstant(result, output);
+    }
+    if (expression->nodeType == HLSLNodeType_ConditionalExpression) {
+        auto* conditional = static_cast<HLSLConditionalExpression*>(expression);
+        ScalarConstant condition;
+        const auto index = IsScalarType(conditional->condition->expressionType) ? 0 : component;
+        if (!EvaluateComponent(tree, conditional->condition, index, condition)) return false;
+        auto* selected = condition.value != 0 ? conditional->trueExpression : conditional->falseExpression;
+        return EvaluateComponent(tree, selected, ConstantCastComponent(selected->expressionType, type, component), result) && ConvertConstant(result, output);
+    }
+    if (expression->nodeType == HLSLNodeType_UnaryExpression) {
+        auto unary = *static_cast<HLSLUnaryExpression*>(expression);
+        ScalarConstant operand;
+        if (!EvaluateComponent(tree, unary.expression, component, operand)) return false;
+        auto literal = ConstantLiteral(operand); unary.expression = &literal;
+        unary.expressionType = HLSLType(output); unary.expressionType.flags = HLSLTypeFlag_Const;
+        return EvaluateScalar(tree, &unary, result);
+    }
+    if (expression->nodeType == HLSLNodeType_BinaryExpression) {
+        auto binary = *static_cast<HLSLBinaryExpression*>(expression);
+        ScalarConstant a, b;
+        if (!EvaluateComponent(tree, binary.expression1, ConstantCastComponent(binary.expression1->expressionType, type, component), a) ||
+            !EvaluateComponent(tree, binary.expression2, ConstantCastComponent(binary.expression2->expressionType, type, component), b)) return false;
+        auto left = ConstantLiteral(a), right = ConstantLiteral(b);
+        binary.expression1 = &left; binary.expression2 = &right;
+        binary.expressionType = HLSLType(output); binary.expressionType.flags = HLSLTypeFlag_Const;
+        return EvaluateScalar(tree, &binary, result);
+    }
+    return false;
 }

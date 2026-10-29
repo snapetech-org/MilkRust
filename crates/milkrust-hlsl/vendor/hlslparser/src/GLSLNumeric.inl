@@ -28,6 +28,16 @@ static bool DirectConstantExpression(HLSLExpression* expression) {
         }
         case HLSLNodeType_CastingExpression:
             return DirectConstantExpression(static_cast<HLSLCastingExpression*>(expression)->expression);
+        case HLSLNodeType_MemberAccess: {
+            auto* member = static_cast<HLSLMemberAccess*>(expression);
+            return !member->object->expressionType.array && IsVectorType(member->object->expressionType) &&
+                DirectConstantExpression(member->object);
+        }
+        case HLSLNodeType_ArrayAccess: {
+            auto* access = static_cast<HLSLArrayAccess*>(expression);
+            return !access->array->expressionType.array && IsVectorType(access->array->expressionType) &&
+                DirectConstantExpression(access->array) && DirectConstantExpression(access->index);
+        }
         case HLSLNodeType_UnaryExpression: {
             auto* unary = static_cast<HLSLUnaryExpression*>(expression);
             if (unary->unaryOp != HLSLUnaryOp_Positive && unary->unaryOp != HLSLUnaryOp_Negative &&

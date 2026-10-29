@@ -113,6 +113,9 @@ mod tests {
             "float2 values[]={1,2,3};",
             "float3 values={1};",
             "float values[4096]={float4(1,2,3,4)};",
+            "const int2 n=int2(2,3); float values[n[2]];",
+            "const int n[2]={2,3}; float values[n[-1]];",
+            "const int2 n=int2(2147483647,1)+int2(1,0); float values[n.x];",
             "vector<float,5> v;",
             "typedef float Tone; typedef int Tone;",
             "[unroll(0)] for(int i=0;i<2;i++) {}",
@@ -149,6 +152,23 @@ mod tests {
             let source = format!("float4 main(float2 uv:TEXCOORD0):COLOR0 {{ {statement} return 1; }}");
             assert!(compile(&source, "main").is_err(), "invalid selection accepted: {statement}");
         }
+    }
+
+    #[test]
+    fn readonly_values_and_temporary_outputs_are_rejected() {
+        for statement in [
+            "const float value=uv.x; value=1;",
+            "const float2 value=uv; value.x++;",
+            "const float values[2]={1,2}; ++values[0];",
+            "const float value=0; float part=modf(uv.x,value);",
+            "float part=modf(uv.x,float(0));",
+            "(uv+float2(1,1)).x=0;",
+        ] {
+            let source = format!("float4 main(float2 uv:TEXCOORD0):COLOR0 {{ {statement} return 1; }}");
+            assert!(compile(&source, "main").is_err(), "invalid write accepted: {statement}");
+        }
+        let source = "float change(const float v) { v=1; return v; } float4 main(float2 uv:TEXCOORD0):COLOR0 { return change(uv.x); }";
+        assert!(compile(source, "main").is_err());
     }
 
     #[test]

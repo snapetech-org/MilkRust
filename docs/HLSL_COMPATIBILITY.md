@@ -300,3 +300,19 @@ single-evaluation side effects; the native and browser cases are unrun.
 
 Semantic references: Microsoft's [legacy aggregate rules](https://microsoft.github.io/hlsl-specs/proposals/0005-strict-initializer-lists/)
 and [elementwise/splat conversions](https://microsoft.github.io/hlsl-specs/specs/4-Conv.html).
+
+
+Constant array bounds now also resolve vector swizzles, matrix masks/row
+indices, array elements and nested struct fields, including flattened aggregate
+initializers and typed component-wise arithmetic. Readonly selections propagate
+their qualifier; bounds still require provable values. Out-of-range constant
+indices, cycles, overflow and expansion limits produce diagnostics. Direct
+constant vector swizzles remain GLSL constant expressions for texture offsets.
+The aggregate fixture and invalid-input cases include these paths; they have
+not been executed.
+
+Assignments, increment/decrement, and `out`/`inout` arguments now validate that
+the destination is a writable variable or selection. Readonly struct fields,
+array/vector/matrix selections and `const` parameters remain protected even
+when their GLSL declarations need runtime initialization. Dedicated invalid
+write cases are included in the unrun native suite.

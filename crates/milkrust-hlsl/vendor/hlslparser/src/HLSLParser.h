@@ -97,6 +97,7 @@ private:
     bool ParseAttributeBlock(HLSLAttribute*& attribute);
 
     bool CheckForUnexpectedEndOfStream(int endToken);
+    bool CheckWritable(HLSLExpression* expression);
 
     const HLSLStruct* FindUserDefinedType(const char* name) const;
 

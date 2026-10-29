@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <cmath>
 #include "HLSLNumeric.h"
+#include "HLSLAggregates.h"
 
 namespace M4
 {

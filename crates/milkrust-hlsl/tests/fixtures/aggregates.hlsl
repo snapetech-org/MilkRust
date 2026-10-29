@@ -26,5 +26,15 @@ float4 main(float2 coord:TEXCOORD0):COLOR0 {
     ok = ok && pair[1]==2 && all(unpacked==2) && copied[1].y==4;
     const int2 offset = {{0},0};
     ok = ok && all(offset==0);
+    const int3 sizes = int3(2,3,4);
+    const int3 adjusted = sizes + int3(1,1,1);
+    const Block dimensions = {float3(1,2,3),4,5,6,float4(7,8,9,10),true};
+    const int constants[] = {sizes,5};
+    const int n = adjusted.y + constants[0] - dimensions.lanes[0].n;
+    float selected[n] = {1,2,3};
+    const float2x3 rows = {{1,2,3},{4,5,6}};
+    const int matrixCount = (int)rows[1][1] - (int)rows._13;
+    float matrixSelected[matrixCount] = {7,8};
+    ok = ok && n==3 && selected[2]==3 && matrixSelected[1]==8;
     return ok ? float4(.75,.5,.25,1) : float4(1,0,0,1);
 }

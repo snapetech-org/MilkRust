@@ -1772,6 +1772,21 @@ bool HLSLParser::CheckTypeCast(const HLSLType& srcType, const HLSLType& dstType)
     return true;
 }
 
+bool HLSLParser::CheckWritable(HLSLExpression* expression)
+{
+    DepthGuard depth;
+    if (expression->expressionType.flags & HLSLTypeFlag_Const) {
+        m_tokenizer.Error("Cannot write a readonly HLSL value"); return false;
+    }
+    if (expression->nodeType == HLSLNodeType_IdentifierExpression) return true;
+    if (expression->nodeType == HLSLNodeType_MemberAccess)
+        return CheckWritable(static_cast<HLSLMemberAccess*>(expression)->object);
+    if (expression->nodeType == HLSLNodeType_ArrayAccess)
+        return CheckWritable(static_cast<HLSLArrayAccess*>(expression)->array);
+    m_tokenizer.Error("HLSL assignment or output argument requires a writable variable or selection");
+    return false;
+}
+
 bool HLSLParser::ParseExpression(HLSLExpression*& expression)
 {
     DepthGuard milkrustDepth;
@@ -1783,6 +1798,7 @@ bool HLSLParser::ParseExpression(HLSLExpression*& expression)
     HLSLBinaryOp assignOp;
     if (AcceptAssign(assignOp))
     {
+        if (!CheckWritable(expression)) return false;
         HLSLExpression* expression2 = NULL;
         if (!ParseExpression(expression2))
         {
@@ -2061,6 +2077,8 @@ bool HLSLParser::ParseTerminalExpression(HLSLExpression*& expression, bool& need
         {
             return false;
         }
+        if ((unaryOp == HLSLUnaryOp_PreIncrement || unaryOp == HLSLUnaryOp_PreDecrement) &&
+            !CheckWritable(unaryExpression->expression)) return false;
         if (unaryOp == HLSLUnaryOp_BitNot)
         {
             if (unaryExpression->expression->expressionType.baseType < HLSLBaseType_FirstInteger ||
@@ -2249,6 +2267,7 @@ bool HLSLParser::ParseTerminalExpression(HLSLExpression*& expression, bool& need
         HLSLUnaryOp unaryOp;
         while (AcceptUnaryOperator(false, unaryOp))
         {
+            if (!CheckWritable(expression)) return false;
             HLSLUnaryExpression* unaryExpression = m_tree->AddNode<HLSLUnaryExpression>(fileName, line);
             unaryExpression->unaryOp = unaryOp;
             unaryExpression->expression = expression;
@@ -2297,7 +2316,7 @@ bool HLSLParser::ParseTerminalExpression(HLSLExpression*& expression, bool& need
                 if (IsMatrixType(base)) arrayAccess->expressionType.baseType = NumericShape(ScalarBaseType[base], 0, NumericWidth(base));
                 else if (IsVectorType(base)) arrayAccess->expressionType.baseType = ScalarBaseType[base];
                 else { m_tokenizer.Error("array, matrix, vector, or indexable object type expected in index expression"); return false; }
-
+                arrayAccess->expressionType.flags = expression->expressionType.flags & HLSLTypeFlag_Const;
             }
 
             expression = arrayAccess;
@@ -2330,6 +2349,12 @@ bool HLSLParser::ParseTerminalExpression(HLSLExpression*& expression, bool& need
             }
 
             functionCall->function = function;
+            auto* parameter = function->argument;
+            for (auto* actual = functionCall->argument; parameter && actual;
+                parameter = parameter->nextArgument, actual = actual->nextExpression) {
+                if ((parameter->modifier == HLSLArgumentModifier_Out || parameter->modifier == HLSLArgumentModifier_Inout) &&
+                    !CheckWritable(actual)) return false;
+            }
             functionCall->expressionType = function->returnType;
             expression = functionCall;
         }
@@ -2411,6 +2436,7 @@ bool HLSLParser::ParseArgumentList(HLSLArgument*& firstArgument, int& numArgumen
         {
             return false;
         }
+        if (argument->modifier == HLSLArgumentModifier_Const) argument->type.flags |= HLSLTypeFlag_Const;
 
         DeclareVariable( argument->name, argument->type );
 
@@ -3644,6 +3670,7 @@ bool HLSLParser::GetMemberType(const HLSLType& objectType, HLSLMemberAccess * me
             if (field->name == fieldName)
             {
                 memberAccess->expressionType = field->type;
+                memberAccess->expressionType.flags |= objectType.flags & HLSLTypeFlag_Const;
                 return true;
             }
             field = field->nextField;
@@ -3746,6 +3773,7 @@ bool HLSLParser::GetMemberType(const HLSLType& objectType, HLSLMemberAccess * me
     }
 
     memberAccess->swizzle = true;
+    memberAccess->expressionType.flags = objectType.flags & HLSLTypeFlag_Const;
 
     return true;
 }
