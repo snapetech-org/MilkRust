@@ -3,7 +3,11 @@
 use std::collections::BTreeMap;
 use crate::{MilkRustValue, evaluate_milkrust_equations, milkrust_scope_number};
 
+/// MilkDrop's preset texture manager exposes 16 sprite slots. Its separate
+/// external sprite image cache can hold 100 assets; those are not preset slots.
 pub const MAX_SPRITES: usize = 16;
+const MAX_SPRITE_RECORDS: usize = 64;
+const DEFAULT_COLOR_KEY_ARGB: u32 = 0xff00_0000;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Definition {
@@ -47,7 +51,7 @@ pub fn extract(source: &str, enabled: bool) -> Result<Blocks, String> {
         if let Some(index) = marker(line, "_BEGIN]") {
             if current.is_some() { return Err("Nested embedded sprite block".into()); }
             blocks += 1;
-            if blocks > 64 { return Err("More than 64 saved sprite records".into()); }
+            if blocks > MAX_SPRITE_RECORDS { return Err("More than 64 saved sprite records".into()); }
             current = Some(index);
             records.clear();
         } else if let Some(index) = marker(line, "_END]") {
@@ -86,6 +90,7 @@ pub fn enabled(source: &str) -> bool {
 }
 
 fn definition(index: u32, records: &BTreeMap<String, String>) -> Result<Definition, String> {
+    if index >= MAX_SPRITES as u32 { return Err("Embedded sprite index exceeds MilkDrop's 16 preset slots".into()); }
     let texture = records.get("spritename").or_else(|| records.get("img"))
         .ok_or("Embedded sprite has no image name")?.trim_matches(['\'', '"']).replace('\\', "/");
     if texture.is_empty() || texture.len() > 512 || texture.starts_with('/') || texture.contains(':')
@@ -93,10 +98,14 @@ fn definition(index: u32, records: &BTreeMap<String, String>) -> Result<Definiti
         return Err("Embedded sprite image must be a relative pack asset".into());
     }
     let color_key = match records.get("spritecolorkey").or_else(|| records.get("colorkey")) {
-        None => 0,
+        None => DEFAULT_COLOR_KEY_ARGB,
         Some(value) => {
             let hex = value.strip_prefix("0x").or_else(|| value.strip_prefix("0X")).unwrap_or(value);
-            u32::from_str_radix(hex, 16).ok().filter(|v| *v <= 0xffffff).ok_or("Invalid sprite color key")?
+            let parsed = u32::from_str_radix(hex, 16).ok().ok_or("Invalid sprite color key")?;
+            if hex.len() > 6 { return Err("Invalid sprite color key".into()); }
+            // MilkDrop passes 0xff000000 | ck to D3DX, forcing an opaque RGB
+            // color key regardless of the source image's alpha.
+            0xff00_0000 | parsed
         }
     };
     let mut values = BTreeMap::new();
@@ -168,6 +177,14 @@ pub struct Frame {
 }
 
 impl Frame {
+    /// The saved key is ARGB; GL uniforms use RGBA order.
+    pub fn color_key_rgba(&self) -> [f32; 4] {
+        [((self.color_key >> 16) & 255) as f32 / 255.0,
+         ((self.color_key >> 8) & 255) as f32 / 255.0,
+         (self.color_key & 255) as f32 / 255.0,
+         ((self.color_key >> 24) & 255) as f32 / 255.0]
+    }
+
     /// Image aspect is applied before rotation; screen aspect after rotation.
     /// UVs are bottom-up for the common GL texture upload convention.
     pub fn geometry(&self, image: (u32, u32), screen: (u32, u32)) -> (Vec<f64>, Vec<f64>) {
@@ -255,17 +272,16 @@ uniform sampler2D spriteImage;
 uniform sampler2D spriteBackground;
 uniform vec2 spriteResolution;
 uniform vec4 spriteTint;
-uniform vec3 spriteColorKey;
+uniform vec4 spriteColorKey;
 uniform int spriteBlend;
 in vec2 uv;
 out vec4 outColor;
 vec4 sprite_texel(ivec2 point, ivec2 size) {
     point = ((point % size) + size) % size;
     vec4 color = texelFetch(spriteImage, point, 0);
-    // D3DX uses an opaque ARGB key and replaces the whole matching texel
-    // with transparent black. A partially transparent matching RGB is not a key.
-    if (color.a >= 1.0 - 0.5 / 255.0 &&
-        all(lessThanEqual(abs(color.rgb - spriteColorKey), vec3(0.5 / 255.0)))) color = vec4(0.0);
+    // D3DX uses an ARGB key and replaces the whole matching texel with
+    // transparent black before sampling.
+    if (all(lessThanEqual(abs(color - spriteColorKey), vec4(0.5 / 255.0)))) color = vec4(0.0);
     return color;
 }
 vec4 sprite_sample(vec2 coordinate) {
@@ -369,7 +385,7 @@ mod tests {
         }
         assert!(extract(&block("").replace("[SPRITE2_END]", "[SPRITE3_END]"), true).is_err());
         assert!(extract(&block("[SPRITE1_BEGIN]"), true).is_err());
-        let many = (0..17).map(|i| block("").replace("SPRITE2_", &format!("SPRITE{i}_"))).collect::<String>();
+        let many = (0..=MAX_SPRITES).map(|i| block("").replace("SPRITE2_", &format!("SPRITE{i}_"))).collect::<String>();
         assert!(extract(&many, true).is_err());
     }
 

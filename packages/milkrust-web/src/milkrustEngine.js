@@ -341,6 +341,12 @@ const loadMilkRustModule = async (modulePath = globalThis.__milkrustModulePath |
     }
     await rustModuleInitPromise;
   }
+  if (typeof rustModule.setTextureDecoderWorkerUrl === 'function') {
+    const decoderUrl = new URL('milkrust_texture_decoder.js', absoluteMilkRustUrl(modulePath)).href;
+    if (globalThis.location?.origin && new URL(decoderUrl).origin === globalThis.location.origin) {
+      rustModule.setTextureDecoderWorkerUrl(decoderUrl);
+    }
+  }
   if (typeof rustModule.initializeHlslCompiler === 'function' && !hlslInitializations.has(rustModule)) {
     const compilerUrl = new URL('milkrust_hlsl.js', absoluteMilkRustUrl(modulePath)).href;
     const ready = Promise.resolve().then(() => rustModule.initializeHlslCompiler(compilerUrl)).catch((error) => {

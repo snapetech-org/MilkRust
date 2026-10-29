@@ -62,8 +62,8 @@ impl SpritePass {
         gl.uniform1i(uniform("spriteBackground").as_ref(), 1);
         gl.uniform2f(uniform("spriteResolution").as_ref(), size.0 as f32, size.1 as f32);
         gl.uniform4f(uniform("spriteTint").as_ref(), sprite.color[0] as f32, sprite.color[1] as f32, sprite.color[2] as f32, sprite.color[3] as f32);
-        gl.uniform3f(uniform("spriteColorKey").as_ref(), ((sprite.color_key >> 16) & 255) as f32 / 255.0,
-            ((sprite.color_key >> 8) & 255) as f32 / 255.0, (sprite.color_key & 255) as f32 / 255.0);
+        let color_key = sprite.color_key_rgba();
+        gl.uniform4f(uniform("spriteColorKey").as_ref(), color_key[0], color_key[1], color_key[2], color_key[3]);
         gl.uniform1i(uniform("spriteBlend").as_ref(), sprite.blend_mode);
         let (positions, uvs) = sprite.geometry(image_size, (size.0 as u32, size.1 as u32));
         let mut vertices = Vec::with_capacity(16);

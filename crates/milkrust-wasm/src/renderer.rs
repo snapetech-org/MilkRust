@@ -160,23 +160,33 @@ struct MilkRustTranslatedProgram {
 struct MilkRustTextureAsset {
     gl: web_sys::WebGl2RenderingContext,
     texture: web_sys::WebGlTexture,
-    image: Option<web_sys::HtmlImageElement>,
-    width: u32,
-    height: u32,
+    dimensions: Rc<Cell<(u32, u32)>>,
     // None while loading, Some(Ok) after upload, Some(Err) after decode/upload failure.
     state: Rc<RefCell<Option<Result<(), String>>>>,
     total_pixels: Rc<Cell<u64>>,
     reserved_pixels: u64,
-    _onload: Option<Closure<dyn FnMut(web_sys::Event)>>,
-    _onerror: Option<Closure<dyn FnMut(web_sys::Event)>>,
+    worker: Option<web_sys::Worker>,
+    worker_url: Option<String>,
+    worker_timeout_id: Option<i32>,
+    _onmessage: Option<Closure<dyn FnMut(web_sys::MessageEvent)>>,
+    _onerror: Option<Closure<dyn FnMut(web_sys::ErrorEvent)>>,
+    _timeout: Option<Closure<dyn FnMut()>>,
 }
 
 impl Drop for MilkRustTextureAsset {
     fn drop(&mut self) {
-        if let Some(image) = &self.image {
-            image.set_onload(None);
-            image.set_onerror(None);
-            image.set_src("");
+        if let Some(worker) = &self.worker {
+            worker.set_onmessage(None);
+            worker.set_onerror(None);
+            worker.terminate();
+        }
+        if let Some(timeout_id) = self.worker_timeout_id {
+            if let Some(window) = web_sys::window() {
+                window.clear_timeout_with_handle(timeout_id);
+            }
+        }
+        if let Some(url) = &self.worker_url {
+            revoke_image_decoder_worker_url(url);
         }
         self.gl.delete_texture(Some(&self.texture));
         self.total_pixels.set(self.total_pixels.get().saturating_sub(self.reserved_pixels));
@@ -721,7 +731,7 @@ impl MilkRustWebGlRenderer {
             let dimensions = self.shader_resources.borrow().dimensions(name).or_else(|| {
                 let assets = self.named_textures.borrow();
                 get_milkrust_texture_name_aliases(name).iter().find_map(|alias|
-                    assets.get(alias).map(|asset| asset.image.as_ref().map_or((asset.width, asset.height), |image| (image.natural_width(), image.natural_height()))))
+                    assets.get(alias).map(|asset| asset.dimensions.get()))
             });
             let (width, height) = dimensions.filter(|(w,h)| *w > 0 && *h > 0)
                 .ok_or_else(|| JsValue::from_str("Shader texture dimensions are unavailable"))?;
@@ -1031,7 +1041,7 @@ impl MilkRustWebGlRenderer {
         let dimensions = {
             let textures = self.named_textures.borrow();
             get_milkrust_texture_name_aliases(&sprite.texture).iter().find_map(|alias| textures.get(alias))
-                .map(|asset| asset.image.as_ref().map_or((asset.width, asset.height), |image| (image.natural_width(), image.natural_height())))
+                .map(|asset| asset.dimensions.get())
                 .ok_or_else(|| JsValue::from_str("Sprite image dimensions are unavailable"))?
         };
         let mut pass = self.sprite_pass.borrow_mut();
@@ -1381,6 +1391,37 @@ fn create_milkrust_placeholder_texture(
     Ok(texture)
 }
 
+fn create_image_decoder_worker() -> Result<(web_sys::Worker, String), JsValue> {
+    if let Some(url) = crate::TEXTURE_DECODER_WORKER_URL.with(|value| value.borrow().clone()) {
+        if let Ok(worker) = web_sys::Worker::new(&url) {
+            return Ok((worker, url));
+        }
+        // A same-origin URL can still be rejected by worker-src or fail to
+        // load. The fallback remains subject to the page's blob: CSP policy.
+    }
+
+    // Direct wasm-bindgen users can omit the static package URL; keep a bounded
+    // blob-worker fallback for that integration style. The web SDK sets the
+    // same-origin static worker URL when possible so strict CSPs can avoid `blob:`.
+    let parts = js_sys::Array::new();
+    parts.push(&JsValue::from_str(include_str!("../texture_decoder_worker.js")));
+    let options = web_sys::BlobPropertyBag::new();
+    options.set_type("text/javascript");
+    let blob = web_sys::Blob::new_with_str_sequence_and_options(&parts, &options)?;
+    let url = web_sys::Url::create_object_url_with_blob(&blob)?;
+    match web_sys::Worker::new(&url) {
+        Ok(worker) => Ok((worker, url)),
+        Err(error) => {
+            let _ = web_sys::Url::revoke_object_url(&url);
+            Err(error)
+        }
+    }
+}
+
+fn revoke_image_decoder_worker_url(url: &str) {
+    if url.starts_with("blob:") { let _ = web_sys::Url::revoke_object_url(url); }
+}
+
 fn create_milkrust_texture_from_data_url(
     gl: &web_sys::WebGl2RenderingContext,
     data_url: &str,
@@ -1398,9 +1439,10 @@ fn create_milkrust_texture_from_data_url(
     // each admit an image against the same unused allocation budget.
     total_pixels.set(total_pixels.get() + pixels);
     let mut asset = MilkRustTextureAsset {
-        gl: gl.clone(), texture, image: None, width, height,
+        gl: gl.clone(), texture, dimensions: Rc::new(Cell::new((width, height))),
         state: Rc::new(RefCell::new(None)), total_pixels, reserved_pixels: pixels,
-        _onload: None, _onerror: None,
+        worker: None, worker_url: None, worker_timeout_id: None,
+        _onmessage: None, _onerror: None, _timeout: None,
     };
     if matches!(source.format, Format::Dds | Format::Tga) {
         let decoded = source.decode_legacy().map_err(|e| JsValue::from_str(&e))?;
@@ -1423,46 +1465,132 @@ fn create_milkrust_texture_from_data_url(
         *asset.state.borrow_mut() = Some(Ok(()));
         return Ok(asset);
     }
-    let image = web_sys::HtmlImageElement::new()?;
+
+    // Browser codecs run inside a disposable Worker. A malformed compressed
+    // image may stall JS or allocate unexpectedly; terminating the worker
+    // bounds renderer-thread waiting, but cannot contain a browser-process OOM.
+    let (worker, worker_url) = create_image_decoder_worker()?;
+    asset.worker = Some(worker.clone());
+    asset.worker_url = Some(worker_url.clone());
+
     let gl_for_load = gl.clone();
     let texture_for_load = asset.texture.clone();
-    let image_for_load = image.clone();
+    let dimensions_for_load = asset.dimensions.clone();
     let state_for_load = asset.state.clone();
-    let onload = Closure::<dyn FnMut(web_sys::Event)>::wrap(Box::new(move |_event| {
+    let worker_for_load = worker.clone();
+    let url_for_load = worker_url.clone();
+    let timeout_for_load = Rc::new(Cell::new(None));
+    let timeout_id_for_load = timeout_for_load.clone();
+    let onmessage = Closure::<dyn FnMut(web_sys::MessageEvent)>::wrap(Box::new(move |event| {
+        if let Some(timeout_id) = timeout_id_for_load.get() {
+            if let Some(window) = web_sys::window() { window.clear_timeout_with_handle(timeout_id); }
+        }
+        worker_for_load.set_onmessage(None);
+        worker_for_load.set_onerror(None);
+        worker_for_load.terminate();
+        revoke_image_decoder_worker_url(&url_for_load);
+
         // An image decode can finish between context restoration and the next
         // frame's rebuild. Never bind an object from the retired GPU generation.
         if gl_for_load.is_context_lost() || !gl_for_load.is_texture(Some(&texture_for_load)) {
             *state_for_load.borrow_mut() = Some(Err("Texture upload belongs to a lost or retired graphics context".into()));
+            if let Ok(value) = js_sys::Reflect::get(&event.data(), &JsValue::from_str("bitmap")) {
+                if let Ok(bitmap) = value.dyn_into::<web_sys::ImageBitmap>() { bitmap.close(); }
+            }
             return;
         }
+        let data = event.data();
+        let decode_error = js_sys::Reflect::get(&data, &JsValue::from_str("error"))
+            .ok().and_then(|value| value.as_string());
+        if let Some(error) = decode_error {
+            *state_for_load.borrow_mut() = Some(Err(error));
+            return;
+        }
+        let bitmap = match js_sys::Reflect::get(&data, &JsValue::from_str("bitmap"))
+            .ok().and_then(|value| value.dyn_into::<web_sys::ImageBitmap>().ok()) {
+            Some(bitmap) => bitmap,
+            None => {
+                *state_for_load.borrow_mut() = Some(Err("Image decoder returned no bitmap".into()));
+                return;
+            }
+        };
         // EXIF orientation can swap dimensions without changing the pixel budget.
-        let actual = (image_for_load.natural_width(), image_for_load.natural_height());
+        let actual = (bitmap.width(), bitmap.height());
         if actual != (width, height) && actual != (height, width) {
             *state_for_load.borrow_mut() = Some(Err("Decoded dimensions disagree with admitted texture header".into()));
+            bitmap.close();
             return;
         }
         gl_for_load.active_texture(web_sys::WebGl2RenderingContext::TEXTURE0);
         gl_for_load.bind_texture(web_sys::WebGl2RenderingContext::TEXTURE_2D, Some(&texture_for_load));
-        gl_for_load.pixel_storei(web_sys::WebGl2RenderingContext::UNPACK_FLIP_Y_WEBGL, 1);
-        let result = gl_for_load.tex_image_2d_with_u32_and_u32_and_html_image_element(
+        gl_for_load.pixel_storei(web_sys::WebGl2RenderingContext::UNPACK_FLIP_Y_WEBGL, 0);
+        let result = gl_for_load.tex_image_2d_with_u32_and_u32_and_image_bitmap(
             web_sys::WebGl2RenderingContext::TEXTURE_2D, 0,
             web_sys::WebGl2RenderingContext::RGBA as i32, web_sys::WebGl2RenderingContext::RGBA,
-            web_sys::WebGl2RenderingContext::UNSIGNED_BYTE, &image_for_load,
+            web_sys::WebGl2RenderingContext::UNSIGNED_BYTE, &bitmap,
         );
         gl_for_load.pixel_storei(web_sys::WebGl2RenderingContext::UNPACK_FLIP_Y_WEBGL, 0);
-        *state_for_load.borrow_mut() = Some(result.map_err(|error| error.as_string().unwrap_or_else(|| "GPU upload failed".into()))
+        bitmap.close();
+        let result = result.map_err(|error| error.as_string().unwrap_or_else(|| "GPU upload failed".into()))
             .and_then(|()| if gl_for_load.get_error() == web_sys::WebGl2RenderingContext::NO_ERROR { Ok(()) }
-                else { Err("GPU texture upload failed".into()) }));
+                else { Err("GPU texture upload failed".into()) });
+        if result.is_ok() { dimensions_for_load.set(actual); }
+        *state_for_load.borrow_mut() = Some(result);
     }));
     let state_for_error = asset.state.clone();
-    let onerror = Closure::<dyn FnMut(web_sys::Event)>::wrap(Box::new(move |_event| {
-        *state_for_error.borrow_mut() = Some(Err("Image could not be decoded".into()));
+    let worker_for_error = worker.clone();
+    let url_for_error = worker_url.clone();
+    let timeout_id_for_error = timeout_for_load.clone();
+    let onerror = Closure::<dyn FnMut(web_sys::ErrorEvent)>::wrap(Box::new(move |_event| {
+        if let Some(timeout_id) = timeout_id_for_error.get() {
+            if let Some(window) = web_sys::window() { window.clear_timeout_with_handle(timeout_id); }
+        }
+        worker_for_error.set_onmessage(None);
+        worker_for_error.set_onerror(None);
+        worker_for_error.terminate();
+        revoke_image_decoder_worker_url(&url_for_error);
+        *state_for_error.borrow_mut() = Some(Err("Image decoder worker failed".into()));
     }));
-    image.set_onload(Some(onload.as_ref().unchecked_ref()));
-    image.set_onerror(Some(onerror.as_ref().unchecked_ref()));
-    asset.image = Some(image.clone());
-    asset._onload = Some(onload); asset._onerror = Some(onerror);
-    image.set_src(data_url);
+    worker.set_onmessage(Some(onmessage.as_ref().unchecked_ref()));
+    worker.set_onerror(Some(onerror.as_ref().unchecked_ref()));
+
+    let timeout_worker = worker.clone();
+    let timeout_url = worker_url;
+    let timeout_state = asset.state.clone();
+    let timeout_id = timeout_for_load.clone();
+    let timeout = Closure::<dyn FnMut()>::wrap(Box::new(move || {
+        timeout_worker.set_onmessage(None);
+        timeout_worker.set_onerror(None);
+        timeout_worker.terminate();
+        revoke_image_decoder_worker_url(&timeout_url);
+        *timeout_state.borrow_mut() = Some(Err("Image decode timed out".into()));
+        timeout_id.set(None);
+    }));
+    let window = web_sys::window().ok_or_else(|| JsValue::from_str("Browser window is unavailable"))?;
+    let timeout_handle = window.set_timeout_with_callback_and_timeout_and_arguments_0(
+        timeout.as_ref().unchecked_ref(), 8000,
+    )?;
+    timeout_for_load.set(Some(timeout_handle));
+    asset.worker_timeout_id = Some(timeout_handle);
+    asset._onmessage = Some(onmessage);
+    asset._onerror = Some(onerror);
+    asset._timeout = Some(timeout);
+    let mime = match source.format {
+        Format::Png => "image/png", Format::Jpeg => "image/jpeg", Format::Gif => "image/gif",
+        Format::Bmp => "image/bmp", Format::WebP => "image/webp",
+        Format::Dds | Format::Tga => return Err(JsValue::from_str("Legacy images require the bounded Rust decoder")),
+    };
+    let encoded = js_sys::Uint8Array::from(source.bytes.as_slice());
+    let parts = js_sys::Array::new();
+    parts.push(&encoded);
+    let blob_options = web_sys::BlobPropertyBag::new();
+    blob_options.set_type(mime);
+    let image_blob = web_sys::Blob::new_with_u8_array_sequence_and_options(&parts, &blob_options)?;
+    let request = js_sys::Object::new();
+    js_sys::Reflect::set(request.as_ref(), &JsValue::from_str("blob"), image_blob.as_ref())?;
+    js_sys::Reflect::set(request.as_ref(), &JsValue::from_str("width"), &JsValue::from_f64(f64::from(width)))?;
+    js_sys::Reflect::set(request.as_ref(), &JsValue::from_str("height"), &JsValue::from_f64(f64::from(height)))?;
+    worker.post_message(request.as_ref())?;
     Ok(asset)
 }
 

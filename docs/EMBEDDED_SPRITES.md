@@ -5,9 +5,11 @@ records from preset equations. It retains the original records for export,
 selects the last definition of an index, and honors the envelope's `sprite=0`.
 Unknown active fields, mismatched/nested blocks, non-finite values and external
 asset paths fail explicitly. Disabled records are preserved without executing
-code or admitting image dependencies. Limits are 16 active sprites, 64 saved
-records, six-digit indices, 1024 numbered equation lines and the existing source,
-expression-work and texture budgets.
+code or admitting image dependencies. Limits are the 16 preset sprite slots
+(indices 0–15) and 64 saved records, 1024 numbered equation lines and the existing
+source, expression-work and texture budgets. MilkDrop3's external sprite image
+cache can hold 100 assets; that cache capacity is separate from the 16 slots a
+preset can address.
 
 Each sprite has its own persistent scope. `init_N` executes once, `code_N` in
 numeric order each frame, with elapsed sprite time, frame, fps, audio bands and
@@ -38,8 +40,11 @@ multiplicative, destination times inverse source, inverted source, cut-off,
 darken and double-additive vivid. The six extended names do not all have their
 conventional image-editor meaning. Color keys match opaque source texels (ARGB, not RGB alone) before the shared
 manual bilinear sample and replace the whole matching texel with transparent
-black. Other texels retain their RGBA values. This follows D3DX texture-loading
-semantics; it corrects the earlier alpha-only key replacement. Modes 5–10 keep
+black. Other texels retain their RGBA values. The saved RGB key is promoted to
+opaque ARGB, matching MilkDrop's `0xff000000 | ck` texture-loader argument. This
+follows D3DX texture-loading semantics; it corrects the earlier alpha-only key
+replacement.
+Modes 5–10 keep
 the existing transparent-pixel guard pending MD3 reference comparisons.
 Alpha/filter raster parity and the extended modes remain unqualified.
 

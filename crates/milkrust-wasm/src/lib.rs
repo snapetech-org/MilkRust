@@ -11,6 +11,33 @@ use milkrust_core::{
 };
 use wasm_bindgen::{prelude::*, JsCast};
 
+thread_local! {
+    pub(crate) static TEXTURE_DECODER_WORKER_URL: RefCell<Option<String>> = RefCell::new(None);
+}
+
+/// Set a same-origin static decoder worker URL before creating an engine.
+/// The web SDK configures this automatically when the package and page share
+/// an origin; direct wasm-bindgen clients may use this to satisfy a CSP that
+/// disallows `blob:` workers.
+#[wasm_bindgen(js_name = setTextureDecoderWorkerUrl)]
+pub fn set_texture_decoder_worker_url(url: &str) -> Result<(), JsValue> {
+    if url.len() > 2048 || url.chars().any(char::is_control) {
+        return Err(JsValue::from_str("Invalid image decoder worker URL"));
+    }
+    let parsed = web_sys::Url::new(url)?;
+    if !matches!(parsed.protocol().as_str(), "http:" | "https:") {
+        return Err(JsValue::from_str("Image decoder worker must use HTTP or HTTPS"));
+    }
+    let location = js_sys::Reflect::get(&js_sys::global(), &JsValue::from_str("location"))?;
+    let origin = js_sys::Reflect::get(&location, &JsValue::from_str("origin"))?
+        .as_string().ok_or_else(|| JsValue::from_str("Page origin is unavailable"))?;
+    if parsed.origin() != origin {
+        return Err(JsValue::from_str("Image decoder worker must be same-origin with the page"));
+    }
+    TEXTURE_DECODER_WORKER_URL.with(|current| *current.borrow_mut() = Some(url.to_string()));
+    Ok(())
+}
+
 /// Initialize the matching compiler module before importing shader presets.
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen(js_name = initializeHlslCompiler)]

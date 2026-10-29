@@ -133,16 +133,24 @@ reference-image result is implied.
 ## Embedded browser textures
 
 The WebGL path validates MIME, strict base64, encoded size and raster dimensions
-before creating an HTML image. PNG/JPEG/BMP/static GIF/WebP use the browser codec;
-legacy DDS (DXT1/3/5 and masked RGB24/32) and TGA (truecolor/grayscale, raw/RLE)
-use bounded Rust decoding and direct RGBA upload. Both paths use 4096-per-side,
+before creating a browser codec input. PNG/JPEG/BMP/static GIF/WebP decode inside
+a disposable Web Worker; an 8-second timeout terminates a stalled worker, decoded
+dimensions are checked again, and the transferred ImageBitmap is uploaded without
+copying its pixels through the renderer thread. The web package stages a static
+worker and uses it when it shares the page's origin, allowing strict CSP
+deployments to avoid `blob:`; a rejected static worker falls back to the blob
+worker when policy permits. Direct wasm-bindgen users can configure a same-origin
+URL or use the bounded blob-worker fallback. Legacy DDS
+(DXT1/3/5 and masked RGB24/32) and TGA (truecolor/grayscale, raw/RLE) use
+bounded Rust decoding and direct RGBA upload. Both paths use 4096-per-side,
 8-megapixel-per-image and 32-megapixel-per-preset limits. Pixel capacity is reserved
 before asynchronous loads and returned on disposal, including upload failures.
 DDS/TGA rows are oriented consistently with native uploads, and named samplers
 receive actual dimensions. EXIF dimension swaps preserve the same pixel budget.
-Animated raster containers are explicitly rejected by this static texture path;
-the browser codec and graphics driver still are not process-isolated. CPU and
-browser upload regression sources have been added but not executed.
+Animated raster containers are explicitly rejected by this static texture path.
+Worker termination cannot contain browser-process OOM or native codec work that
+escapes the worker, and it does not isolate the graphics driver. CPU and browser
+upload regression sources have been added but not executed.
 
 The WASM engine owns removable context-loss/restoration listeners. It requests
 browser recovery, pauses equation/frame work while lost, and recreates all GPU

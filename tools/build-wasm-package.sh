@@ -32,3 +32,6 @@ mkdir -p "$out_dir"
   "$repo_root/target/wasm32-unknown-unknown/release/milkrust_wasm.wasm" \
   --target web \
   --out-dir "$out_dir"
+
+cp "$repo_root/crates/milkrust-wasm/texture_decoder_worker.js" \
+  "$out_dir/milkrust_texture_decoder.js"

@@ -479,8 +479,8 @@ impl Renderer {
         program.bind(); program.integer("spriteImage", 0); program.integer("spriteBackground", 1);
         program.vector2("spriteResolution", self.width as f32, self.height as f32);
         program.vector4("spriteTint", sprite.color[0] as f32, sprite.color[1] as f32, sprite.color[2] as f32, sprite.color[3] as f32);
-        program.vector3("spriteColorKey", ((sprite.color_key >> 16) & 255) as f32 / 255.0,
-            ((sprite.color_key >> 8) & 255) as f32 / 255.0, (sprite.color_key & 255) as f32 / 255.0);
+        let color_key = sprite.color_key_rgba();
+        program.vector4("spriteColorKey", color_key[0], color_key[1], color_key[2], color_key[3]);
         program.integer("spriteBlend", sprite.blend_mode);
         let (positions, uvs) = sprite.geometry((image.width, image.height), (self.width, self.height));
         self.draw(0x0006, &interleave(&positions, &uvs, &[], [1.0; 4])?)?;

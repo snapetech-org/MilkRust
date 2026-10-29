@@ -43,7 +43,7 @@ GPU capture or device run was performed for this source-only continuation.
   the profile. User names are isolated from GLSL keywords/intrinsics. Readonly
   initializers use valid GLSL storage, and writes to readonly values fail.
 - Classic sprite modes 0–3 preserve image RGB independently of image alpha;
-  mode 4 combines alphas. ARGB color keys clear matching opaque texels before
+  mode 4 combines alphas. Full ARGB color keys clear matching texels before
   filtering, and vertex colors follow legacy byte quantization. Rotation remains
   unwrapped for equations; scripted selectors convert/clamp as documented.
 - All 24 legacy rotation matrices, constant registers `_c0.._c13`, canonical
@@ -74,7 +74,13 @@ GPU capture or device run was performed for this source-only continuation.
 - WebGL admits static raster headers before codec allocation, reserves aggregate
   pixel capacity before asynchronous loading, and decodes legacy DDS/TGA through
   bounded Rust code. Context restoration recreates GPU resources from retained
-  source/assets. Native/browser decoder, upload and recovery regressions are unrun.
+  source/assets. PNG/JPEG/BMP/GIF/WebP decode now runs in a disposable Web Worker
+  with an 8-second termination timeout, bitmap dimension checks, and transferred
+  ImageBitmap upload. The web SDK packages a static worker and configures it only
+  when it is same-origin with the page; a rejected static worker falls back to a
+  blob worker when CSP allows it. Direct wasm-bindgen users may configure a
+  same-origin URL or use the blob-worker fallback.
+  Native/browser decoder, upload and recovery regressions are unrun.
 - Private JIT build entrypoints include native C++ and browser compiler delivery.
   Regression sources cover the typed compiler, resource bindings, unsafe input,
   initialization retry and browser render failures; they remain unrun.
@@ -96,8 +102,10 @@ GPU capture or device run was performed for this source-only continuation.
 - Complete format/EEL/texture behavior for every corpus file, including other legacy
   encodings, other executable extensions and unsupported formats. UTF-8, BOM-marked UTF-16
   and Windows-1252 now have bounded decoders; preserve every remaining exception.
-- Compiler/driver hang containment, browser decoder allocation isolation,
-  recovery qualification, long-run resource/performance and accessibility evidence.
+- Compiler/driver process/device hang containment, browser-process OOM isolation
+  for native codec internals, recovery qualification, long-run resource/performance
+  and accessibility evidence. Worker termination only bounds JS-side decoder
+  waiting; it cannot sandbox browser-process memory failure or a wedged GPU driver.
 - Qualified broader archives, rights review for historical collections, production
   key custody, committed public roots, signed publication and installed-app checks.
 
