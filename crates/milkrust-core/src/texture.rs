@@ -1,11 +1,73 @@
 //! Bounded embedded raster admission and legacy DDS/TGA decoding. Inspection
 //! happens before a browser codec is allowed to allocate its decoded image.
+use std::io::Cursor;
+
 pub const MAX_ENCODED_BYTES: usize = 16 * 1024 * 1024;
 pub const MAX_PIXELS: u64 = 8 * 1024 * 1024;
+pub const MAX_GIF_FRAMES: usize = 120;
+pub const MAX_GIF_TOTAL_PIXELS: u64 = 16 * 1024 * 1024;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Format { Png, Jpeg, Gif, Bmp, WebP, Dds, Tga }
 pub struct ImageSource { pub format: Format, pub width: u32, pub height: u32, pub bytes: Vec<u8> }
 pub struct RgbaImage { pub width: u32, pub height: u32, pub pixels: Vec<u8> }
+pub struct RgbaAnimation {
+    pub width: u32,
+    pub height: u32,
+    pub frames: Vec<RgbaImage>,
+    pub delays_seconds: Vec<f64>,
+    /// Number of repeats after the first play. `Some(0)` means forever and
+    /// `None` means the file requested a single play.
+    pub repeat_count: Option<u16>,
+}
+
+impl RgbaAnimation {
+    pub fn decoded_pixels(&self) -> u64 {
+        u64::from(self.width) * u64::from(self.height) * self.frames.len() as u64
+    }
+
+    pub fn frame_index_at(&self, seconds: f64) -> usize {
+        if self.delays_seconds.len() != self.frames.len() { return 0; }
+        animation_frame_index(&self.delays_seconds, self.repeat_count, seconds)
+    }
+}
+
+/// Select the visible animation frame. GIF repeat counts describe repeats
+/// after the initial play; a missing loop extension holds the final frame.
+pub fn animation_frame_index(delays_seconds: &[f64], repeat_count: Option<u16>, seconds: f64) -> usize {
+    if delays_seconds.len() <= 1 || !seconds.is_finite()
+        || delays_seconds.iter().any(|delay| !delay.is_finite() || *delay <= 0.0) {
+        return 0;
+    }
+    let cycle = delays_seconds.iter().sum::<f64>();
+    if !cycle.is_finite() || cycle <= 0.0 { return 0; }
+    let elapsed = seconds.max(0.0);
+    let mut elapsed = match repeat_count {
+        // A positive GIF loop count is the number of replays after the first
+        // cycle. Re-enter each cycle until those finite replays are exhausted.
+        Some(repeats) if repeats > 0 => {
+            if elapsed >= cycle * (f64::from(repeats) + 1.0) {
+                return delays_seconds.len() - 1;
+            }
+            elapsed.rem_euclid(cycle)
+        }
+        Some(0) => elapsed.rem_euclid(cycle),
+        None if elapsed >= cycle => return delays_seconds.len() - 1,
+        None => elapsed,
+    };
+    for (index, delay) in delays_seconds.iter().enumerate() {
+        if elapsed < *delay { return index; }
+        elapsed -= *delay;
+    }
+    delays_seconds.len() - 1
+}
+
+#[derive(Clone, Copy)]
+struct GifInspection {
+    width: u32,
+    height: u32,
+    frames: usize,
+    repeat_count: Option<u16>,
+}
 
 fn read(bytes: &[u8], offset: usize, count: usize, big: bool) -> Result<u32, String> {
     let end = offset.checked_add(count).ok_or("Texture offset overflow")?;
@@ -17,6 +79,96 @@ fn dimensions(width: u32, height: u32) -> Result<(u32, u32), String> {
     if width == 0 || height == 0 || width > 4096 || height > 4096 || u64::from(width)*u64::from(height) > MAX_PIXELS {
         Err("Texture exceeds 4096 pixels per side or 8 megapixels".into())
     } else { Ok((width, height)) }
+}
+
+fn inspect_gif(bytes: &[u8]) -> Result<GifInspection, String> {
+    if bytes.len() < 13 || !(bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a")) {
+        return Err("Invalid GIF header".into());
+    }
+    let width = read(bytes, 6, 2, false)?;
+    let height = read(bytes, 8, 2, false)?;
+    dimensions(width, height)?;
+    let mut offset = 13usize;
+    if bytes[10] & 0x80 != 0 {
+        offset = offset.checked_add(3usize << (usize::from(bytes[10] & 7) + 1))
+            .filter(|end| *end <= bytes.len()).ok_or("Truncated GIF color table")?;
+    }
+    let mut images = 0usize;
+    let mut saw_trailer = false;
+    let mut repeat_count = None;
+    loop {
+        let marker = *bytes.get(offset).ok_or("Truncated GIF")?;
+        offset += 1;
+        if marker == 0x3b {
+            saw_trailer = true;
+            break;
+        }
+        if marker == 0x2c {
+            let left = read(bytes, offset, 2, false)?;
+            let top = read(bytes, offset + 2, 2, false)?;
+            let frame_width = read(bytes, offset + 4, 2, false)?;
+            let frame_height = read(bytes, offset + 6, 2, false)?;
+            let flags = *bytes.get(offset + 8).ok_or("Truncated GIF image descriptor")?;
+            if frame_width == 0 || frame_height == 0 || left.checked_add(frame_width).is_none_or(|right| right > width)
+                || top.checked_add(frame_height).is_none_or(|bottom| bottom > height) {
+                return Err("GIF image exceeds its canvas".into());
+            }
+            offset = offset.checked_add(9).ok_or("GIF offset overflow")?;
+            if flags & 0x80 != 0 {
+                offset = offset.checked_add(3usize << (usize::from(flags & 7) + 1))
+                    .filter(|end| *end <= bytes.len()).ok_or("Truncated GIF local color table")?;
+            }
+            let minimum_code_size = read(bytes, offset, 1, false)?;
+            if !(2..=8).contains(&minimum_code_size) { return Err("Invalid GIF LZW code size".into()); }
+            offset += 1;
+            images = images.checked_add(1).filter(|count| *count <= MAX_GIF_FRAMES)
+                .ok_or("GIF exceeds the 120-frame limit")?;
+            let decoded_pixels = u64::from(width).checked_mul(u64::from(height))
+                .and_then(|pixels| pixels.checked_mul(images as u64)).ok_or("GIF pixel count overflow")?;
+            if decoded_pixels > MAX_GIF_TOTAL_PIXELS {
+                return Err("GIF exceeds the 16-megapixel decoded-frame budget".into());
+            }
+            loop {
+                let count = read(bytes, offset, 1, false)? as usize;
+                offset += 1;
+                if count == 0 { break; }
+                offset = offset.checked_add(count).filter(|end| *end <= bytes.len()).ok_or("Truncated GIF data")?;
+            }
+        } else if marker == 0x21 {
+            let label = read(bytes, offset, 1, false)? as u8;
+            offset += 1;
+            let mut application = None;
+            if label == 0xff {
+                let size = read(bytes, offset, 1, false)? as usize;
+                offset += 1;
+                let end = offset.checked_add(size).filter(|end| *end <= bytes.len()).ok_or("Truncated GIF application identifier")?;
+                if size == 11 { application = bytes.get(offset..end); }
+                offset = end;
+            }
+            let is_loop_extension = application.is_some_and(|id| id == b"NETSCAPE2.0" || id == b"ANIMEXTS1.0");
+            let mut first_data = [0u8; 3];
+            let mut first_data_len = 0usize;
+            loop {
+                let count = read(bytes, offset, 1, false)? as usize;
+                offset += 1;
+                if count == 0 { break; }
+                let end = offset.checked_add(count).filter(|end| *end <= bytes.len()).ok_or("Truncated GIF data")?;
+                if first_data_len == 0 {
+                    first_data_len = count;
+                    let copied = count.min(first_data.len());
+                    first_data[..copied].copy_from_slice(&bytes[offset..offset + copied]);
+                }
+                offset = end;
+            }
+            if is_loop_extension && first_data_len == 3 && first_data[0] == 1 && repeat_count.is_none() {
+                repeat_count = Some(u16::from_le_bytes([first_data[1], first_data[2]]));
+            }
+        } else {
+            return Err("Invalid GIF block".into());
+        }
+    }
+    if !saw_trailer || images == 0 { return Err("GIF contains no complete image".into()); }
+    Ok(GifInspection { width, height, frames: images, repeat_count })
 }
 
 pub fn inspect(format: Format, bytes: &[u8]) -> Result<(u32, u32), String> {
@@ -56,31 +208,8 @@ pub fn inspect(format: Format, bytes: &[u8]) -> Result<(u32, u32), String> {
             size.ok_or("JPEG dimensions unavailable")?
         },
         Format::Gif => {
-            if bytes.len()<13 || !(bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a")) { return Err("Invalid GIF header".into()); }
-            let size=(le(6,2)?,le(8,2)?);
-            let mut offset=13+if bytes[10]&128!=0 { 3usize<<(usize::from(bytes[10]&7)+1) } else { 0 };
-            let mut images=0;
-            loop {
-                let marker=*bytes.get(offset).ok_or("Truncated GIF")?; offset+=1;
-                if marker==0x3b { break; }
-                if marker==0x2c {
-                    images+=1;
-                    if images>1 { return Err("Animated GIF is not an admitted static texture".into()); }
-                    let x=le(offset,2)?; let y=le(offset+2,2)?;
-                    let w=le(offset+4,2)?; let h=le(offset+6,2)?;
-                    if w==0 || h==0 || x+w>size.0 || y+h>size.1 { return Err("GIF image exceeds its canvas".into()); }
-                    let flags=*bytes.get(offset+8).ok_or("Truncated GIF image")?;
-                    offset+=9+if flags&128!=0 { 3usize<<(usize::from(flags&7)+1) } else { 0 };
-                    read(bytes,offset,1,false)?; offset+=1; // LZW minimum code size
-                } else if marker==0x21 { read(bytes,offset,1,false)?; offset+=1; }
-                else { return Err("Invalid GIF block".into()); }
-                loop {
-                    let count=read(bytes,offset,1,false)? as usize; offset+=1;
-                    if count==0 { break; }
-                    offset=offset.checked_add(count).filter(|v| *v<=bytes.len()).ok_or("Truncated GIF data")?;
-                }
-            }
-            if images!=1 { return Err("GIF contains no image".into()); } size
+            let inspection = inspect_gif(bytes)?;
+            (inspection.width, inspection.height)
         },
         Format::Bmp => {
             if bytes.len()<54 || !bytes.starts_with(b"BM") || le(14,4)?<40 || le(26,2)?!=1 { return Err("Unsupported BMP header".into()); }
@@ -163,6 +292,77 @@ pub fn from_data_url(url: &str) -> Result<ImageSource,String> {
 }
 
 impl ImageSource {
+    pub fn decoded_pixel_count(&self) -> Result<u64, String> {
+        let (width, height) = inspect(self.format, &self.bytes)?;
+        let frames = if self.format == Format::Gif { inspect_gif(&self.bytes)?.frames } else { 1 };
+        u64::from(width).checked_mul(u64::from(height)).and_then(|pixels| pixels.checked_mul(frames as u64))
+            .ok_or_else(|| "Texture decoded pixel count overflow".into())
+    }
+
+    pub fn decode_gif(&self) -> Result<RgbaAnimation, String> {
+        if self.format != Format::Gif { return Err("Texture is not a GIF image".into()); }
+        let inspection = inspect_gif(&self.bytes)?;
+        let (width, height, expected_frames) = (inspection.width, inspection.height, inspection.frames);
+        let pixels = u64::from(width) * u64::from(height);
+        let canvas_len = usize::try_from(pixels.checked_mul(4).ok_or("GIF canvas byte count overflow")?)
+            .map_err(|_| "GIF canvas byte count overflow")?;
+        let mut options = gif::DecodeOptions::new();
+        options.set_color_output(gif::ColorOutput::RGBA);
+        options.check_frame_consistency(true);
+        options.check_lzw_end_code(true);
+        let mut decoder = options.read_info(Cursor::new(&self.bytes)).map_err(|error| format!("GIF decode failed: {error}"))?;
+        let (canvas_width, canvas_height) = (u32::from(decoder.width()), u32::from(decoder.height()));
+        if (canvas_width, canvas_height) != (width, height) { return Err("GIF decoder dimensions disagree with its header".into()); }
+        let mut canvas = vec![0u8; canvas_len];
+        let mut frames = Vec::with_capacity(expected_frames);
+        let mut delays_seconds = Vec::with_capacity(expected_frames);
+        let mut pending: Option<(gif::DisposalMethod, [u32; 4], Option<Vec<u8>>)> = None;
+        loop {
+            let Some(frame) = decoder.read_next_frame().map_err(|error| format!("GIF decode failed: {error}"))? else { break; };
+            let (left, top) = (u32::from(frame.left), u32::from(frame.top));
+            let (frame_width, frame_height) = (u32::from(frame.width), u32::from(frame.height));
+            if frame_width == 0 || frame_height == 0 || left.checked_add(frame_width).is_none_or(|right| right > width)
+                || top.checked_add(frame_height).is_none_or(|bottom| bottom > height) {
+                return Err("GIF decoder returned a frame outside its canvas".into());
+            }
+            let expected_frame_bytes = usize::try_from(u64::from(frame_width) * u64::from(frame_height) * 4)
+                .map_err(|_| "GIF frame byte count overflow")?;
+            if frame.buffer.len() != expected_frame_bytes { return Err("GIF decoder returned an invalid RGBA frame".into()); }
+            if let Some((disposal, rectangle, backup)) = pending.take() {
+                match disposal {
+                    gif::DisposalMethod::Background => {
+                        let [x, y, width, height] = rectangle;
+                        for row in y..(y + height).min(canvas_height) {
+                            let start = ((row * canvas_width + x.min(canvas_width)) * 4) as usize;
+                            let end = ((row * canvas_width + (x + width).min(canvas_width)) * 4) as usize;
+                            canvas[start..end].fill(0);
+                        }
+                    }
+                    gif::DisposalMethod::Previous => {
+                        if let Some(previous) = backup { canvas = previous; }
+                    }
+                    gif::DisposalMethod::Any | gif::DisposalMethod::Keep => {}
+                }
+            }
+            let backup = (frame.dispose == gif::DisposalMethod::Previous).then(|| canvas.clone());
+            for y in 0..frame_height {
+                for x in 0..frame_width {
+                    let source = ((y * frame_width + x) * 4) as usize;
+                    if frame.buffer[source + 3] == 0 { continue; }
+                    let destination = (((top + y) * canvas_width + left + x) * 4) as usize;
+                    canvas[destination..destination + 4].copy_from_slice(&frame.buffer[source..source + 4]);
+                }
+            }
+            let delay = f64::from(frame.delay) / 100.0;
+            frames.push(RgbaImage { width: canvas_width, height: canvas_height, pixels: canvas.clone() });
+            delays_seconds.push(if delay > 0.0 { delay } else { 0.1 });
+            pending = Some((frame.dispose, [left, top, frame_width, frame_height], backup));
+        }
+        if frames.len() != expected_frames { return Err("GIF decoder returned an incomplete frame sequence".into()); }
+        Ok(RgbaAnimation { width: canvas_width, height: canvas_height, frames, delays_seconds,
+            repeat_count: inspection.repeat_count })
+    }
+
     pub fn decode_legacy(&self) -> Result<RgbaImage,String> {
         // Recheck public fields before allocating. This API may be called by
         // native clients constructing ImageSource directly.

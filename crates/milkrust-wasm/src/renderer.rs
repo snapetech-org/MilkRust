@@ -121,6 +121,7 @@ struct MilkRustWebGlRenderer {
     primitive_color_buffer: web_sys::WebGlBuffer,
     primitive_program: web_sys::WebGlProgram,
     placeholder_texture: web_sys::WebGlTexture,
+    transition_placeholder_texture: web_sys::WebGlTexture,
     named_textures: RefCell<BTreeMap<String, MilkRustTextureAsset>>,
     texture_pixels: Rc<Cell<u64>>,
     max_texture_units: usize,
@@ -161,6 +162,9 @@ struct MilkRustTranslatedProgram {
 struct MilkRustTextureAsset {
     gl: web_sys::WebGl2RenderingContext,
     texture: web_sys::WebGlTexture,
+    additional_frames: Vec<web_sys::WebGlTexture>,
+    delays_seconds: Vec<f64>,
+    repeat_count: Option<u16>,
     dimensions: Rc<Cell<(u32, u32)>>,
     // None while loading, Some(Ok) after upload, Some(Err) after decode/upload failure.
     state: Rc<RefCell<Option<Result<(), String>>>>,
@@ -172,6 +176,16 @@ struct MilkRustTextureAsset {
     _onmessage: Option<Closure<dyn FnMut(web_sys::MessageEvent)>>,
     _onerror: Option<Closure<dyn FnMut(web_sys::ErrorEvent)>>,
     _timeout: Option<Closure<dyn FnMut()>>,
+}
+
+impl MilkRustTextureAsset {
+    fn texture_at(&self, seconds: f64) -> web_sys::WebGlTexture {
+        if self.additional_frames.is_empty() || self.delays_seconds.len() != self.additional_frames.len() + 1 {
+            return self.texture.clone();
+        }
+        let index = milkrust_core::texture::animation_frame_index(&self.delays_seconds, self.repeat_count, seconds);
+        if index == 0 { self.texture.clone() } else { self.additional_frames[index - 1].clone() }
+    }
 }
 
 impl Drop for MilkRustTextureAsset {
@@ -190,6 +204,7 @@ impl Drop for MilkRustTextureAsset {
             revoke_image_decoder_worker_url(url);
         }
         self.gl.delete_texture(Some(&self.texture));
+        for texture in &self.additional_frames { self.gl.delete_texture(Some(texture)); }
         self.total_pixels.set(self.total_pixels.get().saturating_sub(self.reserved_pixels));
     }
 }
@@ -382,6 +397,7 @@ impl MilkRustWebGlRenderer {
             .create_buffer()
             .ok_or_else(|| JsValue::from_str("WebGL textured UV buffer allocation failed"))?;
         let placeholder_texture = create_milkrust_placeholder_texture(&gl)?;
+        let transition_placeholder_texture = create_milkrust_transition_placeholder_texture(&gl)?;
         let warp_position_buffer = gl
             .create_buffer()
             .ok_or_else(|| JsValue::from_str("WebGL warp position buffer allocation failed"))?;
@@ -426,6 +442,7 @@ impl MilkRustWebGlRenderer {
             primitive_color_buffer,
             primitive_program,
             placeholder_texture,
+            transition_placeholder_texture,
             program,
             textured_position_buffer,
             textured_program,
@@ -495,7 +512,7 @@ impl MilkRustWebGlRenderer {
         for command in frame.draw_commands() {
             match command {
                 MilkRustDrawCommand::Primitive(index) => self.draw_primitives(std::slice::from_ref(frame.primitives.get(index).ok_or_else(|| JsValue::from_str("Invalid primitive draw index"))?)),
-                MilkRustDrawCommand::Textured(index) => self.draw_textured_primitives(std::slice::from_ref(frame.textured_primitives.get(index).ok_or_else(|| JsValue::from_str("Invalid textured draw index"))?), &targets.targets[read_index].texture)?,
+                MilkRustDrawCommand::Textured(index) => self.draw_textured_primitives(std::slice::from_ref(frame.textured_primitives.get(index).ok_or_else(|| JsValue::from_str("Invalid textured draw index"))?), &targets.targets[read_index].texture, time)?,
             }
         }
         for sprite in sprites.iter().filter(|sprite| sprite.preset_index == entry.index && sprite.burn && sprite.layer > 0) { self.draw_sprite(sprite)?; }
@@ -652,7 +669,8 @@ impl MilkRustWebGlRenderer {
         let key = milk2::TransitionMaskKey::new(pattern, entry.blend_alpha as f32, entry.blend_direction,
             entry.blend_random.map(|value| value as f32), width, height);
         if self.transition_mask.borrow().as_ref().is_some_and(|(cached, _)| *cached == key) { return Ok(()); }
-        let pixels = milk2::generate_transition_mask(key).map_err(|error| JsValue::from_str(&error))?;
+        let vertices = milk2::generate_transition_vertex_field(key).map_err(|error| JsValue::from_str(&error))?;
+        let (mask_width, mask_height) = (milk2::TRANSITION_GRID_WIDTH, milk2::TRANSITION_GRID_HEIGHT);
         let texture = self.gl.create_texture().ok_or_else(|| JsValue::from_str("WebGL transition mask allocation failed"))?;
         self.gl.bind_texture(web_sys::WebGl2RenderingContext::TEXTURE_2D, Some(&texture));
         self.gl.pixel_storei(web_sys::WebGl2RenderingContext::UNPACK_ALIGNMENT, 1);
@@ -665,9 +683,9 @@ impl MilkRustWebGlRenderer {
         self.gl.tex_parameteri(web_sys::WebGl2RenderingContext::TEXTURE_2D,
             web_sys::WebGl2RenderingContext::TEXTURE_WRAP_T, web_sys::WebGl2RenderingContext::CLAMP_TO_EDGE as i32);
         let upload = self.gl.tex_image_2d_with_i32_and_i32_and_i32_and_format_and_type_and_opt_u8_array(
-            web_sys::WebGl2RenderingContext::TEXTURE_2D, 0, web_sys::WebGl2RenderingContext::R8 as i32,
-            width as i32, height as i32, 0, web_sys::WebGl2RenderingContext::RED,
-            web_sys::WebGl2RenderingContext::UNSIGNED_BYTE, Some(&pixels));
+            web_sys::WebGl2RenderingContext::TEXTURE_2D, 0, 0x8D7C,
+            mask_width as i32, mask_height as i32, 0, 0x8D99,
+            web_sys::WebGl2RenderingContext::UNSIGNED_BYTE, Some(&vertices));
         self.gl.pixel_storei(web_sys::WebGl2RenderingContext::UNPACK_ALIGNMENT, 4);
         if let Err(error) = upload {
             self.gl.delete_texture(Some(&texture));
@@ -675,7 +693,7 @@ impl MilkRustWebGlRenderer {
         }
         if self.gl.get_error() != web_sys::WebGl2RenderingContext::NO_ERROR {
             self.gl.delete_texture(Some(&texture));
-            return Err(JsValue::from_str("WebGL transition mask upload failed"));
+            return Err(JsValue::from_str("WebGL transition vertex field upload failed"));
         }
         if let Some((_, previous)) = self.transition_mask.borrow_mut().replace((key, texture)) {
             self.gl.delete_texture(Some(&previous));
@@ -686,9 +704,9 @@ impl MilkRustWebGlRenderer {
     fn bind_transition_mask(&self, program: &web_sys::WebGlProgram, transition: TransitionUniforms) {
         let unit = self.max_texture_units.saturating_sub(1) as u32;
         let texture = if transition.pattern == 0 {
-            &self.placeholder_texture
+            &self.transition_placeholder_texture
         } else {
-            self.transition_mask.borrow().as_ref().map(|(_, texture)| texture).unwrap_or(&self.placeholder_texture)
+            self.transition_mask.borrow().as_ref().map(|(_, texture)| texture).unwrap_or(&self.transition_placeholder_texture)
         };
         self.gl.active_texture(web_sys::WebGl2RenderingContext::TEXTURE0 + unit);
         self.gl.bind_texture(web_sys::WebGl2RenderingContext::TEXTURE_2D, Some(texture));
@@ -785,7 +803,7 @@ impl MilkRustWebGlRenderer {
             let builtin = self.shader_resources.borrow().texture(name);
             let (texture, target) = match builtin {
                 Some(binding) => binding,
-                None => (self.named_texture_for(name)?.ok_or_else(||
+                None => (self.named_texture_for_at(name, time)?.ok_or_else(||
                     JsValue::from_str(&format!("Missing shader texture: {name}")))?,
                     web_sys::WebGl2RenderingContext::TEXTURE_2D),
             };
@@ -1101,7 +1119,7 @@ impl MilkRustWebGlRenderer {
     }
 
     fn draw_sprite(&self, sprite: &milkrust_core::sprites::Frame) -> Result<(), JsValue> {
-        let texture = self.named_texture_for(&sprite.texture)?.ok_or_else(|| JsValue::from_str("Sprite image is still loading"))?;
+        let texture = self.named_texture_for_at(&sprite.texture, sprite.time)?.ok_or_else(|| JsValue::from_str("Sprite image is still loading"))?;
         let dimensions = {
             let textures = self.named_textures.borrow();
             get_milkrust_texture_name_aliases(&sprite.texture).iter().find_map(|alias| textures.get(alias))
@@ -1125,12 +1143,16 @@ impl MilkRustWebGlRenderer {
     }
 
     fn named_texture_for(&self, raw_name: &str) -> Result<Option<web_sys::WebGlTexture>, JsValue> {
+        self.named_texture_for_at(raw_name, 0.0)
+    }
+
+    fn named_texture_for_at(&self, raw_name: &str, seconds: f64) -> Result<Option<web_sys::WebGlTexture>, JsValue> {
         if raw_name.is_empty() { return Ok(Some(self.placeholder_texture.clone())); }
         for alias in get_milkrust_texture_name_aliases(raw_name) {
             if let Some(asset) = self.named_textures.borrow().get(&alias) {
                 return match asset.state.borrow().as_ref() {
                     None => Ok(None),
-                    Some(Ok(())) => Ok(Some(asset.texture.clone())),
+                    Some(Ok(())) => Ok(Some(asset.texture_at(seconds))),
                     Some(Err(error)) => Err(JsValue::from_str(&format!("Texture {raw_name}: {error}"))),
                 };
             }
@@ -1138,8 +1160,8 @@ impl MilkRustWebGlRenderer {
             let Some(data_url) = data_url else {
                 continue;
             };
-            if self.named_textures.borrow().len() >= 64 {
-                return Err(JsValue::from_str("Preset exceeds the 64-texture cache limit"));
+            if self.named_textures.borrow().len() >= 100 {
+                return Err(JsValue::from_str("Preset exceeds the 100-texture cache limit"));
             }
             let asset = create_milkrust_texture_from_data_url(&self.gl, &data_url, self.texture_pixels.clone())?;
             self.named_textures
@@ -1150,7 +1172,7 @@ impl MilkRustWebGlRenderer {
         Err(JsValue::from_str(&format!("Missing texture: {raw_name}")))
     }
 
-    fn draw_textured_primitives(&self, primitives: &[MilkRustTexturedPrimitive], previous_frame: &web_sys::WebGlTexture) -> Result<(), JsValue> {
+    fn draw_textured_primitives(&self, primitives: &[MilkRustTexturedPrimitive], previous_frame: &web_sys::WebGlTexture, time: f64) -> Result<(), JsValue> {
         if primitives.is_empty() {
             return Ok(());
         }
@@ -1182,7 +1204,7 @@ impl MilkRustWebGlRenderer {
             self.gl
                 .active_texture(web_sys::WebGl2RenderingContext::TEXTURE1);
             let texture = if primitive.texture_name.is_empty() { previous_frame.clone() } else {
-                self.named_texture_for(&primitive.texture_name)?
+                self.named_texture_for_at(&primitive.texture_name, time)?
                     .ok_or_else(|| JsValue::from_str("Texture became unavailable before drawing"))?
             };
             self.gl
@@ -1281,6 +1303,7 @@ impl Drop for MilkRustWebGlRenderer {
             if let Some(program) = cache.get_mut().take() { self.gl.delete_program(Some(&program.program)); }
         }
         self.gl.delete_texture(Some(&self.placeholder_texture));
+        self.gl.delete_texture(Some(&self.transition_placeholder_texture));
         if let Some((_, texture)) = self.transition_mask.get_mut().take() { self.gl.delete_texture(Some(&texture)); }
         self.named_textures.get_mut().clear();
     }
@@ -1456,6 +1479,35 @@ fn create_milkrust_placeholder_texture(
     Ok(texture)
 }
 
+fn create_milkrust_transition_placeholder_texture(
+    gl: &web_sys::WebGl2RenderingContext,
+) -> Result<web_sys::WebGlTexture, JsValue> {
+    let texture = gl
+        .create_texture()
+        .ok_or_else(|| JsValue::from_str("WebGL transition placeholder allocation failed"))?;
+    let pixels = [0u8; 4];
+    gl.bind_texture(web_sys::WebGl2RenderingContext::TEXTURE_2D, Some(&texture));
+    gl.tex_parameteri(web_sys::WebGl2RenderingContext::TEXTURE_2D,
+        web_sys::WebGl2RenderingContext::TEXTURE_MIN_FILTER, web_sys::WebGl2RenderingContext::NEAREST as i32);
+    gl.tex_parameteri(web_sys::WebGl2RenderingContext::TEXTURE_2D,
+        web_sys::WebGl2RenderingContext::TEXTURE_MAG_FILTER, web_sys::WebGl2RenderingContext::NEAREST as i32);
+    gl.tex_parameteri(web_sys::WebGl2RenderingContext::TEXTURE_2D,
+        web_sys::WebGl2RenderingContext::TEXTURE_WRAP_S, web_sys::WebGl2RenderingContext::CLAMP_TO_EDGE as i32);
+    gl.tex_parameteri(web_sys::WebGl2RenderingContext::TEXTURE_2D,
+        web_sys::WebGl2RenderingContext::TEXTURE_WRAP_T, web_sys::WebGl2RenderingContext::CLAMP_TO_EDGE as i32);
+    if let Err(error) = gl.tex_image_2d_with_i32_and_i32_and_i32_and_format_and_type_and_opt_u8_array(
+        web_sys::WebGl2RenderingContext::TEXTURE_2D, 0, 0x8D7C, 1, 1, 0, 0x8D99,
+        web_sys::WebGl2RenderingContext::UNSIGNED_BYTE, Some(&pixels)) {
+        gl.delete_texture(Some(&texture));
+        return Err(error);
+    }
+    if gl.get_error() != web_sys::WebGl2RenderingContext::NO_ERROR {
+        gl.delete_texture(Some(&texture));
+        return Err(JsValue::from_str("WebGL transition placeholder upload failed"));
+    }
+    Ok(texture)
+}
+
 fn create_image_decoder_worker() -> Result<(web_sys::Worker, String), JsValue> {
     if let Some(url) = crate::TEXTURE_DECODER_WORKER_URL.with(|value| value.borrow().clone()) {
         if let Ok(worker) = web_sys::Worker::new(&url) {
@@ -1495,7 +1547,7 @@ fn create_milkrust_texture_from_data_url(
     use milkrust_core::texture::{self, Format};
     let source = texture::from_data_url(data_url).map_err(|e| JsValue::from_str(&e))?;
     let (width, height) = (source.width, source.height);
-    let pixels = u64::from(width) * u64::from(height);
+    let pixels = source.decoded_pixel_count().map_err(|e| JsValue::from_str(&e))?;
     if total_pixels.get() + pixels > 32 * 1024 * 1024 {
         return Err(JsValue::from_str("Preset exceeds its 32-megapixel decoded texture budget"));
     }
@@ -1504,11 +1556,48 @@ fn create_milkrust_texture_from_data_url(
     // each admit an image against the same unused allocation budget.
     total_pixels.set(total_pixels.get() + pixels);
     let mut asset = MilkRustTextureAsset {
-        gl: gl.clone(), texture, dimensions: Rc::new(Cell::new((width, height))),
+        gl: gl.clone(), texture, additional_frames: Vec::new(), delays_seconds: Vec::new(), repeat_count: None,
+        dimensions: Rc::new(Cell::new((width, height))),
         state: Rc::new(RefCell::new(None)), total_pixels, reserved_pixels: pixels,
         worker: None, worker_url: None, worker_timeout_id: None,
         _onmessage: None, _onerror: None, _timeout: None,
     };
+    if matches!(source.format, Format::Gif) {
+        let animation = source.decode_gif().map_err(|e| JsValue::from_str(&e))?;
+        if animation.decoded_pixels() != pixels {
+            return Err(JsValue::from_str("GIF frame count changed after pixel reservation"));
+        }
+        for (index, frame) in animation.frames.iter().enumerate() {
+            let texture = if index == 0 { asset.texture.clone() } else { create_milkrust_placeholder_texture(gl)? };
+            let stride = width as usize * 4;
+            let mut flipped = Vec::with_capacity(frame.pixels.len());
+            for row in frame.pixels.chunks_exact(stride).rev() { flipped.extend_from_slice(row); }
+            gl.active_texture(web_sys::WebGl2RenderingContext::TEXTURE0);
+            gl.bind_texture(web_sys::WebGl2RenderingContext::TEXTURE_2D, Some(&texture));
+            gl.pixel_storei(web_sys::WebGl2RenderingContext::UNPACK_ALIGNMENT, 1);
+            let upload = gl.tex_image_2d_with_i32_and_i32_and_i32_and_format_and_type_and_opt_u8_array(
+                web_sys::WebGl2RenderingContext::TEXTURE_2D, 0,
+                web_sys::WebGl2RenderingContext::RGBA as i32, width as i32, height as i32, 0,
+                web_sys::WebGl2RenderingContext::RGBA, web_sys::WebGl2RenderingContext::UNSIGNED_BYTE,
+                Some(&flipped),
+            );
+            gl.pixel_storei(web_sys::WebGl2RenderingContext::UNPACK_ALIGNMENT, 4);
+            if let Err(error) = upload {
+                if index != 0 { gl.delete_texture(Some(&texture)); }
+                return Err(error);
+            }
+            gl.generate_mipmap(web_sys::WebGl2RenderingContext::TEXTURE_2D);
+            if gl.get_error() != web_sys::WebGl2RenderingContext::NO_ERROR {
+                if index != 0 { gl.delete_texture(Some(&texture)); }
+                return Err(JsValue::from_str("Animated GIF texture upload failed"));
+            }
+            if index != 0 { asset.additional_frames.push(texture); }
+        }
+        asset.delays_seconds = animation.delays_seconds;
+        asset.repeat_count = animation.repeat_count;
+        *asset.state.borrow_mut() = Some(Ok(()));
+        return Ok(asset);
+    }
     if matches!(source.format, Format::Dds | Format::Tga) {
         let decoded = source.decode_legacy().map_err(|e| JsValue::from_str(&e))?;
         let stride = width as usize * 4;

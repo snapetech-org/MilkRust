@@ -8,6 +8,34 @@ use crate::{MilkRustValue, evaluate_milkrust_equations, milkrust_scope_number};
 pub const MAX_SPRITES: usize = 16;
 const MAX_SPRITE_RECORDS: usize = 64;
 const DEFAULT_COLOR_KEY_ARGB: u32 = 0xff00_0000;
+pub const SPRITE_BLEND_MODES: usize = 11;
+
+fn parse_color_key(value: &str) -> Result<u32, String> {
+    // The MD3 loader uses strtoul(..., base=0): 0x is hexadecimal, a leading
+    // zero is octal, and other values are decimal. Keep the result within the
+    // original 32-bit Windows unsigned-long domain before forcing opaque alpha.
+    let (negative, unsigned) = if let Some(value) = value.strip_prefix('-') {
+        (true, value)
+    } else if let Some(value) = value.strip_prefix('+') {
+        (false, value)
+    } else {
+        (false, value)
+    };
+    let (digits, radix) = if let Some(hex) = unsigned.strip_prefix("0x").or_else(|| unsigned.strip_prefix("0X")) {
+        (hex, 16)
+    } else if unsigned.len() > 1 && unsigned.starts_with('0') {
+        (unsigned, 8)
+    } else {
+        (unsigned, 10)
+    };
+    if digits.is_empty() {
+        return Err("Invalid sprite color key".into());
+    }
+    let mut parsed = u64::from_str_radix(digits, radix).ok().filter(|value| *value <= u64::from(u32::MAX))
+        .ok_or("Invalid sprite color key")? as u32;
+    if negative { parsed = parsed.wrapping_neg(); }
+    Ok(0xff00_0000 | parsed)
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Definition {
@@ -140,14 +168,7 @@ fn definition(index: u32, preset_index: usize, records: &BTreeMap<String, String
     }
     let color_key = match records.get("spritecolorkey").or_else(|| records.get("colorkey")) {
         None => DEFAULT_COLOR_KEY_ARGB,
-        Some(value) => {
-            let hex = value.strip_prefix("0x").or_else(|| value.strip_prefix("0X")).unwrap_or(value);
-            let parsed = u32::from_str_radix(hex, 16).ok().ok_or("Invalid sprite color key")?;
-            if hex.len() > 6 { return Err("Invalid sprite color key".into()); }
-            // MilkDrop passes 0xff000000 | ck to D3DX, forcing an opaque RGB
-            // color key regardless of the source image's alpha.
-            0xff00_0000 | parsed
-        }
+        Some(value) => parse_color_key(value)?,
     };
     let mut values = BTreeMap::new();
     for (key, fallback) in [("x", 0.5), ("y", 0.5), ("sx", 1.0), ("sy", 1.0), ("rot", 0.0),
@@ -156,7 +177,9 @@ fn definition(index: u32, preset_index: usize, records: &BTreeMap<String, String
         values.insert(key.into(), MilkRustValue::Number(fallback));
     }
     let mut layer = 0i32;
-    let mut blend_mode = 0i32;
+    // MilkDrop 3's saved default is ColorKey (mode 4). A per-frame value
+    // outside 0..=10 falls back to mode 0 in the renderer.
+    let mut blend_mode = 4i32;
     let mut alpha = 1.0;
     let mut burn_mode = 2i32;
     let mut rotation_mode = 0.0;
@@ -232,6 +255,8 @@ fn definition(index: u32, preset_index: usize, records: &BTreeMap<String, String
 pub struct Frame {
     pub preset_index: usize,
     pub texture: String,
+    /// Sprite-local elapsed time used by animated GIF sprite textures.
+    pub time: f64,
     pub color_key: u32,
     pub blend_mode: i32,
     /// Saved layer 0 stamps feedback after composite; layers 1..4 before it.
@@ -345,12 +370,13 @@ impl Runtime {
             };
             let x = ((value("x") * 2.0 - 1.0).clamp(-1000.0, 1000.0) + definition.offset[0] + 1.0) * 0.5;
             let y = ((value("y") * 2.0 - 1.0).clamp(-1000.0, 1000.0) + definition.offset[1] + 1.0) * 0.5;
-            // MilkDrop truncates the EEL value and clamps its five saved modes.
+            // MilkDrop truncates the EEL value; values outside the complete
+            // saved table select ordinary alpha blend mode 0.
             let requested_blend_mode = value("blendmode").trunc() as i32;
-            let blend_mode = requested_blend_mode.clamp(0, 4);
+            let blend_mode = sprite_blend_mode(requested_blend_mode);
             frames.push(Frame {
                 preset_index: definition.preset_index,
-                texture: definition.texture.clone(), color_key: definition.color_key,
+                texture: definition.texture.clone(), time: elapsed, color_key: definition.color_key,
                 blend_mode, layer: definition.layer as usize, burn,
                 // RGB is saturated by the D3DCOLOR-compatible shader packer;
                 // script alpha is clamped before SpriteAlpha multiplies it,
@@ -374,8 +400,72 @@ impl Runtime {
     }
 }
 
+/// MilkDrop 3 has eleven saved sprite blend modes. Any value outside the
+/// table selects mode 0 instead of clamping to an endpoint.
+pub fn sprite_blend_mode(requested: i32) -> i32 {
+    if (0..SPRITE_BLEND_MODES as i32).contains(&requested) { requested } else { 0 }
+}
+
+fn sprite_byte(value: f64) -> u8 {
+    (value * 255.0).trunc().rem_euclid(256.0) as u8
+}
+
+/// D3DCOLOR-compatible vertex byte quantization for the saved sprite table.
+/// RGB is saturated before mode-specific transforms; alpha intentionally
+/// wraps after `SpriteAlpha` multiplication.
+pub fn sprite_vertex_color(mode: i32, rgba: [f64; 4]) -> [u8; 4] {
+    let mode = sprite_blend_mode(mode);
+    let rgb = [rgba[0].clamp(0.0, 1.0), rgba[1].clamp(0.0, 1.0), rgba[2].clamp(0.0, 1.0)];
+    let alpha = rgba[3];
+    match mode {
+        1 | 2 => [sprite_byte(rgb[0] * alpha), sprite_byte(rgb[1] * alpha), sprite_byte(rgb[2] * alpha), 255],
+        3 => [255; 4],
+        7 => [255, 255, 255, sprite_byte(alpha)],
+        8 => {
+            let fold = |value: f64| if value > 0.5 { 1.0 - value } else { value };
+            [sprite_byte(fold(rgb[0])), sprite_byte(fold(rgb[1])), sprite_byte(fold(rgb[2])), sprite_byte(alpha)]
+        }
+        _ => [sprite_byte(rgb[0]), sprite_byte(rgb[1]), sprite_byte(rgb[2]), sprite_byte(alpha)],
+    }
+}
+
+/// CPU reference for the fixed-function D3D9 sprite stage and blend-factor
+/// table, expressed in 0..=255 RGB units without final integer rounding.
+pub fn sprite_blend_pixel(mode: i32, rgba: [f64; 4], texel: [u8; 4], dst: [u8; 3]) -> [f64; 3] {
+    let mode = sprite_blend_mode(mode);
+    let vertex = sprite_vertex_color(mode, rgba).map(|value| f64::from(value) / 255.0);
+    let texture = texel.map(|value| f64::from(value) / 255.0);
+    let destination = dst.map(|value| f64::from(value) / 255.0);
+    let alpha = match mode {
+        4 | 7 | 8 => vertex[3] * texture[3],
+        _ => vertex[3],
+    };
+    let saturate = |value: f64| value.clamp(0.0, 1.0);
+    let mut output = [0.0; 3];
+    for channel in 0..3 {
+        let source = match mode {
+            3 => texture[channel],
+            7 => saturate(1.0 - texture[channel]),
+            9 => saturate(texture[channel] + vertex[channel] - 0.5),
+            10 => saturate(2.0 * texture[channel] * vertex[channel]),
+            _ => vertex[channel] * texture[channel],
+        };
+        let (source_factor, destination_factor) = match mode {
+            1 => (1.0, 0.0),
+            2 | 10 => (1.0, 1.0),
+            3 => (source, 1.0 - source),
+            5 => (destination[channel], 0.0),
+            6 => (0.0, 1.0 - source),
+            9 => (0.0, source),
+            _ => (alpha, 1.0 - alpha),
+        };
+        output[channel] = saturate(source * source_factor + destination[channel] * destination_factor) * 255.0;
+    }
+    output
+}
+
 /// Common native/WebGL sprite compositing; destination is a distinct snapshot,
-/// never the texture attached to the draw framebuffer. The five mode IDs
+/// never the texture attached to the draw framebuffer. The eleven mode IDs
 /// follow MilkDrop 3's fixed-function `DrawUserSprites` blend table.
 pub const FRAGMENT: &str = r#"#version 300 es
 precision highp float;
@@ -418,28 +508,39 @@ vec4 sprite_diffuse(int mode) {
             sprite_byte(rgb.b * alpha), 1.0);
     }
     if (mode == 3) return vec4(1.0);
+    if (mode == 7) return vec4(1.0, 1.0, 1.0, sprite_byte(alpha));
+    if (mode == 8) {
+        rgb = vec3(rgb.r > 0.5 ? 1.0 - rgb.r : rgb.r,
+            rgb.g > 0.5 ? 1.0 - rgb.g : rgb.g,
+            rgb.b > 0.5 ? 1.0 - rgb.b : rgb.b);
+        return vec4(sprite_byte(rgb.r), sprite_byte(rgb.g), sprite_byte(rgb.b), sprite_byte(alpha));
+    }
     return vec4(sprite_byte(rgb.r), sprite_byte(rgb.g), sprite_byte(rgb.b), sprite_byte(alpha));
 }
 void main() {
     vec4 sampleColor = sprite_sample(uv);
     vec4 background = texture(spriteBackground, gl_FragCoord.xy / spriteResolution);
-    int mode = clamp(spriteBlend, 0, 4);
+    int mode = spriteBlend < 0 || spriteBlend > 10 ? 0 : spriteBlend;
     vec4 diffuse = sprite_diffuse(mode);
     vec3 texel = sampleColor.rgb;
     vec3 stage = diffuse.rgb * texel;
     vec3 dst = background.rgb;
     float alpha = diffuse.a;
+    if (mode == 4 || mode == 7 || mode == 8) alpha *= sampleColor.a;
     if (mode == 3) stage = texel;
-    if (mode == 4) alpha *= sampleColor.a;
+    else if (mode == 7) stage = vec3(1.0) - texel;
+    else if (mode == 9) stage = clamp(texel + diffuse.rgb - vec3(0.5), 0.0, 1.0);
+    else if (mode == 10) stage = clamp(2.0 * texel * diffuse.rgb, 0.0, 1.0);
     vec3 result;
     if (mode == 1) result = stage; // decal: blending disabled
     else if (mode == 2) result = dst + stage;
     else if (mode == 3) result = stage * stage + dst * (vec3(1.0) - stage);
+    else if (mode == 5) result = dst * stage;
+    else if (mode == 6) result = dst * (vec3(1.0) - stage);
+    else if (mode == 9) result = dst * stage;
+    else if (mode == 10) result = dst + stage;
     else result = mix(dst, stage, alpha);
-    float resultAlpha = mode == 1 || mode == 2 || mode == 3
-        ? (mode == 2 ? background.a + 1.0 : 1.0)
-        : alpha * alpha + background.a * (1.0 - alpha);
-    outColor = vec4(clamp(result, 0.0, 1.0), clamp(resultAlpha, 0.0, 1.0));
+    outColor = vec4(clamp(result, 0.0, 1.0), background.a);
 }
 "#;
 
@@ -470,8 +571,8 @@ mod tests {
 
     #[test]
     fn saved_blend_and_layer_follow_the_preset_controls() {
-        for (records, mode, layer) in [("SpriteBlend=9\nSpriteLayer=2", 4, 2),
-            ("SpriteBlend=-2\nSpriteLayer=0", 0, 0), ("SpriteBlend=99\nSpriteLayer=4", 4, 4)] {
+        for (records, mode, layer) in [("SpriteBlend=9\nSpriteLayer=2", 9, 2),
+            ("SpriteBlend=-2\nSpriteLayer=0", 0, 0), ("SpriteBlend=99\nSpriteLayer=4", 0, 4)] {
             let definitions = extract(&block(records), true).unwrap().definitions;
             let frames = Runtime::default().render(&definitions, &BTreeMap::new(), 0.0, 0.0).unwrap();
             assert_eq!(frames[0].blend_mode, mode);
@@ -491,17 +592,44 @@ mod tests {
     }
 
     #[test]
-    fn saved_blend_defaults_to_zero_and_runtime_supports_five_classic_modes() {
+    fn saved_blend_defaults_to_four_and_runtime_supports_all_eleven_modes() {
         let default = extract(&block(""), true).unwrap().definitions;
-        assert_eq!(default[0].blend_mode, 0);
-        assert_eq!(Runtime::default().render(&default, &BTreeMap::new(), 0.0, 0.0).unwrap()[0].blend_mode, 0);
-        for mode in 0..=4 {
+        assert_eq!(default[0].blend_mode, 4);
+        assert_eq!(Runtime::default().render(&default, &BTreeMap::new(), 0.0, 0.0).unwrap()[0].blend_mode, 4);
+        for mode in 0..=10 {
             let definitions = extract(&block(&format!("SpriteBlend={mode}\ncode_1=blendmode={mode};")), true).unwrap().definitions;
             let frame = Runtime::default().render(&definitions, &BTreeMap::new(), 0.0, 0.0).unwrap().remove(0);
             assert_eq!(frame.blend_mode, mode);
         }
         let out_of_range = extract(&block("code_1=blendmode=99;"), true).unwrap().definitions;
-        assert_eq!(Runtime::default().render(&out_of_range, &BTreeMap::new(), 0.0, 0.0).unwrap()[0].blend_mode, 4);
+        assert_eq!(Runtime::default().render(&out_of_range, &BTreeMap::new(), 0.0, 0.0).unwrap()[0].blend_mode, 0);
+    }
+
+    #[test]
+    fn saved_blend_vertex_bytes_and_fixed_function_factors_match_the_table() {
+        let rgba = [1.0, 1.0, 1.0, 0.5];
+        assert_eq!(sprite_vertex_color(1, rgba), [127, 127, 127, 255]);
+        assert_eq!(sprite_vertex_color(3, rgba), [255; 4]);
+        assert_eq!(sprite_vertex_color(7, rgba), [255, 255, 255, 127]);
+        assert_eq!(sprite_vertex_color(8, rgba), [0, 0, 0, 127]);
+
+        let rgba = [1.0; 4];
+        let texel = [64, 128, 192, 128];
+        let dst = [32, 96, 160];
+        let results = (0..=10).map(|mode| sprite_blend_pixel(mode, rgba, texel, dst)).collect::<Vec<_>>();
+        assert_eq!(results[0], [64.0, 128.0, 192.0]);
+        assert_eq!(results[1], [64.0, 128.0, 192.0]);
+        assert_eq!(results[2], [96.0, 224.0, 255.0]);
+        assert!(results[3].iter().zip([40.03, 112.06, 184.09]).all(|(a,b)| (a-b).abs()<0.1));
+        assert!(results[4].iter().zip([48.06, 112.06, 176.06]).all(|(a,b)| (a-b).abs()<0.1));
+        assert!(results[5].iter().zip([8.03, 48.19, 120.47]).all(|(a,b)| (a-b).abs()<0.1));
+        assert!(results[6].iter().zip([23.97, 47.81, 39.53]).all(|(a,b)| (a-b).abs()<0.1));
+        assert!(results[7].iter().zip([111.81, 111.56, 111.31]).all(|(a,b)| (a-b).abs()<0.1));
+        assert!(results[8].iter().zip([15.94, 47.81, 79.69]).all(|(a,b)| (a-b).abs()<0.1));
+        assert!(results[9].iter().zip([23.97, 96.0, 160.0]).all(|(a,b)| (a-b).abs()<0.1));
+        assert_eq!(results[10], [160.0, 255.0, 255.0]);
+        assert_eq!(sprite_blend_mode(-1), 0);
+        assert_eq!(sprite_blend_mode(11), 0);
     }
 
     #[test]
@@ -566,7 +694,7 @@ mod tests {
 
     #[test]
     fn all_saved_modes_are_explicit_and_runtime_errors_propagate() {
-        for mode in 0..=4 {
+        for mode in 0..=10 {
             let blocks = extract(&block(&format!("SpriteBlend={mode}\nSpriteLayer=4")), true).unwrap();
             let frames = Runtime::default().render(&blocks.definitions, &BTreeMap::new(), 0.0, 0.5).unwrap();
             assert_eq!(frames[0].blend_mode, mode);

@@ -63,6 +63,7 @@ private:
      */
     bool AcceptDeclaration(bool allowUnsizedArray, HLSLType& type, const char*& name);
     bool ExpectDeclaration(bool allowUnsizedArray, HLSLType& type, const char*& name);
+    bool RegisterBufferRegister(const char* registerName);
 
     bool ParseTopLevel(HLSLStatement*& statement);
     bool ParseBlock(HLSLStatement*& firstStatement, const HLSLType& returnType);
@@ -139,6 +140,7 @@ private:
     Array<Variable>         m_variables;
     Array<Variable>         m_typeAliases;
     Array<HLSLFunction*>    m_functions;
+    Array<const char*>      m_bufferRegisters;
     int                     m_numGlobals;
 
     HLSLTree*               m_tree;

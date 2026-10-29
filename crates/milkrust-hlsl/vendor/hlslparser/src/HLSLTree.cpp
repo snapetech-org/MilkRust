@@ -925,7 +925,6 @@ void HLSLTreeVisitor::VisitExpression(HLSLExpression * node)
     else if (node->nodeType == HLSLNodeType_FunctionCall) {
         VisitFunctionCall((HLSLFunctionCall *)node);
     }
-    // Acoget-TODO: This was missing. Did adding it break anything?
     else if (node->nodeType == HLSLNodeType_SamplerState) {
         VisitSamplerState((HLSLSamplerState *)node);
     }

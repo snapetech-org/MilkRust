@@ -11,9 +11,11 @@ GPU capture or device run was performed for this source-only continuation.
   shape/wave/sprite keys, bounded input and explicit read/encoding/parse failures.
   The corpus denominator retains unreadable and unsupported files.
 - Saved sprites have bounded independent equations/lifetimes, relative texture
-  dependencies, transforms and five MilkDrop 3 blend modes (default mode 0),
+  dependencies, transforms and all eleven MilkDrop 3 blend modes (default mode 4),
   burn/display layers and keyed
-  texels before linear filtering. WebGL retains frames during image admission.
+  texels before linear filtering. Both hosts admit the documented 100-name image
+  cache under the aggregate pixel budget. Sprite color keys follow base-0
+  unsigned integer parsing. WebGL retains frames during image admission.
   See [sprite semantics and reference limits](docs/EMBEDDED_SPRITES.md).
 - Classic display controls and full feedback-coordinate transforms reach both
   hosts. All nine classic wave modes, stereo PCM, bounded custom point inputs,
@@ -38,16 +40,19 @@ GPU capture or device run was performed for this source-only continuation.
   rectangular linear algebra, writable selections, converting function outputs,
   vector logic and legacy intrinsics. Bounded numeric/identifier parsing and
   round-trip float output have authored numerical controls; execution is unrun.
+- The bounded WGSL expression path lowers floating scalar/vector HLSL `fmod` to
+  signed WGSL remainder; its integer/boolean, advanced sampling and broader
+  shader-language limits remain explicit.
 - Scoped typedefs, generic numeric spellings, grouped/brace/inferred declarations,
   flattened aggregate initialization/casts and lexical typed constant evaluation
   now cover arrays within structs, matrix/vector selections and arithmetic within
   the profile. User names are isolated from GLSL keywords/intrinsics. Readonly
   initializers use valid GLSL storage, and writes to readonly values fail.
-- Sprite mode 0 uses diffuse alpha and ignores image alpha; mode 4 combines both
-  alphas. Modes 1–3 match decal, additive and source-color blend states. Full
-  ARGB color keys clear matching texels before filtering, and vertex colors
-  follow legacy byte quantization. Rotation remains unwrapped for equations;
-  scripted selectors truncate and clamp to the classic 0–4 range.
+- Sprite modes 0–10 follow the saved D3D9 texture-stage and blend-factor table;
+  the table default is 4 and out-of-range frame selectors map to 0. Modes 0, 5,
+  6, 9 and 10 ignore image alpha; 4, 7 and 8 use it. Full ARGB color keys clear
+  matching texels before filtering, and vertex colors follow legacy byte
+  quantization. Rotation remains unwrapped for equations.
 - All 24 legacy rotation matrices, constant registers `_c0.._c13`, canonical
   coordinate/roam/mip helpers and matched blur range encoding/decoding are bound
   in native and WebGL hosts. Regression sources are present but unrun.
@@ -59,7 +64,8 @@ GPU capture or device run was performed for this source-only continuation.
   filtering/wrapping; q registers, frame uniforms, texture sizes and random/roam
   vectors. Missing resources and compiler/driver errors do not become a placeholder.
 - A bounded `.milk2` wrapper parser, round-trip metadata preservation, two
-  independent states, all 30 saved-pattern formulas, and the documented sprite
+  independent states, all 30 saved-pattern formulas with per-fragment 64x48
+  triangle interpolation from a packed 32-bit vertex field, and the documented sprite
   field/runtime paths for native and WebGL. Formula provenance and the remaining
   pixel-qualification boundary are in [the format notes](docs/MILK2_FORMAT.md).
 - Deterministic archives with integrity indexes and per-file provenance/notices;
@@ -73,15 +79,20 @@ GPU capture or device run was performed for this source-only continuation.
   The candidate builder pins source URLs and creates pending per-preset/target
   evidence inventories. It does not create passing reports or promote downloads.
   Historical and converted community candidates retain their unresolved rights.
-- WebGL admits static raster headers before codec allocation, reserves aggregate
+- WebGL admits raster headers before codec allocation, reserves aggregate
   pixel capacity before asynchronous loading, and decodes legacy DDS/TGA through
   bounded Rust code. Context restoration recreates GPU resources from retained
-  source/assets. PNG/JPEG/BMP/static-GIF/WebP decode now runs in a disposable Web Worker
+  source/assets. PNG/JPEG/BMP/WebP decode now runs in a disposable Web Worker
   with an 8-second termination timeout, bitmap dimension checks, and transferred
   ImageBitmap upload. The web SDK packages a static worker and configures it only
   when it is same-origin with the page; a rejected static worker falls back to a
   blob worker when CSP allows it. Direct wasm-bindgen users may configure a
-  same-origin URL or use the blob-worker fallback.
+  same-origin URL or use the blob-worker fallback. Animated GIF uses the shared
+  bounded Rust decoder in native and WebGL: full-canvas compositing, disposal,
+  per-frame delays and sprite-local or preset-time selection, capped at 120
+  frames and 16 Mi decoded canvas pixels per asset. Netscape/AnimExts repeat
+  metadata controls finite, single-play or infinite playback consistently across
+  both renderer hosts.
   Native/browser decoder, upload and recovery regressions are unrun.
 - Private JIT build entrypoints include native C++ and browser compiler delivery.
   Regression sources cover the typed compiler, resource bindings, unsafe input,
@@ -92,23 +103,26 @@ GPU capture or device run was performed for this source-only continuation.
 - First compiler/link/build checks, native/WebGL driver execution, corpus captures
   and reference-image comparisons. Source acceptance or a nonempty frame is not
   visual conformance. None of the new platform/preset cells is qualified.
-- Reference captures for MilkDrop shader resources and `.milk2` compositing,
-  R8 mask rasterization, the five classic sprite blend modes/filtering and layer
+- Reference captures for MilkDrop shader resources and `.milk2` mesh interpolation/compositing,
+  all eleven sprite blend modes/filtering and layer
   ordering. The typed HLSL
   profile now lowers common `Texture2D`/`Texture3D` sampling methods and direct
   resource parameters/fields, including the static offset overloads supported
-  by GLSL ES 3.00 and base/mip-level `GetDimensions`, including full mip-chain
-  level counts. It still rejects non-2D/3D resources, integer/non-color texture
+  by GLSL ES 3.00, offset `Load` with defined out-of-range zero results, and
+  base/mip-level `GetDimensions` with full mip-chain level counts. It still
+  rejects non-2D/3D resources, integer/non-color texture
   element types, resource arrays or arrays of arrays, initialized/nested
   resource structs, resource-bearing struct parameters, custom sampler-state
-  definitions, comparison methods and gather methods. The compiler remains a
+  definitions, comparison methods and gather methods. Declared direct
+  `SamplerState` fields are accepted as method arguments; custom per-object
+  filtering/addressing remains outside the binding model. The compiler remains a
   bounded pixel-shader profile, not all HLSL shader models. The separate WGSL
   path remains limited.
 - Complete format/EEL/texture behavior for every corpus file, including other legacy
   encodings, other executable extensions and unsupported formats. UTF-8, BOM-marked UTF-16
   and Windows-1252 now have bounded decoders; preserve every remaining exception.
-  Animated GIF sprite frame decoding, delay selection and compositing are not
-  implemented; the current sprite texture payload holds one static RGBA image.
+  Animated PNG/WebP and additional unsupported historical image formats remain
+  explicit import failures.
 - OS-level compiler/driver process/device hang containment, browser-process OOM
   isolation for native codec internals, recovery qualification, long-run
   resource/performance and accessibility evidence. Worker termination only bounds JS-side decoder

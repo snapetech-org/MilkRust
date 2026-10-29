@@ -39,9 +39,9 @@ Only `manifest.json` is mandatory for an editable folder pack. Every published a
 
 The checked-in `content/downloads/catalog.json` contains the CC0 MilkRust sample pack and link-only entries for sources without redistribution permission. The sample pack proves the archive path; it does not establish broad MilkDrop rendering compatibility. The PlezyNG app must verify the catalog-pinned archive digest before extraction, enforce byte/file limits, validate paths and dependencies, and activate the install atomically. User imports must remain distinct from built-in packs.
 
-MilkRust's compatibility output is static parser/function/shader/render-feature analysis. A preset that passes that subset has not been compiled on a GPU, rendered, or visually compared. Known stage gaps are returned as blockers when found; for example, a preset containing both warp and composite shader bodies requires separate render stages that are not yet implemented.
+MilkRust's compatibility output is static parser/function/shader/render-feature analysis. A preset that passes that subset has not been compiled on a GPU, rendered, or visually compared. Warp and composite shader bodies have separate source and renderer stages; unsupported shaders and features are returned as blockers rather than replaced by a fallback scene.
 
-Multi-state `.milk2` files are blocked in the current subset until saved MilkDrop 3 blend patterns and transition state are implemented. The present generic two-frame crossfade is not reported as equivalent behavior.
+Saved `.milk2` pairs have independent preset state, saved transition fields and supported spatial masks in native/WebGL. The Canvas and WGSL paths reject unsupported spatial patterns. Import support and source rendering do not establish pixel parity with MilkDrop 3; reference captures remain part of qualification.
 
 Hash verification protects the archive against accidental or in-transit changes. A runtime-fetched catalog must also be authenticated by a pinned signature before authorizing new URLs or hashes. PlezyNG's initial catalog is embedded in app code with the expected archive digest rather than trusting a mutable catalog endpoint.
 

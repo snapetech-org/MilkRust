@@ -31,8 +31,9 @@ direction and five saved random values. The 30 MD3 `(a,c)` blend-mask formulas
 are implemented on the documented 64x48 vertex grid with aspect correction,
 saved progress and the random block. These formulas are a clean-room port of the
 behavioral implementation/specification in M0Rf30/lactea; its MIT attribution
-is retained in `crates/milkrust-core/THIRD_PARTY_NOTICES.md`. Hosts rasterize the
-vertex alpha field to a cached R8 texture for native and browser shaders. The
+is retained in `crates/milkrust-core/THIRD_PARTY_NOTICES.md`. Hosts upload the
+32-bit fixed-point vertex alpha values as packed RGBA8UI and interpolate the
+original triangles in the native and browser shaders. The
 Canvas fallback rejects spatial patterns instead of silently showing a uniform
 cross-fade. Saved sprite blocks execute on native GL/GLES and WebGL; see
 [EMBEDDED_SPRITES.md](EMBEDDED_SPRITES.md).
@@ -51,7 +52,8 @@ The mask arithmetic includes the `-1` direction rule for the four
 direction-aware patterns and the non-square `horizontal` mesh behavior. Saved
 sprite handling includes per-owner scopes, flip UVs, saved offsets/repeats,
 rotation modes, byte-wrapped alpha, layer and burn ordering, and all eleven
-saved blend modes. These are source-level implementations. R8 rasterization,
+saved blend modes with the MD3 default of 4 and invalid dynamic values mapped to
+mode 0. These are source-level implementations. GPU triangle interpolation,
 compositing, sprite filtering and draw order still need reference captures to
 qualify pixel behavior on each renderer. The Canvas and WGSL paths explicitly
 reject unsupported spatial masks or saved sprites. Unknown trailing extensions

@@ -57,6 +57,55 @@ bool GLSLGenerator::OutputLegacyIntrinsic(HLSLFunctionCall* expression) {
         OutputExpression(offset, &first->nextArgument->nextArgument->type);
         m_writer.Write(", %s.w))", temporary->name); return true;
     }
+    if ((function == "tex2Dfetch" || function == "tex3Dfetch") &&
+        (expression->function->numArguments == 2 || expression->function->numArguments == 3)) {
+        auto* sampler = expression->argument;
+        auto* coordinate = sampler->nextExpression;
+        const bool hasOffset = expression->function->numArguments == 3;
+        auto* offset = hasOffset ? coordinate->nextExpression : NULL;
+        auto* temporary = LocalTemporary(first->nextArgument->type);
+        m_writer.Write("(%s = ", temporary->name);
+        OutputExpression(coordinate, &temporary->expressionType);
+        const bool is2D = function == "tex2Dfetch";
+        const char* xy = is2D ? "xy" : "xyz";
+        const char* mip = is2D ? "z" : "w";
+        m_writer.Write(", (%s.%s < 0 || %s.%s >= 1 + int(floor(log2(float(max(",
+            temporary->name, mip, temporary->name, mip);
+        if (is2D) {
+            m_writer.Write("textureSize("); OutputExpression(sampler); m_writer.Write(",0).x, textureSize(");
+            OutputExpression(sampler); m_writer.Write(",0).y)");
+        } else {
+            m_writer.Write("textureSize("); OutputExpression(sampler); m_writer.Write(",0).x, max(textureSize(");
+            OutputExpression(sampler); m_writer.Write(",0).y, textureSize(");
+            OutputExpression(sampler); m_writer.Write(",0).z))");
+        }
+        m_writer.Write("))))) ? vec4(0.0) : ");
+        // The mip check is evaluated before this branch, so this textureSize
+        // call receives only a valid level. The selected mip dimensions then
+        // implement HLSL Load's defined zero result for out-of-range texels.
+        m_writer.Write("(any(lessThan(%s.%s", temporary->name, xy);
+        if (hasOffset) {
+            m_writer.Write(" + "); OutputExpression(offset, &first->nextArgument->nextArgument->type);
+        }
+        m_writer.Write(", ivec%d(0))) || any(greaterThanEqual(%s.%s", is2D ? 2 : 3, temporary->name, xy);
+        if (hasOffset) {
+            m_writer.Write(" + "); OutputExpression(offset, &first->nextArgument->nextArgument->type);
+        }
+        m_writer.Write(", textureSize("); OutputExpression(sampler);
+        m_writer.Write(", %s.%s)))) ? vec4(0.0) : ", temporary->name, mip);
+        if (hasOffset) {
+            m_writer.Write("texelFetchOffset("); OutputExpression(sampler);
+            m_writer.Write(", %s.%s, %s.%s, ", temporary->name, xy, temporary->name, mip);
+            // Keep the texel offset at the call site so GLSL can validate its
+            // required constant-expression form.
+            OutputExpression(offset, &first->nextArgument->nextArgument->type);
+            m_writer.Write("))");
+        } else {
+            m_writer.Write("texelFetch("); OutputExpression(sampler);
+            m_writer.Write(", %s.%s, %s.%s))", temporary->name, xy, temporary->name, mip);
+        }
+        return true;
+    }
     if ((function == "tex2Dgrad" || function == "tex3Dgrad") && expression->function->numArguments == 5) {
         m_writer.Write("textureGradOffset(");
         auto* argument = expression->argument;
@@ -80,9 +129,8 @@ bool GLSLGenerator::OutputLegacyIntrinsic(HLSLFunctionCall* expression) {
     else if (function == "tex3Dgrad") body = "return textureGrad(a,b,c,d);";
     else if (function == "tex3Dbias") body = "return texture(a,b.xyz,b.w);";
     else if (function == "tex3Dproj") body = "return textureProj(a,b);";
-    else if (function == "tex2Dsize" || function == "tex3Dsize") body = "return textureSize(a,0);";
-    else if (function == "tex2Dfetch") body = "return texelFetch(a,b.xy,b.z);";
-    else if (function == "tex3Dfetch") body = "return texelFetch(a,b.xyz,b.w);";
+    else if ((function == "tex2Dsize" || function == "tex3Dsize") && count == 1) body = "return textureSize(a,0);";
+    else if ((function == "tex2Dsize" || function == "tex3Dsize") && count == 2) body = "return textureSize(a,b);";
     else if (function == "mul" && count == 2) {
         const HLSLType& left = first->type;
         const HLSLType& right = first->nextArgument->type;

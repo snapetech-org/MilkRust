@@ -119,16 +119,24 @@ try {
         let diffuse = tint.map(q8), diffuseAlpha = q8(opacity);
         if (mode===1 || mode===2) { diffuse=tint.map(v=>q8(v*opacity)); diffuseAlpha=1; }
         else if (mode===3) { diffuse=[1,1,1]; diffuseAlpha=1; }
+        else if (mode===7) diffuse=[1,1,1];
+        else if (mode===8) diffuse=tint.map(v=>q8(v>0.5?1-v:v));
         let stage = diffuse.map((v,i)=>v*texel[i]);
         if (mode===3) stage=texel;
+        else if (mode===7) stage=texel.map(v=>1-v);
+        else if (mode===9) stage=texel.map((v,i)=>sat(v+diffuse[i]-0.5));
+        else if (mode===10) stage=texel.map((v,i)=>sat(2*v*diffuse[i]));
         let alpha=diffuseAlpha;
-        if (mode===4) alpha*=texAlpha;
-        return stage.map((v,i)=>sat(
-          mode===1 ? v : mode===2 ? dst[i]+v :
-          mode===3 ? v*v+dst[i]*(1-v) :
-          v*alpha+dst[i]*(1-alpha))*255);
+        if (mode===4 || mode===7 || mode===8) alpha*=texAlpha;
+        return stage.map((v,i)=>{
+          const [sourceFactor,destinationFactor] =
+            mode===1 ? [1,0] : mode===2 || mode===10 ? [1,1] :
+            mode===3 ? [v,1-v] : mode===5 ? [dst[i],0] :
+            mode===6 ? [0,1-v] : mode===9 ? [0,v] : [alpha,1-alpha];
+          return sat(v*sourceFactor+dst[i]*destinationFactor)*255;
+        });
       };
-      for (let mode=0; mode<=4; mode++) {
+      for (let mode=0; mode<=10; mode++) {
         const sprite = `\n[SPRITE1_BEGIN]\nSpriteName=art.tga\nSpriteBlend=${mode}\nSpriteBurn=0\nSpriteSX=-0.75\nSpriteSY=-0.75\n[SPRITE1_END]\n`;
         engine.loadPresetText(preset('shader_body { ret=float3(0.1,0.2,0.3); }')+sprite, `sprite-${mode}.milk`, JSON.stringify({'art.tga':spriteTexture}));
         for(let frame=0;frame<3;frame++) engine.render(frame/30,0,0,0,'','',0,0.5,0.5,0,0);
@@ -147,7 +155,7 @@ try {
         return 'data:image/x-tga;base64,' + btoa(String.fromCharCode(...image));
       };
       const tint = [0.83,0.59,0.27], opacity=0.37;
-      for (const alpha of [0,64,255]) for (const keyed of [false,true]) for (let mode=0;mode<=4;mode++) {
+      for (const alpha of [0,64,255]) for (const keyed of [false,true]) for (let mode=0;mode<=10;mode++) {
         const key = keyed ? '0x4080C0' : '0xFF00FF';
         const isKey = keyed && alpha===255;
         const texel = isKey ? [0,0,0] : sourceColor;

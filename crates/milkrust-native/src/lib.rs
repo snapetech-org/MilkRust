@@ -64,7 +64,7 @@ unsafe fn bytes<'a>(pointer: *const u8, length: usize, maximum: usize) -> Result
 }
 
 #[no_mangle]
-pub extern "C" fn milkrust_abi_version() -> u32 { 1 }
+pub extern "C" fn milkrust_abi_version() -> u32 { 2 }
 
 /// # Safety
 /// A current dedicated GL context and a valid standard GL loader are required.
@@ -117,7 +117,7 @@ pub unsafe extern "C" fn milkrust_load(handle: u64, text_bytes: *const u8, lengt
                 }
             }
         }
-        if textures.len() > 64 || textures.iter().any(|name| name.len() > 512 || name.chars().any(char::is_control)) {
+        if textures.len() > 100 || textures.iter().any(|name| name.len() > 512 || name.chars().any(char::is_control)) {
             return Err("Preset texture dependency list exceeds its limits".into());
         }
         session.texture_names = textures.into_iter().collect::<Vec<_>>().join("\n");
@@ -156,6 +156,26 @@ pub unsafe extern "C" fn milkrust_texture(handle: u64, name: *const u8, name_len
         let name = std::str::from_utf8(unsafe { bytes(name, name_length, 512)? }).map_err(|_| "Texture name must be UTF-8")?;
         let rgba = unsafe { bytes(rgba, length, 32*1024*1024)? };
         session.renderer.texture(name, width, height, rgba)
+    })
+}
+
+/// # Safety
+/// Name and encoded GIF bytes must be readable; names are at most 512 bytes and
+/// encoded data is at most 16 MiB. Decoded frames share the preset pixel budget.
+#[no_mangle]
+pub unsafe extern "C" fn milkrust_texture_gif(handle: u64, name: *const u8, name_length: usize,
+    encoded: *const u8, length: usize) -> i32 {
+    call(handle, |session| {
+        let name = std::str::from_utf8(unsafe { bytes(name, name_length, 512)? }).map_err(|_| "Texture name must be UTF-8")?;
+        let encoded = unsafe { bytes(encoded, length, milkrust_core::texture::MAX_ENCODED_BYTES)? };
+        let (width, height) = milkrust_core::texture::inspect(milkrust_core::texture::Format::Gif, encoded)?;
+        let source = milkrust_core::texture::ImageSource {
+            format: milkrust_core::texture::Format::Gif, width, height, bytes: encoded.to_vec(),
+        };
+        let animation = source.decode_gif()?;
+        let frames = animation.frames.iter().map(|frame| frame.pixels.as_slice()).collect::<Vec<_>>();
+        session.renderer.texture_animation(name, width, height, &frames, &animation.delays_seconds,
+            animation.repeat_count)
     })
 }
 

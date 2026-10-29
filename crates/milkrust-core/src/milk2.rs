@@ -154,22 +154,41 @@ impl TransitionMaskKey {
     }
 }
 
-/// Generate the saved MD3 blend alpha field from its 30 `(a,c)` vertex
-/// patterns and the preset's fixed random block. The result is one R8 byte per
-/// output pixel. The interpolation follows the saved 64x48 blend mesh.
-pub fn generate_transition_mask(key: TransitionMaskKey) -> Result<Vec<u8>, String> {
+/// Dimensions of MilkDrop 3's saved blend mesh, including its boundary vertices.
+pub const TRANSITION_GRID_WIDTH: u32 = 65;
+pub const TRANSITION_GRID_HEIGHT: u32 = 49;
+
+/// Generate the saved MD3 blend alpha at each 64x48 mesh vertex. Four bytes
+/// encode each normalized 32-bit fixed-point value in an RGBA8UI texture so
+/// both GPU hosts can apply the original triangle interpolation without first
+/// quantizing the field to an output-sized R8 image.
+pub fn generate_transition_vertex_field(key: TransitionMaskKey) -> Result<Vec<u8>, String> {
     crate::milk2_mask::generate(key)
 }
 
 /// GLSL shared by copy, translated HLSL, and generated per-pixel paths. The
-/// native and WebGL hosts bind the same precomputed R8 field at the reserved
-/// final texture unit.
+/// native and WebGL hosts bind the same packed vertex field at the reserved
+/// final texture unit and perform matching 64x48 triangle interpolation.
 pub const GLSL_TRANSITION_MASK: &str = r#"
 uniform int u_transitionPattern;
-uniform sampler2D u_transitionMask;
+uniform usampler2D u_transitionMask;
+highp float milkrust_transition_vertex(ivec2 coordinate) {
+  highp uvec4 bytes = texelFetch(u_transitionMask, coordinate, 0);
+  highp uint encoded = (bytes.r << 24u) | (bytes.g << 16u) | (bytes.b << 8u) | bytes.a;
+  return float(encoded) / 4294967295.0;
+}
 float milkrust_transition_mask(vec2 uv) {
   if (u_transitionPattern == 0) return 1.0;
-  return texture(u_transitionMask, clamp(uv, vec2(0.0), vec2(1.0))).r;
+  vec2 position = clamp(uv, vec2(0.0), vec2(1.0)) * vec2(64.0, 48.0);
+  ivec2 cell = ivec2(min(floor(position), vec2(63.0, 47.0)));
+  vec2 fraction = position - vec2(cell);
+  float tl = milkrust_transition_vertex(cell);
+  float tr = milkrust_transition_vertex(cell + ivec2(1, 0));
+  float bl = milkrust_transition_vertex(cell + ivec2(0, 1));
+  float br = milkrust_transition_vertex(cell + ivec2(1, 1));
+  return fraction.y <= fraction.x
+    ? tl * (1.0 - fraction.x) + tr * (fraction.x - fraction.y) + br * fraction.y
+    : tl * (1.0 - fraction.y) + bl * (fraction.y - fraction.x) + br * fraction.x;
 }
 "#;
 

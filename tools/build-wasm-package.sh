@@ -35,3 +35,5 @@ mkdir -p "$out_dir"
 
 cp "$repo_root/crates/milkrust-wasm/texture_decoder_worker.js" \
   "$out_dir/milkrust_texture_decoder.js"
+cp "$repo_root/crates/milkrust-core/THIRD_PARTY_NOTICES.md" \
+  "$out_dir/MILKRUST-THIRD-PARTY-NOTICES.txt"

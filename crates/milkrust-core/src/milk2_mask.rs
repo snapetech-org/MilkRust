@@ -3,14 +3,14 @@
 //! The `(a,c)` pattern formulas below are a clean-room port of the published
 //! behavioral implementation in M0Rf30/lactea, `md3_blend.rs` and
 //! `blend_patterns.rs` (MIT; attribution and license text are in
-//! `crates/milkrust-core/THIRD_PARTY_NOTICES.md`). The R8 rasterizer is
-//! MilkRust-owned glue that evaluates the documented 64x48 vertex field.
+//! `crates/milkrust-core/THIRD_PARTY_NOTICES.md`). Packed vertex upload and GPU
+//! triangle interpolation preserve the documented 64x48 blend mesh.
 
 use crate::milk2::TransitionMaskKey;
 
-const GRID_X: usize = 64;
-const GRID_Y: usize = 48;
-const MAX_MASK_PIXELS: u64 = 8 * 1024 * 1024;
+const GRID_X: usize = crate::milk2::TRANSITION_GRID_WIDTH as usize - 1;
+const GRID_Y: usize = crate::milk2::TRANSITION_GRID_HEIGHT as usize - 1;
+const MAX_TARGET_PIXELS: u64 = 8 * 1024 * 1024;
 
 #[derive(Clone, Copy)]
 enum Pattern {
@@ -313,40 +313,18 @@ pub(super) fn generate(key: TransitionMaskKey) -> Result<Vec<u8>, String> {
         return Err("MilkDrop 3 blend progress or random values are outside their saved domain".into());
     }
     if key.width == 0 || key.height == 0 || key.width > 4096 || key.height > 4096
-        || u64::from(key.width) * u64::from(key.height) > MAX_MASK_PIXELS {
+        || u64::from(key.width) * u64::from(key.height) > MAX_TARGET_PIXELS {
         return Err("MilkDrop 3 transition mask exceeds the 4096-side or 8 Mi-pixel limit".into());
     }
     let aspect = ((key.width as f32 / key.height as f32).max(1.0), (key.height as f32 / key.width as f32).max(1.0));
     let mut vertices = vec![[0.0f32; 2]; (GRID_X + 1) * (GRID_Y + 1)];
     fill_vertices(Pattern::from_code(key.pattern).expect("validated pattern"), key.direction, random, aspect, &mut vertices);
-    let mut vertex_alpha = Vec::with_capacity(vertices.len());
-    for [a, c] in vertices { vertex_alpha.push((a * progress + c).clamp(0.0, 1.0)); }
-
-    let width = key.width as usize;
-    let height = key.height as usize;
-    let mut mask = vec![0u8; width * height];
-    let stride = GRID_X + 1;
-    for y in 0..height {
-        let gy = ((y as f32 + 0.5) / height as f32 * GRID_Y as f32).clamp(0.0, GRID_Y as f32);
-        let cell_y = (gy.floor() as usize).min(GRID_Y - 1);
-        let fy = gy - cell_y as f32;
-        for x in 0..width {
-            let gx = ((x as f32 + 0.5) / width as f32 * GRID_X as f32).clamp(0.0, GRID_X as f32);
-            let cell_x = (gx.floor() as usize).min(GRID_X - 1);
-            let fx = gx - cell_x as f32;
-            let tl = vertex_alpha[cell_y * stride + cell_x];
-            let tr = vertex_alpha[cell_y * stride + cell_x + 1];
-            let bl = vertex_alpha[(cell_y + 1) * stride + cell_x];
-            let br = vertex_alpha[(cell_y + 1) * stride + cell_x + 1];
-            // The blend mesh uses the same diagonal as the fullscreen grid:
-            // top-left to bottom-right vertices are interpolated as triangles.
-            let alpha = if fy <= fx {
-                tl * (1.0 - fx) + tr * (fx - fy) + br * fy
-            } else {
-                tl * (1.0 - fy) + bl * (fy - fx) + br * fx
-            };
-            mask[y * width + x] = (alpha.clamp(0.0, 1.0) * 255.0).round() as u8;
-        }
+    let mut packed = Vec::with_capacity(vertices.len() * 4);
+    for [a, c] in vertices {
+        let alpha = (a * progress + c).clamp(0.0, 1.0);
+        let alpha = if alpha.is_nan() { 0.0 } else { alpha };
+        let encoded = (f64::from(alpha) * f64::from(u32::MAX)).round() as u32;
+        packed.extend_from_slice(&encoded.to_be_bytes());
     }
-    Ok(mask)
+    Ok(packed)
 }

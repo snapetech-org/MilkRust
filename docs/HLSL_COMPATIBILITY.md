@@ -133,8 +133,8 @@ reference-image result is implied.
 ## Embedded browser textures
 
 The WebGL path validates MIME, strict base64, encoded size and raster dimensions
-before creating a browser codec input. PNG/JPEG/BMP/static GIF/WebP decode inside
-a disposable Web Worker; an 8-second timeout terminates a stalled worker, decoded
+before creating a browser codec input. PNG/JPEG/BMP/WebP decode inside a
+disposable Web Worker; an 8-second timeout terminates a stalled worker, decoded
 dimensions are checked again, and the transferred ImageBitmap is uploaded without
 copying its pixels through the renderer thread. The web package stages a static
 worker and uses it when it shares the page's origin, allowing strict CSP
@@ -147,7 +147,8 @@ bounded Rust decoding and direct RGBA upload. Both paths use 4096-per-side,
 before asynchronous loads and returned on disposal, including upload failures.
 DDS/TGA rows are oriented consistently with native uploads, and named samplers
 receive actual dimensions. EXIF dimension swaps preserve the same pixel budget.
-Animated raster containers are explicitly rejected by this static texture path.
+GIF uses the shared bounded Rust animation decoder; animated PNG and WebP are
+rejected by the static texture path.
 Worker termination cannot contain browser-process OOM or native codec work that
 escapes the worker, and it does not isolate the graphics driver. CPU and browser
 upload regression sources have been added but not executed.
@@ -257,7 +258,8 @@ are added; no execution is claimed.
 
 The parser accepts scoped `typedef` aliases (including bounded array aliases),
 `vector<T,N>` and `matrix<T,R,C>` spellings for supported numeric shapes, their
-float defaults, and scalar-width-one names. It reads numeric/struct brace
+float defaults, and scalar-width-one names. `unsigned`/`unsigned int` and
+`dword` aliases map to `uint`. It reads numeric/struct brace
 initializers, nested matrix rows, inferred array extents, grouped global/local
 declarations, `row_major`/`column_major`, and positive constant `[unroll(n)]`
 hints. Arrays keep their own declarator shape instead of leaking it into the
@@ -274,24 +276,39 @@ but unrun. Fixed arrays have one dimension; array aliases preserve their extent,
 and arrays inside structure fields remain supported. A second dimension,
 including one appended to an array typedef, is rejected because [ESSL 3.00
 forbids arrays of arrays](https://registry.khronos.org/OpenGL/specs/es/3.0/GLSL_ES_Specification_3.00.pdf).
-Common `Texture2D<T>` and `Texture3D<T>` declarations with `float4`, `half4`,
-or `min16float4` elements lower to the renderer's legacy RGBA sampler bindings.
-`Sample`, `SampleLevel`, `SampleBias`, `SampleGrad`, `Load`, and base-level
-`GetDimensions` lower to matching legacy operations. Static integer offsets on
+Common `Texture2D<T>` and `Texture3D<T>` declarations with `float`, `half`,
+`min16float`, `min10float`, or their 1–4 component vector forms lower to the
+renderer's legacy RGBA sampler bindings. Sampling and `Load` results keep the
+declared component width. Minimum-precision scalar, vector and matrix aliases
+(`min16float`, `min10float`, `min16int`, `min12int`, `min16uint`) widen to the
+matching `float`, `int` or `uint` types; their minimum precision is not retained.
+`Sample`, `SampleLevel`, `SampleBias`, `SampleGrad`, `Load`, and both base-level
+and mip-level `GetDimensions` lower to matching legacy operations. `Load`
+honors its optional static integer offset and returns zero for invalid mip or
+texel coordinates, matching the object-method contract. The mip-level
+`GetDimensions` overload also reports the complete mip-chain length; both hosts
+generate full mip chains for these bound resources. Static integer offsets on
 `Sample`, `SampleLevel`, and `SampleBias` use GLSL ES 3.00 offset lookups; the
 offset overload of `SampleGrad` uses GLSL ES 3.00 `textureGradOffset`.
 Direct texture parameters and direct texture fields in global structs are
 supported; fields bind as `sampler_<object>_<field>` unless their name already
-begins with `sampler_`. Simple `SamplerState` names are accepted, while
-filtering and wrapping still come from MilkDrop sampler prefixes. `Texture1D`,
+begins with `sampler_`. Declared `SamplerState` names and direct declared
+`SamplerState` fields are accepted as method arguments, while filtering and wrapping still come from
+MilkDrop sampler prefixes. Sampler-state expressions and custom state
+definitions remain unsupported. `Texture1D`,
 cube/array/multisample resources, custom sampler-state definitions, resource
 arrays, initialized resource instances, nested resource-bearing structs, and
 resource-bearing struct parameters remain outside the profile. The separate
-WGSL path remains limited.
+WGSL path remains limited; within its floating scalar/vector expression subset,
+HLSL `fmod` now lowers to WGSL's signed remainder operator. Integer/boolean and
+the separately rejected sampling operations still stay outside that path.
 
-Semantic references: Microsoft's [vector types](https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl/dx-graphics-hlsl-vector),
-[user-defined types](https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl/dx-graphics-hlsl-user-defined)
-and [loop attributes](https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl/dx-graphics-hlsl-for).
+Semantic references: Microsoft's [minimum-precision types](https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl/using-hlsl-minimum-precision), [vector types](https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl/dx-graphics-hlsl-vector),
+[user-defined types](https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl/dx-graphics-hlsl-user-defined),
+[loop attributes](https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl/dx-graphics-hlsl-for),
+[texture `Load`](https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl/dx-graphics-hlsl-to-load)
+and [`GetDimensions`](https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl/dx-graphics-hlsl-to-getdimensions).
+Offset lookup lowering follows the [OpenGL ES 3.00 shading language](https://registry.khronos.org/OpenGL/specs/es/3.0/GLSL_ES_Specification_3.00.pdf).
 
 ## Identifier and indexed-selection checkpoint
 
@@ -341,11 +358,15 @@ invalid GLSL scalar constructor. Aggregate expansion is limited to 4096 scalar
 components, in addition to the existing depth, operation, temporary and output
 budgets. Single-dimensional arrays and direct global sampler fields in structs
 are supported within the compiler budgets. Direct `Texture2D`/`Texture3D`
-object declarations and parameters lower through the same sampler model; their
-common sampling methods are supported and `GetDimensions` accepts only the
-base-level output form. Resource arrays, initialized resource instances,
-nested resource-bearing structs, resource-bearing struct parameters, non-2D/3D
-texture kinds and custom sampler-state definitions remain unsupported.
+float/half scalar and vector declarations and parameters lower through the same
+sampler model. Sampling methods support the documented static integer offsets;
+`GetDimensions` accepts the base-level and mip-level output forms, with the
+NumberOfLevels result based on the full mip chain generated by both hosts.
+`SamplerState` method arguments may be declared names or direct declared struct fields;
+MilkRust does not emulate per-object filter/address state. Resource arrays,
+initialized resource instances, nested resource-bearing structs,
+resource-bearing struct parameters, non-2D/3D texture kinds and custom
+sampler-state definitions remain unsupported.
 `aggregates.hlsl` covers nested fields, arbitrary brace grouping,
 row-major reconstruction, inferred arrays, copies, scalar splats and
 single-evaluation side effects; the native and browser cases are unrun.

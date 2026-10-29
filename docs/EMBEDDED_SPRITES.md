@@ -13,8 +13,12 @@ asset paths fail explicitly. Disabled records are preserved without executing
 code or admitting image dependencies. Limits are the 16 preset sprite slots
 (indices 1–16) and 64 saved records, 1024 numbered equation lines and the existing
 source, expression-work and texture budgets. MilkDrop3's external sprite image
-cache can hold 100 assets; that cache capacity is separate from the 16 slots a
-preset can address.
+cache can hold 100 assets; native and WebGL hosts admit that same 100-name
+limit, subject to the aggregate 32 Mi decoded-pixel budget. That cache capacity
+is separate from the 16 slots a preset can address.
+`SpriteColorKey` follows base-0 unsigned integer syntax: `0x` values are
+hexadecimal, other leading-zero values are octal, and values without a prefix
+are decimal before the alpha byte is forced opaque.
 
 Each sprite has its own persistent scope. `init_N` executes once, `code_N` in
 numeric order each frame, with elapsed sprite time, frame, fps, audio bands and
@@ -35,32 +39,50 @@ independent from EEL. `SpriteBurn=0` disables feedback burn, `1` always burns,
 and other values follow EEL `burn`; when the field is absent, EEL `burn`
 controls feedback and starts at one.
 Invalid layers skip both sprite code and drawing. The EEL `blendmode` register
-starts from `SpriteBlend` (default 0), is read each frame, truncated to an
-integer and clamped to the five supported modes, 0–4.
+starts from `SpriteBlend` (default 4), is read each frame and truncated to an
+integer. Values outside 0–10 select mode 0.
 `SpriteAlpha` multiplies script alpha before legacy 8-bit packing without
 clamping the multiplied alpha, including byte wrap outside 0–1.
 
-Sprite image payloads currently contain one decoded RGBA frame. Animated GIF
-frame decoding, per-frame delays and elapsed-time frame selection are outside
-this source profile; animated GIFs are rejected by texture admission rather
-than silently treated as complete sprite animation.
+GIF sprite assets are decoded into a bounded full-canvas RGBA sequence before
+upload. The shared decoder applies frame offsets and disposal operations,
+composites transparent pixels, and maps zero frame delays to 100 ms. It caps
+assets at 120 frames and 16 Mi decoded canvas pixels. Native GL and WebGL select
+frames from each sprite's local elapsed time; shader and textured-primitive GIF
+samplers use preset elapsed time. Netscape/AnimExts repeat metadata is honored:
+without loop metadata the animation plays once and holds its last frame, zero
+repeats forever, and a positive value repeats that many times after the first
+play. Other animated raster formats remain outside the admitted texture profile.
 
 Both GPU hosts use the same fragment source, sampling a distinct destination
 snapshot for each sprite. They never sample the current draw attachment. The
-five modes follow MilkDrop 3's `DrawUserSprites` table: alpha (0), decal (1),
-additive (2), source-color (3), and color-key (4). Mode 0 blends modulated RGB
-using diffuse alpha and ignores image alpha. Mode 1 replaces the destination
-with modulated RGB. Mode 2 adds modulated RGB; modes 1 and 2 premultiply diffuse
-RGB by alpha before byte conversion. Mode 3 uses texture RGB as both the source
-color and the source-color blend factor, with white diffuse color. Mode 4
-modulates RGB and multiplies diffuse alpha by image alpha. Image alpha is
-otherwise ignored. Color keys match opaque source
+eleven modes follow MilkDrop 3's `DrawUserSprites` table:
+
+| Mode | Stage color / alpha | RGB blend factors |
+| --- | --- | --- |
+| 0 Blend | diffuse × texture / diffuse alpha | source alpha, inverse source alpha |
+| 1 Decal | diffuse × texture / 1 | blending disabled |
+| 2 Additive | diffuse × texture / 1 | one, one |
+| 3 Source color | texture / 1 | source color, inverse source color |
+| 4 Color key | diffuse × texture / diffuse alpha × texture alpha | source alpha, inverse source alpha |
+| 5 Multiplicative | diffuse × texture / diffuse alpha | destination color, zero |
+| 6 Subtractive | diffuse × texture / diffuse alpha | zero, inverse source color |
+| 7 Invert | 1 − texture / diffuse alpha × texture alpha | source alpha, inverse source alpha |
+| 8 Cut-off | folded diffuse × texture / diffuse alpha × texture alpha | source alpha, inverse source alpha |
+| 9 Darken | saturate(texture + diffuse − 0.5) / diffuse alpha | zero, source color |
+| 10 Vivid | saturate(2 × texture × diffuse) / diffuse alpha | one, one |
+
+Modes 1 and 2 premultiply diffuse RGB by alpha before byte conversion. Mode 3
+uses texture RGB as both the source color and the blend factor, with white
+diffuse color. Mode 7 also uses white diffuse RGB; mode 8 folds each diffuse
+channel around 0.5 before multiplying by texture. Modes 0, 5, 6, 9 and 10
+ignore image alpha. Color keys match opaque source
 texels (ARGB, not RGB alone) before the shared
 manual bilinear sample and replace the whole matching texel with transparent
 black. Other texels retain their RGBA values. The saved RGB key is promoted to
 opaque ARGB, matching MilkDrop's `0xff000000 | ck` texture-loader argument. This
 follows D3DX texture-loading semantics; it corrects the earlier alpha-only key
-replacement. Out-of-range per-frame blend IDs clamp to mode 0 or 4.
+replacement. Out-of-range per-frame blend IDs select mode 0.
 Alpha/filter raster parity
 remains unqualified.
 
@@ -81,9 +103,9 @@ geometry and GL code are independent implementations.
 
 No build, tests, GPU capture or device run was performed in this source-only
 continuation. Core regression source covers bounds, round trips, disabled blocks,
-private state, final-frame lifetime, signed transforms, all five modes and
-error recovery. The private browser gate has authored pixel checks for all five
-modes, 30 alpha/key combinations and the one-frame loading case. These
+private state, final-frame lifetime, signed transforms, all eleven modes and
+error recovery. The private browser gate has authored pixel checks for all eleven
+modes, 66 alpha/key combinations and the one-frame loading case. These
 controls validate implementation arithmetic when run; they are not MilkDrop3
 reference captures. Saved sprite fields, UV flips, alpha byte conversion and
 source-level layer/burn ordering are implemented; their pixel behavior and
@@ -98,7 +120,7 @@ MilkDrop3's published `code/vis_milk2/milkdropfs.cpp` (`DrawUserSprites`) at
 ARGB key to `D3DXCreateTextureFromFileEx`, whose
 [documented behavior](https://learn.microsoft.com/en-us/windows/win32/direct3d9/d3dxcreatetexturefromfileex)
 replaces matching pixels with transparent black and includes alpha in the
-match. The browser source checks all five modes and 30 combinations of sprite
+match. The browser source checks all eleven modes and 66 combinations of sprite
 blend mode, transparent/partial/opaque image alpha and matching/nonmatching color keys.
 Core source checks unwrapped rotation lifetime and scripted numeric selectors.
 These are authored controls, not executed results or MD3 captures.

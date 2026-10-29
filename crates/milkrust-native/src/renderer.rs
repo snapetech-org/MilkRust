@@ -34,6 +34,13 @@ impl Drop for Program { fn drop(&mut self) { unsafe { (self.gl.delete_program)(s
 struct Shader { gl: Gl, id: u32 }
 impl Drop for Shader { fn drop(&mut self) { unsafe { (self.gl.delete_shader)(self.id); } } }
 struct Texture { gl: Gl, id: u32, pixels: u64, width: u32, height: u32 }
+struct TextureAsset { frames: Vec<Texture>, delays_seconds: Vec<f64>, repeat_count: Option<u16>, pixels: u64 }
+impl TextureAsset {
+    fn frame_at(&self, seconds: f64) -> &Texture {
+        let index = milkrust_core::texture::animation_frame_index(&self.delays_seconds, self.repeat_count, seconds);
+        &self.frames[index.min(self.frames.len() - 1)]
+    }
+}
 type TransitionMask = (milk2::TransitionMaskKey, Texture);
 struct Samplers { gl: Gl, ids: [u32; 4] }
 impl Drop for Samplers { fn drop(&mut self) { unsafe { (self.gl.delete_samplers)(4, self.ids.as_ptr()); } } }
@@ -137,9 +144,10 @@ impl Texture {
         Ok(texture)
     }
 
-    fn new_transition_mask(gl: Gl, width: u32, height: u32, data: &[u8]) -> Result<Self, String> {
-        if data.len() as u64 != u64::from(width) * u64::from(height) {
-            return Err("Invalid R8 transition mask length".into());
+    fn new_transition_mask(gl: Gl, data: &[u8]) -> Result<Self, String> {
+        let (width, height) = (milk2::TRANSITION_GRID_WIDTH, milk2::TRANSITION_GRID_HEIGHT);
+        if data.len() as u64 != u64::from(width) * u64::from(height) * 4 {
+            return Err("Invalid packed transition vertex field length".into());
         }
         let mut id = 0;
         unsafe { (gl.gen_textures)(1, &mut id); }
@@ -152,8 +160,8 @@ impl Texture {
             (gl.tex_parameter)(TEXTURE_2D, 0x2800, 0x2600);
             (gl.tex_parameter)(TEXTURE_2D, 0x2802, 0x812F);
             (gl.tex_parameter)(TEXTURE_2D, 0x2803, 0x812F);
-            (gl.tex_image)(TEXTURE_2D, 0, 0x8229, width as i32, height as i32, 0, 0x1903, 0x1401, data.as_ptr().cast());
-            if (gl.get_error)() != 0 { return Err("GL transition mask allocation/upload failed".into()); }
+            (gl.tex_image)(TEXTURE_2D, 0, 0x8D7C, width as i32, height as i32, 0, 0x8D99, 0x1401, data.as_ptr().cast());
+            if (gl.get_error)() != 0 { return Err("GL transition vertex field allocation/upload failed".into()); }
         }
         Ok(texture)
     }
@@ -178,7 +186,7 @@ pub struct Renderer {
     sprite_program: Program, sprite_snapshot: Option<Texture>,
     gl: Gl, gles: bool, copy: Program, color: Program, textured: Program, blur_program: Program, samplers: Samplers, noise: BTreeMap<String, (Texture, u32)>,
     buffer: u32, vao: u32, max_texture: i32, texture_units: usize,
-    width: u32, height: u32, capture: Option<(u32, u32, Target)>, layers: Vec<Layer>, textures: BTreeMap<String, Texture>,
+    width: u32, height: u32, capture: Option<(u32, u32, Target)>, layers: Vec<Layer>, textures: BTreeMap<String, TextureAsset>,
     transition_mask: Option<TransitionMask>,
 }
 impl Drop for Renderer {
@@ -213,7 +221,9 @@ impl Renderer {
         }
         let result = Self { sprite_program, sprite_snapshot: None, gl, gles, copy, color, textured, blur_program, samplers, noise: BTreeMap::new(), buffer, vao, max_texture, texture_units: units.max(0) as usize,
             width: 0, height: 0, capture: None, layers: Vec::new(), textures: BTreeMap::new(), transition_mask: None };
-        if buffer == 0 || vao == 0 || max_texture < 64 || units < 4 { return Err("Insufficient OpenGL context resources".into()); }
+        if buffer == 0 || vao == 0 || max_texture < milk2::TRANSITION_GRID_WIDTH as i32 || units < 4 {
+            return Err("Insufficient OpenGL context resources".into());
+        }
         unsafe {
             (gl.disable)(0x0B71); (gl.disable)(0x0B44); (gl.disable)(0x0C11); // depth, cull, scissor
             if !gles { (gl.enable)(0x8642); } // PROGRAM_POINT_SIZE
@@ -224,33 +234,64 @@ impl Renderer {
     pub fn reset(&mut self) { self.sprite_snapshot = None; self.layers.clear(); self.textures.clear(); self.noise.clear(); self.capture = None; self.transition_mask = None; self.width = 0; self.height = 0; }
 
     pub fn texture(&mut self, name: &str, width: u32, height: u32, bytes: &[u8]) -> Result<(), String> {
+        self.texture_frames(name, width, height, &[bytes], &[0.1])
+    }
+
+    pub fn texture_frames(&mut self, name: &str, width: u32, height: u32,
+        frames: &[&[u8]], delays_seconds: &[f64]) -> Result<(), String> {
+        self.texture_animation(name, width, height, frames, delays_seconds, Some(0))
+    }
+
+    pub fn texture_animation(&mut self, name: &str, width: u32, height: u32,
+        frames: &[&[u8]], delays_seconds: &[f64], repeat_count: Option<u16>) -> Result<(), String> {
         dimensions(width, height, self.max_texture)?;
-        if name.is_empty() || name.len() > 512 || name.contains('\0') || bytes.len() as u64 != u64::from(width) * u64::from(height) * 4 {
-            return Err("Invalid texture name or RGBA byte length".into());
+        if name.is_empty() || name.len() > 512 || name.contains('\0') || frames.is_empty()
+            || frames.len() > milkrust_core::texture::MAX_GIF_FRAMES || delays_seconds.len() != frames.len()
+            || delays_seconds.iter().any(|delay| !delay.is_finite() || *delay <= 0.0) {
+            return Err("Invalid texture name, frame count or animation timing".into());
+        }
+        let frame_pixels = u64::from(width) * u64::from(height);
+        let pixels = frame_pixels.checked_mul(frames.len() as u64).ok_or("Texture frame pixel count overflow")?;
+        if pixels > milkrust_core::texture::MAX_GIF_TOTAL_PIXELS
+            || frames.iter().any(|frame| frame.len() as u64 != frame_pixels * 4) {
+            return Err("Texture frames exceed their decoded pixel or RGBA byte budget".into());
         }
         let folded = name.to_ascii_lowercase();
         let existing = self.textures.get(&folded).map_or(0, |texture| texture.pixels);
-        if (self.textures.len() >= 64 && existing == 0) || self.textures.values().map(|t| t.pixels).sum::<u64>() - existing
-            + u64::from(width) * u64::from(height) > MAX_TEXTURE_PIXELS {
-            return Err("Named textures exceed 64 assets or 32 Mi-pixels".into());
+        if (self.textures.len() >= 100 && existing == 0) || self.textures.values().map(|t| t.pixels).sum::<u64>() - existing
+            + pixels > MAX_TEXTURE_PIXELS {
+            return Err("Named textures exceed 100 assets or 32 Mi-pixels".into());
         }
-        // GL UV origin is bottom-left. Hosts supply ordinary top-down image rows.
         let stride = width as usize * 4;
-        let mut flipped = Vec::with_capacity(bytes.len());
-        for row in bytes.chunks_exact(stride).rev() { flipped.extend_from_slice(row); }
-        let texture = Texture::new(self.gl, width, height, Some(&flipped))?;
-        unsafe { (self.gl.generate_mipmap)(TEXTURE_2D); }
-        self.textures.insert(folded, texture);
+        let mut gpu_frames = Vec::with_capacity(frames.len());
+        for pixels in frames {
+            // GL UV origin is bottom-left. Hosts supply ordinary top-down rows.
+            let mut flipped = Vec::with_capacity(pixels.len());
+            for row in pixels.chunks_exact(stride).rev() { flipped.extend_from_slice(row); }
+            gpu_frames.push(Texture::new(self.gl, width, height, Some(&flipped))?);
+            unsafe { (self.gl.generate_mipmap)(TEXTURE_2D); }
+        }
+        self.textures.insert(folded, TextureAsset { frames: gpu_frames, delays_seconds: delays_seconds.to_vec(), repeat_count, pixels });
         Ok(())
     }
 
     fn named_texture(&self, name: &str) -> Result<u32, String> {
-        self.named_texture_asset(name).map(|texture| texture.id)
+        self.named_texture_at(name, 0.0)
     }
     fn named_texture_asset(&self, name: &str) -> Result<&Texture, String> {
         let aliases = get_milkrust_texture_name_aliases(name);
         for name in aliases {
-            if let Some(texture) = self.textures.get(&name.to_ascii_lowercase()) { return Ok(texture); }
+            if let Some(texture) = self.textures.get(&name.to_ascii_lowercase()) { return Ok(&texture.frames[0]); }
+        }
+        Err(format!("Missing texture: {name}"))
+    }
+    fn named_texture_at(&self, name: &str, seconds: f64) -> Result<u32, String> {
+        self.named_texture_asset_at(name, seconds).map(|texture| texture.id)
+    }
+    fn named_texture_asset_at(&self, name: &str, seconds: f64) -> Result<&Texture, String> {
+        let aliases = get_milkrust_texture_name_aliases(name);
+        for name in aliases {
+            if let Some(texture) = self.textures.get(&name.to_ascii_lowercase()) { return Ok(texture.frame_at(seconds)); }
         }
         Err(format!("Missing texture: {name}"))
     }
@@ -265,8 +306,8 @@ impl Renderer {
         });
         if let Some(key) = mask_key {
             if self.transition_mask.as_ref().is_none_or(|(cached, _)| *cached != key) {
-                let pixels = milk2::generate_transition_mask(key)?;
-                self.transition_mask = Some((key, Texture::new_transition_mask(self.gl, width, height, &pixels)?));
+                let vertices = milk2::generate_transition_vertex_field(key)?;
+                self.transition_mask = Some((key, Texture::new_transition_mask(self.gl, &vertices)?));
             }
         } else {
             self.transition_mask = None;
@@ -419,7 +460,7 @@ impl Renderer {
                     let (texture, target) = self.noise.get(resources::base_name(name)).ok_or("Missing noise texture")?;
                     (texture.id, *target)
                 }
-                TextureKind::Asset => (self.named_texture(name)?, TEXTURE_2D),
+                TextureKind::Asset => (self.named_texture_at(name, time)?, TEXTURE_2D),
             };
             let (nearest, repeat) = resources::sampler_state(name);
             let (width, height) = match resources::texture_kind(name) {
@@ -485,10 +526,10 @@ impl Renderer {
         self.draw(mode, &interleave(&primitive.vertices, &[], &primitive.vertex_colors, primitive.color)?)
     }
 
-    fn draw_textured(&self, primitive: &MilkRustTexturedPrimitive, previous: u32) -> Result<(), String> {
+    fn draw_textured(&self, primitive: &MilkRustTexturedPrimitive, previous: u32, time: f64) -> Result<(), String> {
         unsafe { (self.gl.enable)(BLEND); (self.gl.blend_func_separate)(SRC_ALPHA, if primitive.additive { 1 } else { ONE_MINUS_SRC_ALPHA }, 1, ONE_MINUS_SRC_ALPHA); (self.gl.bind_sampler)(0, 0); }
         self.textured.bind(); self.textured.integer("previousFrame", 0);
-        self.bind_texture(0, if primitive.texture_name.is_empty() { previous } else { self.named_texture(&primitive.texture_name)? });
+        self.bind_texture(0, if primitive.texture_name.is_empty() { previous } else { self.named_texture_at(&primitive.texture_name, time)? });
         let vertices = interleave(&primitive.vertices, &primitive.uvs, &primitive.vertex_colors, primitive.color)?;
         let mode = match primitive.mode { MilkRustTexturedPrimitiveMode::Quad | MilkRustTexturedPrimitiveMode::TriangleFan => 0x0006 };
         self.draw(mode, &vertices)
@@ -510,7 +551,7 @@ impl Renderer {
     }
 
     fn draw_sprite(&self, sprite: &milkrust_core::sprites::Frame) -> Result<(), String> {
-        let image = self.named_texture_asset(&sprite.texture)?;
+        let image = self.named_texture_asset_at(&sprite.texture, sprite.time)?;
         let background = self.sprite_snapshot.as_ref().ok_or("Missing sprite snapshot")?;
         // Copy from the currently bound render target; sampling the live target
         // would be undefined GL feedback, especially for multiple overlays.
@@ -562,7 +603,7 @@ impl Renderer {
             for command in frame.draw_commands() {
                 match command {
                     MilkRustDrawCommand::Primitive(index) => self.draw_primitive(frame.primitives.get(index).ok_or("Invalid primitive draw index")?)?,
-                    MilkRustDrawCommand::Textured(index) => self.draw_textured(frame.textured_primitives.get(index).ok_or("Invalid textured draw index")?, layer.targets[layer.read].texture.id)?,
+                    MilkRustDrawCommand::Textured(index) => self.draw_textured(frame.textured_primitives.get(index).ok_or("Invalid textured draw index")?, layer.targets[layer.read].texture.id, time)?,
                 }
             }
             for sprite in frames.sprites.iter().filter(|sprite| sprite.preset_index == index && sprite.burn && sprite.layer > 0) {
