@@ -260,8 +260,9 @@ pub struct Frame {
     pub time: f64,
     pub color_key: u32,
     pub blend_mode: i32,
-    /// Saved layer 0 stamps feedback after composite; layers 1..4 before it.
-    /// Non-burning sprites are screen overlays, ordered by this layer.
+    /// Layer 0 draws over the composite; when burning, it also stamps feedback.
+    /// Layers 1..4 draw into feedback at their ordered scene stage. Burning
+    /// sprites in those layers are drawn twice into feedback.
     pub layer: usize,
     pub burn: bool,
     pub color: [f64; 4],
@@ -378,8 +379,8 @@ impl Runtime {
             for key in ["x", "y", "sx", "sy", "rot", "repeatx", "repeaty", "r", "g", "b", "a", "burn", "blendmode", "done", "flipx", "flipy"] {
                 if !value(key).is_finite() { return Err(format!("Non-finite sprite variable: {key}")); }
             }
-            // SpriteRot is an outer mode: 1/2 add/subtract elapsed time times
-            // SpriteSpeed. EEL `rot` remains an independent persistent value.
+            // SpriteRot is an outer mode: 1/2 add/subtract absolute host time
+            // times SpriteSpeed. EEL `rot` remains an independent persistent value.
             let spin = time * definition.rotation_speed;
             let rotation = value("rot") + if definition.rotation_mode == 1.0 { spin }
                 else if definition.rotation_mode == 2.0 { -spin } else { 0.0 };

@@ -12,7 +12,8 @@ GPU capture or device run was performed for this source-only continuation.
   The corpus denominator retains unreadable and unsupported files.
 - Saved sprites have bounded independent equations/lifetimes, relative texture
   dependencies, transforms and all eleven MilkDrop 3 blend modes (default mode 4),
-  burn/display layers and keyed
+  burn/display layers interleaved at four scene stages with legacy double-burn
+  behavior, and keyed
   texels before linear filtering. Both hosts admit the documented 100-name image
   cache under the aggregate pixel budget. Sprite color keys follow base-0
   unsigned integer parsing. WebGL retains frames during image admission.

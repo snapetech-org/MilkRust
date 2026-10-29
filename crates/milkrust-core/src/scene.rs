@@ -65,6 +65,9 @@ impl Scene {
 pub(crate) fn build(preset: &mut MilkRustPresetDocument, scope: &mut BTreeMap<String, MilkRustValue>,
     samples: &[f64], spectrum: &[f64], stereo: Option<&audio::Stereo>, rgb: [f64; 3], mesh: Option<&crate::MilkRustWarpMesh>) -> Scene {
     let mut scene = Scene::default();
+    // These markers place saved sprites at MilkDrop's feedback layers: after
+    // warp, after shapes, after custom waves, and after the main wave/borders.
+    scene.order.push(MilkRustDrawCommand::SpriteLayer(1));
     let motion_alpha = number(scope, "mv_a", 0.0).clamp(0.0,1.0);
     let motion = crate::warp::motion_vectors(scope, mesh);
     if motion_alpha > 0.0 && motion.len() >= 4 {
@@ -85,6 +88,7 @@ pub(crate) fn build(preset: &mut MilkRustPresetDocument, scope: &mut BTreeMap<St
             scene.shape(&evaluated, scope, rgb);
         }
     }
+    scene.order.push(MilkRustDrawCommand::SpriteLayer(2));
     for wave in &mut preset.waves {
         if !flag(wave, &["enabled", "benabled"]) { continue; }
         let mut evaluated = crate::evaluate_milkrust_entry_stateful(wave, scope, crate::MILKRUST_WAVE_VALUE_KEYS);
@@ -92,6 +96,7 @@ pub(crate) fn build(preset: &mut MilkRustPresetDocument, scope: &mut BTreeMap<St
         for primitive in waveform::custom(&mut evaluated, samples, spectrum, stereo, scope, rgb) { scene.colored(primitive); }
         wave.point_values = evaluated.point_values;
     }
+    scene.order.push(MilkRustDrawCommand::SpriteLayer(3));
     for primitive in waveform::classic(samples, spectrum, stereo, scope, rgb) { scene.colored(primitive); }
     for sprite in &mut preset.sprites {
         let evaluated = crate::evaluate_milkrust_entry_stateful(sprite, scope, crate::MILKRUST_SPRITE_VALUE_KEYS);
@@ -117,6 +122,7 @@ pub(crate) fn build(preset: &mut MilkRustPresetDocument, scope: &mut BTreeMap<St
                 vertex_colors: Vec::new(), vertices });
         }
     }
+    scene.order.push(MilkRustDrawCommand::SpriteLayer(4));
     scene
 }
 
@@ -132,7 +138,7 @@ mod tests {
         let frame = &set.entries[0].frame;
         assert_eq!(frame.textured_primitives.len(), 3);
         assert_eq!(frame.q_registers[0], 7.0);
-        assert_eq!(frame.draw_order[..2], [MilkRustDrawCommand::Textured(0),MilkRustDrawCommand::Primitive(0)]);
+        assert_eq!(frame.draw_order[1..3], [MilkRustDrawCommand::Textured(0),MilkRustDrawCommand::Primitive(0)]);
         let first = &frame.textured_primitives[0];
         assert!((first.vertices[0]+0.6).abs()<1.0e-9);
         assert_eq!(first.vertices[1],0.5);

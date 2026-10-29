@@ -601,14 +601,27 @@ impl Renderer {
             if !frame.shader_stages.warp.required { unsafe { (self.gl.bind_sampler)(0, 0); } }
             self.draw(0x0004, &feedback_vertices(frame)?)?;
             unsafe { (self.gl.enable)(BLEND); (self.gl.blend_func_separate)(SRC_ALPHA, ONE_MINUS_SRC_ALPHA, 1, ONE_MINUS_SRC_ALPHA); }
+            let mut ordered_sprite_layers = false;
             for command in frame.draw_commands() {
                 match command {
                     MilkRustDrawCommand::Primitive(index) => self.draw_primitive(frame.primitives.get(index).ok_or("Invalid primitive draw index")?)?,
                     MilkRustDrawCommand::Textured(index) => self.draw_textured(frame.textured_primitives.get(index).ok_or("Invalid textured draw index")?, layer.targets[layer.read].texture.id, time)?,
+                    MilkRustDrawCommand::SpriteLayer(sprite_layer) => {
+                        ordered_sprite_layers = true;
+                        for sprite in frames.sprites.iter().filter(|sprite| sprite.preset_index == index
+                            && sprite.layer == usize::from(sprite_layer)) {
+                            self.draw_sprite(sprite)?;
+                            if sprite.burn { self.draw_sprite(sprite)?; }
+                        }
+                    }
                 }
             }
-            for sprite in frames.sprites.iter().filter(|sprite| sprite.preset_index == index && sprite.burn && sprite.layer > 0) {
-                self.draw_sprite(sprite)?;
+            if !ordered_sprite_layers {
+                // Preserve legacy FrameSet producers that have no layer markers.
+                for sprite in frames.sprites.iter().filter(|sprite| sprite.preset_index == index && sprite.layer > 0) {
+                    self.draw_sprite(sprite)?;
+                    if sprite.burn { self.draw_sprite(sprite)?; }
+                }
             }
             self.build_resources(frame, layer, layer.targets[write].texture.id)?;
             // The final composite samples this layer's completed feedback. It
@@ -638,9 +651,8 @@ impl Renderer {
             self.layers[index].read = write;
         }
         unsafe { (self.gl.bind_framebuffer)(FRAMEBUFFER, output); }
-        // All layers get their display draw. Burning layers were also stamped
-        // into feedback above, matching MD3's two draws for burn-enabled sprites.
-        for sprite in &frames.sprites { self.draw_sprite(sprite)?; }
+        // Layer zero alone gets a separate draw over the combined composite.
+        for sprite in frames.sprites.iter().filter(|sprite| sprite.layer == 0) { self.draw_sprite(sprite)?; }
         unsafe {
             (self.gl.disable)(BLEND); (self.gl.active_texture)(TEXTURE0);
             if (self.gl.get_error)() != 0 { return Err("OpenGL failed while rendering a preset pass".into()); }

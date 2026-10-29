@@ -278,11 +278,10 @@ impl MilkRustWebGlRendererSet {
             }
         }
         self.gl.bind_framebuffer(web_sys::WebGl2RenderingContext::FRAMEBUFFER, None);
-        for sprite in &frame_set.sprites {
+        for sprite in frame_set.sprites.iter().filter(|sprite| sprite.layer == 0) {
             let renderer = renderers.get(sprite.preset_index)
                 .ok_or_else(|| JsValue::from_str("Sprite owner has no active preset renderer"))?;
-            // Burning sprites were also stamped into their owner's feedback
-            // above; every sprite receives the matching display-layer draw.
+            // Layer zero alone has a separate draw over the combined composite.
             renderer.draw_sprite(sprite)?;
         }
         Ok(true)
@@ -509,13 +508,28 @@ impl MilkRustWebGlRenderer {
         } else {
             self.draw_feedback_quad(frame, time, drawing_width, drawing_height, false, 1.0, TransitionUniforms::fade());
         }
+        let mut ordered_sprite_layers = false;
         for command in frame.draw_commands() {
             match command {
                 MilkRustDrawCommand::Primitive(index) => self.draw_primitives(std::slice::from_ref(frame.primitives.get(index).ok_or_else(|| JsValue::from_str("Invalid primitive draw index"))?)),
                 MilkRustDrawCommand::Textured(index) => self.draw_textured_primitives(std::slice::from_ref(frame.textured_primitives.get(index).ok_or_else(|| JsValue::from_str("Invalid textured draw index"))?), &targets.targets[read_index].texture, time)?,
+                MilkRustDrawCommand::SpriteLayer(sprite_layer) => {
+                    ordered_sprite_layers = true;
+                    for sprite in sprites.iter().filter(|sprite| sprite.preset_index == entry.index
+                        && sprite.layer == usize::from(sprite_layer)) {
+                        self.draw_sprite(sprite)?;
+                        if sprite.burn { self.draw_sprite(sprite)?; }
+                    }
+                }
             }
         }
-        for sprite in sprites.iter().filter(|sprite| sprite.preset_index == entry.index && sprite.burn && sprite.layer > 0) { self.draw_sprite(sprite)?; }
+        if !ordered_sprite_layers {
+            // Preserve legacy FrameSet producers that have no phase markers.
+            for sprite in sprites.iter().filter(|sprite| sprite.preset_index == entry.index && sprite.layer > 0) {
+                self.draw_sprite(sprite)?;
+                if sprite.burn { self.draw_sprite(sprite)?; }
+            }
+        }
         self.shader_resources.borrow_mut().build(frame, &targets.targets[write_index].texture);
 
         self.gl

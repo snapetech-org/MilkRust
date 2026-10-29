@@ -181,7 +181,7 @@ pub struct MilkRustPrimitive {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum MilkRustDrawCommand { Primitive(usize), Textured(usize) }
+pub enum MilkRustDrawCommand { Primitive(usize), Textured(usize), SpriteLayer(u8) }
 
 impl MilkRustFrame {
     /// Legacy producers without explicit ordering keep their previous order.

@@ -89,12 +89,17 @@ replacement. Out-of-range per-frame blend IDs select mode 0.
 Alpha/filter raster parity
 remains unqualified.
 
-Burning sprites on layers 1–4 enter their owner's feedback before its composite
+Burning layer 1 is inserted after warp/blur and before shapes, layer 2
+after shapes, layer 3 after custom waves, and layer 4 after the main wave and
+borders. Shared scene-command markers keep the native and WebGL insertion
+points aligned. These sprites enter their owner's feedback before its composite
 shader. Burning layer 0 stamps feedback after that owner's composite, becoming
-visible through the next frame's history. Every sprite also receives one display
-draw over the combined screen, ordered by saved layer. A trailing `.milk2`
-sprite block belongs to PRESET2. Double presets do not execute sprite equations
-twice.
+visible through the next frame's history. Layers 1–4 are shown through
+their owner's composite and receive no separate screen overlay. A burning sprite
+on those layers is drawn twice into feedback at its stage; a non-burning one is
+drawn once. Only layer 0 receives a separate post-composite screen draw, and a
+burning layer-0 sprite also stamps feedback once. A trailing `.milk2` sprite
+block belongs to PRESET2. Double presets do not execute sprite equations twice.
 Canvas and the generic cross-renderer import gate reject this feature; the
 separate WGSL renderer has no saved-sprite pipeline.
 
