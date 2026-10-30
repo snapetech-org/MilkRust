@@ -22,6 +22,7 @@ struct SamplerStateProfile {
     mag_point: bool,
     mip: crate::resources::MipFilter,
     wrap: [crate::resources::AddressMode; 3],
+    comparison: Option<u8>,
 }
 
 const LEGACY_SAMPLER_INTRINSICS: &[&str] = &[
@@ -54,90 +55,124 @@ impl SamplerStateProfile {
     }
 }
 
-fn parse_sampler_state_profile(tokens: &[String], open: usize) -> Result<(SamplerStateProfile, usize), String> {
+fn parse_sampler_state_profile(
+    tokens: &[String],
+    open: usize,
+    comparison_state: bool,
+) -> Result<(SamplerStateProfile, usize), String> {
     if tokens.get(open).map(String::as_str) != Some("{") {
-        return Err("Malformed HLSL SamplerState initializer".into());
+        return Err("Malformed HLSL sampler-state initializer".into());
     }
     let mut profile = SamplerStateProfile {
-        min_point: false, mag_point: false, mip: crate::resources::MipFilter::Linear,
+        min_point: false,
+        mag_point: false,
+        mip: crate::resources::MipFilter::Linear,
         wrap: [crate::resources::AddressMode::Wrap; 3],
+        comparison: None,
     };
     let mut seen = std::collections::BTreeSet::new();
     let mut cursor = open + 1;
     while cursor < tokens.len() && tokens[cursor] != "}" {
         let property = tokens[cursor].as_str();
-        if !matches!(property, "Filter" | "AddressU" | "AddressV" | "AddressW") {
-            return Err(format!("HLSL SamplerState property {property} is outside the point/linear wrap/clamp/mirror profile"));
+        if !matches!(property, "Filter" | "AddressU" | "AddressV" | "AddressW")
+            && !(comparison_state && property == "ComparisonFunc")
+        {
+            return Err(format!("HLSL sampler-state property {property} is outside the supported static profile"));
         }
         if !seen.insert(property.to_string()) {
-            return Err(format!("Duplicate HLSL SamplerState property {property}"));
+            return Err(format!("Duplicate HLSL sampler-state property {property}"));
         }
         if tokens.get(cursor + 1).map(String::as_str) != Some("=")
             || tokens.get(cursor + 3).map(String::as_str) != Some(";")
         {
-            return Err(format!("Malformed HLSL SamplerState property {property}"));
+            return Err(format!("Malformed HLSL sampler-state property {property}"));
         }
         let value = tokens[cursor + 2].to_ascii_uppercase();
         match property {
-            "Filter" => match value.as_str() {
-                "MIN_MAG_MIP_POINT" | "POINT" => {
-                    profile.min_point = true;
-                    profile.mag_point = true;
-                    profile.mip = crate::resources::MipFilter::Point;
+            "Filter" => {
+                let filter = if comparison_state {
+                    value.strip_prefix("COMPARISON_").ok_or_else(|| {
+                        format!("HLSL SamplerComparisonState filter {value} must use a COMPARISON_ point/linear profile")
+                    })?
+                } else {
+                    value.as_str()
+                };
+                match filter {
+                    "MIN_MAG_MIP_POINT" | "POINT" => {
+                        profile.min_point = true;
+                        profile.mag_point = true;
+                        profile.mip = crate::resources::MipFilter::Point;
+                    }
+                    "MIN_MAG_POINT_MIP_LINEAR" => {
+                        profile.min_point = true;
+                        profile.mag_point = true;
+                        profile.mip = crate::resources::MipFilter::Linear;
+                    }
+                    "MIN_POINT_MAG_LINEAR_MIP_POINT" => {
+                        profile.min_point = true;
+                        profile.mag_point = false;
+                        profile.mip = crate::resources::MipFilter::Point;
+                    }
+                    "MIN_POINT_MAG_MIP_LINEAR" => {
+                        profile.min_point = true;
+                        profile.mag_point = false;
+                        profile.mip = crate::resources::MipFilter::Linear;
+                    }
+                    "MIN_LINEAR_MAG_MIP_POINT" => {
+                        profile.min_point = false;
+                        profile.mag_point = true;
+                        profile.mip = crate::resources::MipFilter::Point;
+                    }
+                    "MIN_LINEAR_MAG_POINT_MIP_LINEAR" => {
+                        profile.min_point = false;
+                        profile.mag_point = true;
+                        profile.mip = crate::resources::MipFilter::Linear;
+                    }
+                    "MIN_MAG_LINEAR_MIP_POINT" => {
+                        profile.min_point = false;
+                        profile.mag_point = false;
+                        profile.mip = crate::resources::MipFilter::Point;
+                    }
+                    "MIN_MAG_MIP_LINEAR" | "LINEAR" => {
+                        profile.min_point = false;
+                        profile.mag_point = false;
+                        profile.mip = crate::resources::MipFilter::Linear;
+                    }
+                    _ => return Err(format!("HLSL sampler-state filter {value} is unsupported; use a standard point/linear filter combination")),
                 }
-                "MIN_MAG_POINT_MIP_LINEAR" => {
-                    profile.min_point = true;
-                    profile.mag_point = true;
-                    profile.mip = crate::resources::MipFilter::Linear;
-                }
-                "MIN_POINT_MAG_LINEAR_MIP_POINT" => {
-                    profile.min_point = true;
-                    profile.mag_point = false;
-                    profile.mip = crate::resources::MipFilter::Point;
-                }
-                "MIN_POINT_MAG_MIP_LINEAR" => {
-                    profile.min_point = true;
-                    profile.mag_point = false;
-                    profile.mip = crate::resources::MipFilter::Linear;
-                }
-                "MIN_LINEAR_MAG_MIP_POINT" => {
-                    profile.min_point = false;
-                    profile.mag_point = true;
-                    profile.mip = crate::resources::MipFilter::Point;
-                }
-                "MIN_LINEAR_MAG_POINT_MIP_LINEAR" => {
-                    profile.min_point = false;
-                    profile.mag_point = true;
-                    profile.mip = crate::resources::MipFilter::Linear;
-                }
-                "MIN_MAG_LINEAR_MIP_POINT" => {
-                    profile.min_point = false;
-                    profile.mag_point = false;
-                    profile.mip = crate::resources::MipFilter::Point;
-                }
-                "MIN_MAG_MIP_LINEAR" | "LINEAR" => {
-                    profile.min_point = false;
-                    profile.mag_point = false;
-                    profile.mip = crate::resources::MipFilter::Linear;
-                }
-                _ => return Err(format!("HLSL SamplerState filter {value} is unsupported; use a standard point/linear filter combination")),
-            },
+            }
             "AddressU" | "AddressV" | "AddressW" => {
                 let wrap = match value.as_str() {
                     "WRAP" => crate::resources::AddressMode::Wrap,
                     "CLAMP" => crate::resources::AddressMode::Clamp,
                     "MIRROR" => crate::resources::AddressMode::Mirror,
-                    _ => return Err(format!("HLSL SamplerState address mode {value} is unsupported; use Wrap, Clamp or Mirror")),
+                    _ => return Err(format!("HLSL sampler-state address mode {value} is unsupported; use Wrap, Clamp or Mirror")),
                 };
                 let axis = match property { "AddressU" => 0, "AddressV" => 1, _ => 2 };
                 profile.wrap[axis] = wrap;
+            }
+            "ComparisonFunc" => {
+                profile.comparison = Some(match value.as_str() {
+                    "NEVER" => 0,
+                    "LESS" => 1,
+                    "EQUAL" => 2,
+                    "LESS_EQUAL" => 3,
+                    "GREATER" => 4,
+                    "NOT_EQUAL" => 5,
+                    "GREATER_EQUAL" => 6,
+                    "ALWAYS" => 7,
+                    _ => return Err(format!("HLSL comparison function {value} is unsupported")),
+                });
             }
             _ => unreachable!(),
         }
         cursor += 4;
     }
     if tokens.get(cursor).map(String::as_str) != Some("}") {
-        return Err("Unterminated HLSL SamplerState initializer".into());
+        return Err("Unterminated HLSL sampler-state initializer".into());
+    }
+    if comparison_state && profile.comparison.is_none() {
+        return Err("HLSL SamplerComparisonState requires a static ComparisonFunc".into());
     }
     Ok((profile, cursor))
 }
@@ -156,6 +191,7 @@ fn parse_legacy_sampler_state(
     let mut profile = SamplerStateProfile {
         min_point: false, mag_point: false, mip: crate::resources::MipFilter::Linear,
         wrap: [crate::resources::AddressMode::Wrap; 3],
+        comparison: None,
     };
     let mut seen = std::collections::BTreeSet::new();
     let mut resource = None;
@@ -433,7 +469,7 @@ fn lower_modern_resource_syntax(tokens: &mut Vec<String>) -> Result<(), String> 
             "Texture2D" => Some(2),
             "Texture3D" => Some(3),
             "Texture1DArray" | "Texture2DArray" | "Texture2DMS" | "Texture2DMSArray"
-            | "TextureCube" | "TextureCubeArray" | "SamplerComparisonState" | "RWTexture1D"
+            | "TextureCube" | "TextureCubeArray" | "RWTexture1D"
             | "RWTexture1DArray" | "RWTexture2D" | "RWTexture2DArray" | "RWTexture3D"
             | "RasterizerOrderedTexture1D" | "RasterizerOrderedTexture2D" | "RasterizerOrderedTexture3D"
             | "Buffer" | "RWBuffer" | "StructuredBuffer" | "RWStructuredBuffer"
@@ -656,7 +692,8 @@ fn lower_modern_resource_syntax(tokens: &mut Vec<String>) -> Result<(), String> 
                 continue;
             }
         }
-        if tokens[index] == "SamplerState" {
+        if matches!(tokens[index].as_str(), "SamplerState" | "SamplerComparisonState") {
+            let comparison_state = tokens[index] == "SamplerComparisonState";
             let Some(name) = tokens.get(index + 1).filter(|token| is_identifier(token)) else {
                 return Err("Malformed HLSL SamplerState declaration".into());
             };
@@ -683,7 +720,7 @@ fn lower_modern_resource_syntax(tokens: &mut Vec<String>) -> Result<(), String> 
                 }) != 0 {
                     return Err("Initialized HLSL SamplerState declarations must be global".into());
                 }
-                let (profile, close) = parse_sampler_state_profile(tokens, open)?;
+                let (profile, close) = parse_sampler_state_profile(tokens, open, comparison_state)?;
                 if !matches!(tokens.get(close + 1).map(String::as_str), Some(";") | None) {
                     return Err("Grouped HLSL SamplerState initializers are unsupported".into());
                 }
@@ -951,7 +988,7 @@ fn lower_modern_resource_syntax(tokens: &mut Vec<String>) -> Result<(), String> 
             continue;
         }
         let method = tokens[index + 1].as_str();
-        if !matches!(method, "Sample" | "SampleLevel" | "SampleBias" | "SampleGrad" | "Gather" | "GatherRed" | "GatherGreen" | "GatherBlue" | "GatherAlpha" | "Load" | "GetDimensions") {
+        if !matches!(method, "Sample" | "SampleLevel" | "SampleBias" | "SampleGrad" | "Gather" | "GatherRed" | "GatherGreen" | "GatherBlue" | "GatherAlpha" | "GatherCmp" | "Load" | "GetDimensions") {
             if index > 0 && is_identifier(&tokens[index - 1]) {
                 let mut base_start = index - 1;
                 while base_start >= 2 && tokens[base_start - 1] == "." && is_identifier(&tokens[base_start - 2]) {
@@ -994,6 +1031,7 @@ fn lower_modern_resource_syntax(tokens: &mut Vec<String>) -> Result<(), String> 
         }.ok_or_else(|| format!("HLSL resource method receiver {base_name} has no unambiguous Texture1D/Texture2D/Texture3D declaration"))?;
         let dimension = resource_shape.dimension;
         let (args, end) = split_hlsl_call(tokens, index + 2)?;
+        let gather_cmp = method == "GatherCmp";
         let gather_component = match method {
             "Gather" | "GatherRed" => Some(0),
             "GatherGreen" => Some(1),
@@ -1003,6 +1041,9 @@ fn lower_modern_resource_syntax(tokens: &mut Vec<String>) -> Result<(), String> 
         };
         if gather_component.is_some() && (dimension != 2 || !matches!(args.len(), 2 | 3)) {
             return Err("Texture2D Gather methods require a sampler, float2 location, and optional int2 offset".into());
+        }
+        if gather_cmp && (dimension != 2 || !matches!(args.len(), 3 | 4)) {
+            return Err("Texture2D GatherCmp requires a comparison sampler, float2 location, compare value, and optional int2 offset".into());
         }
         if method == "GetDimensions" {
             let expected = usize::from(dimension);
@@ -1073,6 +1114,7 @@ fn lower_modern_resource_syntax(tokens: &mut Vec<String>) -> Result<(), String> 
             ("SampleGrad", 4 | 5, 3) => ("tex3Dgrad", args[1].clone()),
             ("Gather" | "GatherRed" | "GatherGreen" | "GatherBlue" | "GatherAlpha", 2 | 3, 2) =>
                 ("milkRustInternalGather2D", args[1].clone()),
+            ("GatherCmp", 3 | 4, 2) => ("milkRustInternalGatherCmp2D", args[1].clone()),
             ("Load", 1 | 2, 1 | 2) => ("tex2Dfetch", args[0].clone()),
             ("Load", 1 | 2, 3) => ("tex3Dfetch", args[0].clone()),
             _ => return Err(format!("Invalid argument count for HLSL texture method {method}")),
@@ -1089,9 +1131,16 @@ fn lower_modern_resource_syntax(tokens: &mut Vec<String>) -> Result<(), String> 
             None
         };
         if method != "Load" && sampler_state_name.is_none() {
-            return Err(format!("HLSL texture method {method} requires a declared SamplerState name or direct struct field"));
+            return Err(format!("HLSL texture method {method} requires a declared static sampler-state name or direct struct field"));
         }
         let sampler_profile = sampler_state_name.as_ref().and_then(|name| sampler_state_profiles.get(name)).copied();
+        let comparison_function = sampler_profile.and_then(|profile| profile.comparison);
+        if gather_cmp && comparison_function.is_none() {
+            return Err("Texture2D GatherCmp requires a statically initialized SamplerComparisonState with ComparisonFunc".into());
+        }
+        if !gather_cmp && comparison_function.is_some() {
+            return Err(format!("HLSL comparison sampler cannot be used with texture method {method}"));
+        }
         rewritten.truncate(rewritten.len().saturating_sub(index - base_start));
         rewritten.push(intrinsic.into());
         rewritten.push("(".into());
@@ -1141,6 +1190,10 @@ fn lower_modern_resource_syntax(tokens: &mut Vec<String>) -> Result<(), String> 
                 rewritten.extend(coordinate);
             }
         }
+        if gather_cmp {
+            rewritten.push(",".into());
+            rewritten.extend(args[2].clone());
+        }
         if method == "SampleGrad" {
             rewritten.push(",".into());
             if dimension == 1 {
@@ -1164,6 +1217,7 @@ fn lower_modern_resource_syntax(tokens: &mut Vec<String>) -> Result<(), String> 
             ("SampleLevel", 4) | ("SampleBias", 4) => Some(3),
             ("SampleGrad", 5) => Some(4),
             ("Load", 2) => Some(1),
+            ("GatherCmp", 4) => Some(3),
             _ => None,
         };
         if let Some(offset) = offset_index.and_then(|offset| args.get(offset)) {
@@ -1176,6 +1230,13 @@ fn lower_modern_resource_syntax(tokens: &mut Vec<String>) -> Result<(), String> 
                 rewritten.extend(offset.clone());
             }
         }
+        if gather_cmp {
+            if args.len() == 3 {
+                rewritten.extend([",".into(), "int2".into(), "(".into(), "0".into(), ",".into(), "0".into(), ")".into()]);
+            }
+            rewritten.push(",".into());
+            rewritten.push(comparison_function.ok_or_else(|| "Missing comparison function for Texture2D GatherCmp".to_string())?.to_string());
+        }
         if let Some(component) = gather_component {
             rewritten.push(",".into());
             if let Some(offset) = args.get(2) {
@@ -1187,7 +1248,7 @@ fn lower_modern_resource_syntax(tokens: &mut Vec<String>) -> Result<(), String> 
             rewritten.push(component.to_string());
         }
         rewritten.push(")".into());
-        if resource_shape.width < 4 && gather_component.is_none() {
+        if resource_shape.width < 4 && gather_component.is_none() && !gather_cmp {
             rewritten.push(".".into());
             rewritten.push(match resource_shape.width { 1 => "x", 2 => "xy", _ => "xyz" }.into());
         }
@@ -1595,7 +1656,7 @@ pub(crate) fn compile(source: &str, legacy_feedback: bool) -> Result<String, Str
     // Rename any user entry before the emitter adds its GLSL main.
     aliases.insert("main".into(), "milkrust_user_entry".into());
     let mut tokens = milkrust_hlsl::tokenize(&source)?;
-    if tokens.iter().any(|token| token == "milkRustInternalGather2D") {
+    if tokens.iter().any(|token| matches!(token.as_str(), "milkRustInternalGather2D" | "milkRustInternalGatherCmp2D")) {
         return Err("Shader uses a reserved compiler identifier".into());
     }
     lower_modern_resource_syntax(&mut tokens)?;
@@ -1653,8 +1714,12 @@ pub(crate) fn compile(source: &str, legacy_feedback: bool) -> Result<String, Str
         let kind = if crate::resources::texture_kind(name).is_volume() { "sampler3D" } else { "sampler2D" };
         preamble.push_str(&format!("{kind} shaderTexture{index};\n"));
     }
-    if tokens.iter().any(|token| token == "milkRustInternalGather2D") {
+    let needs_gather_cmp = tokens.iter().any(|token| token == "milkRustInternalGatherCmp2D");
+    if needs_gather_cmp || tokens.iter().any(|token| token == "milkRustInternalGather2D") {
         preamble.push_str("float4 milkRustInternalGather2D(sampler2D source, float2 location, int2 offset, int component);\n");
+    }
+    if needs_gather_cmp {
+        preamble.push_str("float4 milkRustInternalGatherCmp2D(sampler2D source, float2 location, float compareValue, int2 offset, int comparisonFunction);\n");
     }
     for name in crate::resources::SCALAR_UNIFORMS { preamble.push_str(&format!("float {name};\n")); }
     for name in crate::resources::VECTOR_UNIFORMS { preamble.push_str(&format!("float4 {name};\n")); }
@@ -1762,7 +1827,7 @@ fn adapt_output(glsl: &str, feedback: bool) -> Result<String, String> {
     if !has_output || !has_main { return Err("Shader entry must write COLOR0".into()); }
     if !has_uv { output.push_str("in vec2 uv;\n"); }
     output.insert_str(output.find('\n').map_or(0, |i| i+1), "in highp vec2 originalUv;\n");
-    if glsl.contains("milkRustInternalGather2D") {
+    if glsl.contains("milkRustInternalGather2D") || glsl.contains("milkRustInternalGatherCmp2D") {
         let mut cursor = 0usize;
         let mut insertion = output.find('\n').map_or(0, |index| index + 1);
         for line in output.split_inclusive('\n') {
@@ -1785,6 +1850,24 @@ vec4 milkRustInternalGather2D(sampler2D source, vec2 location, ivec2 offset, int
     vec4 c2 = textureLod(source, (low + vec2(1.5, 0.5)) * inv, 0.0);
     vec4 c3 = textureLod(source, (low + vec2(0.5, 0.5)) * inv, 0.0);
     return vec4(c0[component], c1[component], c2[component], c3[component]);
+}
+float milkRustInternalCompare(float referenceValue, float texelValue, int comparisonFunction) {
+    if (comparisonFunction == 0) return 0.0;
+    if (comparisonFunction == 1) return referenceValue < texelValue ? 1.0 : 0.0;
+    if (comparisonFunction == 2) return referenceValue == texelValue ? 1.0 : 0.0;
+    if (comparisonFunction == 3) return referenceValue <= texelValue ? 1.0 : 0.0;
+    if (comparisonFunction == 4) return referenceValue > texelValue ? 1.0 : 0.0;
+    if (comparisonFunction == 5) return referenceValue != texelValue ? 1.0 : 0.0;
+    if (comparisonFunction == 6) return referenceValue >= texelValue ? 1.0 : 0.0;
+    return 1.0;
+}
+vec4 milkRustInternalGatherCmp2D(sampler2D source, vec2 location, float compareValue, ivec2 offset, int comparisonFunction) {
+    vec4 values = milkRustInternalGather2D(source, location, offset, 0);
+    return vec4(
+        milkRustInternalCompare(compareValue, values.x, comparisonFunction),
+        milkRustInternalCompare(compareValue, values.y, comparisonFunction),
+        milkRustInternalCompare(compareValue, values.z, comparisonFunction),
+        milkRustInternalCompare(compareValue, values.w, comparisonFunction));
 }
 "#);
     }

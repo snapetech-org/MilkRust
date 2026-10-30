@@ -480,3 +480,22 @@ state, literal resource arrays, prototypes, capture, recursion and expansion
 limits. The browser gate has authored pixel controls distinguishing point-clamp
 from point-wrap and checking that numeric argument side effects occur once.
 Neither compiler nor GPU controls have been executed for this checkpoint.
+
+
+## Bounded Texture2D GatherCmp
+
+`Texture2D.GatherCmp` is implemented for global, statically initialized
+`SamplerComparisonState` profiles on Texture2D resources. Supported
+`COMPARISON_MIN_MAG_*` point/linear filter combinations are parsed, with
+NEVER, LESS, EQUAL, LESS_EQUAL, GREATER, NOT_EQUAL, GREATER_EQUAL and ALWAYS
+comparison functions. The shader compares the resource's red channel for four
+base-level texels in the same component order used by the bounded ordinary
+Gather helper, honoring the static U/V/W address profile and optional integer
+offset.
+
+The compiler rejects comparison states without an explicit ComparisonFunc,
+ordinary texture methods passed a comparison state, and GatherCmp calls without
+a comparison state. SampleCmp, SampleCmpLevelZero, dynamic comparison state,
+other texture dimensions and non-base-level comparison filtering remain
+unsupported. This is a bounded source path, not a reference-pixel claim; no
+build, compiler test, render or device check was run for this update.

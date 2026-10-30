@@ -212,9 +212,15 @@ render frames, resolve external texture packs, or establish fidelity.
   It still rejects texture types outside those three dimensions, integer/non-color texture
   element types, resource arrays in function scopes or nested resource-bearing
   structs, initialized resource instances, resource-bearing struct parameters,
-  comparison sampling and `GatherCmp` variants. The five `Texture2D.Gather`
-  methods now read the four base-level texels in D3D order and use the selected
-  static sampler's address mode; reference-pixel comparison remains open.
+  `SampleCmp`/`SampleCmpLevelZero`, and comparison methods beyond the bounded
+  `Texture2D.GatherCmp` path. Static `SamplerComparisonState` declarations
+  lower supported comparison filters, all eight comparison functions and
+  U/V/W Wrap/Clamp/Mirror modes. GatherCmp compares the red channel of four
+  base-level texels in D3D order and accepts an optional integer offset. It
+  requires a statically initialized comparison state; other texture dimensions,
+  dynamic state, implicit-LOD comparison filtering and reference-pixel parity
+  remain open. The five ordinary `Texture2D.Gather` methods also read the four
+  base-level texels in D3D order; reference-pixel comparison remains open.
   Global static `SamplerState` definitions
   support all eight standard point/linear min/mag/mip `Filter` combinations and
   independent U/V/W Wrap, Clamp or Mirror addressing. Anisotropic filtering, border
@@ -458,3 +464,16 @@ remains in the disposable browser worker.
 The decoder, ABI and import paths are source-complete. Decoder, upload,
 malformed-input, disposal/loop and reference-pixel checks remain unrun; no
 platform or visual qualification is claimed.
+
+
+## 2026-10-30 bounded Texture2D GatherCmp source path
+
+The typed compiler now lowers `Texture2D.GatherCmp` for statically initialized
+`SamplerComparisonState` declarations. The comparison filter uses the existing
+bounded point/linear profile; comparison functions cover NEVER, LESS, EQUAL,
+LESS_EQUAL, GREATER, NOT_EQUAL, GREATER_EQUAL and ALWAYS. U/V/W addressing and
+the optional integer offset are retained. Four base-level red-channel values
+are compared independently and returned in the same ordering as the existing
+Texture2D Gather implementation. SampleCmp, SampleCmpLevelZero, other texture
+dimensions, implicit-LOD comparison filtering and pixel-reference qualification
+remain open. No compiler/build/test/render was run for this source update.

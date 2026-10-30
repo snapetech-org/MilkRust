@@ -85,7 +85,7 @@ fn declarations(tokens: &[String]) -> Result<Vec<Function>, String> {
 fn opaque_name(parameter: &[String]) -> Result<Option<String>, String> {
     let first = parameter.iter().position(|t| !matches!(t.as_str(), "in" | "const" | "uniform" | "out" | "inout"));
     let Some(first) = first else { return Ok(None); };
-    if !matches!(parameter[first].as_str(), "SamplerState" | "Texture1D" | "Texture2D" | "Texture3D"
+    if !matches!(parameter[first].as_str(), "SamplerState" | "SamplerComparisonState" | "Texture1D" | "Texture2D" | "Texture3D"
         | "sampler" | "sampler2D" | "sampler3D") { return Ok(None); }
     if parameter[..first].iter().any(|t| matches!(t.as_str(), "out" | "inout")) {
         return Err("HLSL resource helper parameters must be read-only inputs".into());
