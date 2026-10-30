@@ -4,8 +4,10 @@ use std::io::Cursor;
 
 pub const MAX_ENCODED_BYTES: usize = 16 * 1024 * 1024;
 pub const MAX_PIXELS: u64 = 8 * 1024 * 1024;
-pub const MAX_GIF_FRAMES: usize = 120;
-pub const MAX_GIF_TOTAL_PIXELS: u64 = 16 * 1024 * 1024;
+pub const MAX_ANIMATION_FRAMES: usize = 120;
+pub const MAX_ANIMATED_TOTAL_PIXELS: u64 = 16 * 1024 * 1024;
+pub const MAX_GIF_FRAMES: usize = MAX_ANIMATION_FRAMES;
+pub const MAX_GIF_TOTAL_PIXELS: u64 = MAX_ANIMATED_TOTAL_PIXELS;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Format { Png, Jpeg, Gif, Bmp, WebP, Dds, Tga }
 pub struct ImageSource { pub format: Format, pub width: u32, pub height: u32, pub bytes: Vec<u8> }
@@ -17,7 +19,7 @@ pub struct RgbaAnimation {
     pub delays_seconds: Vec<f64>,
     /// Number of repeats after the first play. `Some(0)` means forever and
     /// `None` means the file requested a single play.
-    pub repeat_count: Option<u16>,
+    pub repeat_count: Option<u32>,
 }
 
 impl RgbaAnimation {
@@ -33,7 +35,7 @@ impl RgbaAnimation {
 
 /// Select the visible animation frame. GIF repeat counts describe repeats
 /// after the initial play; a missing loop extension holds the final frame.
-pub fn animation_frame_index(delays_seconds: &[f64], repeat_count: Option<u16>, seconds: f64) -> usize {
+pub fn animation_frame_index(delays_seconds: &[f64], repeat_count: Option<u32>, seconds: f64) -> usize {
     if delays_seconds.len() <= 1 || !seconds.is_finite()
         || delays_seconds.iter().any(|delay| !delay.is_finite() || *delay <= 0.0) {
         return 0;
@@ -66,7 +68,111 @@ struct GifInspection {
     width: u32,
     height: u32,
     frames: usize,
-    repeat_count: Option<u16>,
+    repeat_count: Option<u32>,
+}
+
+#[derive(Clone, Copy)]
+struct ApngInspection {
+    frames: usize,
+    repeat_count: Option<u32>,
+    has_default_image: bool,
+}
+
+fn inspect_png(bytes: &[u8]) -> Result<(u32, u32, Option<ApngInspection>), String> {
+    if !bytes.starts_with(b"\x89PNG\r\n\x1a\n") || read(bytes, 8, 4, true)? != 13
+        || bytes.get(12..16) != Some(b"IHDR") {
+        return Err("Invalid PNG header".into());
+    }
+    let canvas_width = read(bytes, 16, 4, true)?;
+    let canvas_height = read(bytes, 20, 4, true)?;
+    dimensions(canvas_width, canvas_height)?;
+    let mut offset = 8usize;
+    let mut animation: Option<(u32, u32)> = None;
+    let mut frame_controls = 0usize;
+    let mut first_control_before_idat = false;
+    let mut saw_idat = false;
+    let mut saw_iend = false;
+    let mut saw_frame_data = false;
+    while offset < bytes.len() {
+        let length = read(bytes, offset, 4, true)? as usize;
+        let data = offset.checked_add(8).ok_or("PNG offset overflow")?;
+        let end = data.checked_add(length).and_then(|v| v.checked_add(4))
+            .filter(|end| *end <= bytes.len()).ok_or("Truncated PNG chunk")?;
+        let kind = bytes.get(offset + 4..offset + 8).ok_or("Truncated PNG chunk")?;
+        match kind {
+            b"IHDR" if offset != 8 => return Err("PNG contains a duplicate IHDR".into()),
+            b"acTL" => {
+                if length != 8 || animation.is_some() || saw_idat {
+                    return Err("Invalid APNG animation control".into());
+                }
+                let frames = read(bytes, data, 4, true)?;
+                let plays = read(bytes, data + 4, 4, true)?;
+                if frames == 0 || frames as usize > MAX_ANIMATION_FRAMES
+                    || u64::from(canvas_width) * u64::from(canvas_height) * u64::from(frames)
+                        > MAX_ANIMATED_TOTAL_PIXELS {
+                    return Err("APNG exceeds the 120-frame or 16-megapixel animation budget".into());
+                }
+                animation = Some((frames, plays));
+            }
+            b"fcTL" => {
+                let Some((frames, _)) = animation else { return Err("APNG frame control precedes animation control".into()); };
+                if length != 26 { return Err("Invalid APNG frame control".into()); }
+                let width = read(bytes, data + 4, 4, true)?;
+                let height = read(bytes, data + 8, 4, true)?;
+                let x = read(bytes, data + 12, 4, true)?;
+                let y = read(bytes, data + 16, 4, true)?;
+                if width == 0 || height == 0 || x.checked_add(width).is_none_or(|right| right > canvas_width)
+                    || y.checked_add(height).is_none_or(|bottom| bottom > canvas_height) {
+                    return Err("APNG subframe exceeds its canvas".into());
+                }
+                frame_controls = frame_controls.checked_add(1).ok_or("APNG frame count overflow")?;
+                if frame_controls > frames as usize {
+                    return Err("APNG contains more frame controls than declared".into());
+                }
+                if !saw_idat && frame_controls == 1 { first_control_before_idat = true; }
+            }
+            b"IDAT" => {
+                saw_idat = true;
+                saw_frame_data = true;
+            }
+            b"fdAT" => {
+                if animation.is_none() || frame_controls == 0 || length < 4 {
+                    return Err("APNG frame data has no preceding frame control".into());
+                }
+                saw_frame_data = true;
+            }
+            b"IEND" => {
+                if length != 0 { return Err("Invalid PNG end chunk".into()); }
+                saw_iend = true;
+                if end != bytes.len() { return Err("PNG has trailing data after IEND".into()); }
+            }
+            _ => {}
+        }
+        offset = end;
+        if saw_iend { break; }
+    }
+    if !saw_iend || !saw_frame_data { return Err("PNG is missing image data or IEND".into()); }
+    let apng = if let Some((frames, plays)) = animation {
+        if frame_controls != frames as usize {
+            return Err("APNG frame controls do not match the declared frame count".into());
+        }
+        let repeat_count = match plays {
+            0 => Some(0),
+            1 => None,
+            count => Some(count - 1),
+        };
+        Some(ApngInspection {
+            frames: frames as usize,
+            repeat_count,
+            has_default_image: !first_control_before_idat,
+        })
+    } else {
+        if frame_controls != 0 || bytes.windows(4).any(|chunk| chunk == b"fdAT") {
+            return Err("PNG contains APNG frame chunks without animation control".into());
+        }
+        None
+    };
+    Ok((canvas_width, canvas_height, apng))
 }
 
 fn read(bytes: &[u8], offset: usize, count: usize, big: bool) -> Result<u32, String> {
@@ -161,7 +267,7 @@ fn inspect_gif(bytes: &[u8]) -> Result<GifInspection, String> {
                 offset = end;
             }
             if is_loop_extension && first_data_len == 3 && first_data[0] == 1 && repeat_count.is_none() {
-                repeat_count = Some(u16::from_le_bytes([first_data[1], first_data[2]]));
+                repeat_count = Some(u32::from(u16::from_le_bytes([first_data[1], first_data[2]])));
             }
         } else {
             return Err("Invalid GIF block".into());
@@ -177,18 +283,8 @@ pub fn inspect(format: Format, bytes: &[u8]) -> Result<(u32, u32), String> {
     let be = |offset, count| read(bytes, offset, count, true);
     let (width, height) = match format {
         Format::Png => {
-            if !bytes.starts_with(b"\x89PNG\r\n\x1a\n") || be(8,4)? != 13 || bytes.get(12..16) != Some(b"IHDR") { return Err("Invalid PNG header".into()); }
-            let mut offset=8;
-            while offset < bytes.len() {
-                let length=be(offset,4)? as usize;
-                let end=offset.checked_add(12).and_then(|v| v.checked_add(length)).filter(|end| *end<=bytes.len()).ok_or("Truncated PNG chunk")?;
-                let kind = bytes.get(offset + 4..offset + 8);
-                if kind == Some(b"acTL") || kind == Some(b"fcTL") || kind == Some(b"fdAT") {
-                    return Err("Animated PNG is not an admitted static texture".into());
-                }
-                offset=end;
-            }
-            (be(16,4)?,be(20,4)?)
+            let (width, height, _) = inspect_png(bytes)?;
+            (width, height)
         },
         Format::Jpeg => {
             if !bytes.starts_with(&[255,216]) { return Err("Invalid JPEG header".into()); }
@@ -297,9 +393,146 @@ pub fn from_data_url(url: &str) -> Result<ImageSource,String> {
 impl ImageSource {
     pub fn decoded_pixel_count(&self) -> Result<u64, String> {
         let (width, height) = inspect(self.format, &self.bytes)?;
-        let frames = if self.format == Format::Gif { inspect_gif(&self.bytes)?.frames } else { 1 };
+        let frames = match self.format {
+            Format::Gif => inspect_gif(&self.bytes)?.frames,
+            Format::Png => inspect_png(&self.bytes)?.2.map_or(1, |animation| animation.frames),
+            _ => 1,
+        };
         u64::from(width).checked_mul(u64::from(height)).and_then(|pixels| pixels.checked_mul(frames as u64))
             .ok_or_else(|| "Texture decoded pixel count overflow".into())
+    }
+
+    pub fn has_animated_png(&self) -> Result<bool, String> {
+        if self.format != Format::Png { return Ok(false); }
+        Ok(inspect_png(&self.bytes)?.2.is_some())
+    }
+
+    pub fn decode_png_animation(&self) -> Result<RgbaAnimation, String> {
+        if self.format != Format::Png { return Err("Texture is not a PNG image".into()); }
+        let (width, height, animation) = inspect_png(&self.bytes)?;
+        let canvas_pixels = u64::from(width) * u64::from(height);
+        let canvas_len = usize::try_from(canvas_pixels.checked_mul(4).ok_or("PNG canvas byte count overflow")?)
+            .map_err(|_| "PNG canvas byte count overflow")?;
+        let expected_frames = animation.map_or(1, |value| value.frames);
+        let mut decoder = png::Decoder::new(Cursor::new(&self.bytes));
+        decoder.set_transformations(png::Transformations::normalize_to_color8());
+        decoder.set_limits(png::Limits { bytes: 64 * 1024 * 1024 });
+        let mut reader = decoder.read_info().map_err(|error| format!("PNG decode failed: {error}"))?;
+        let control = reader.info().animation_control;
+        if animation.is_some() != control.is_some() {
+            return Err("PNG decoder animation metadata disagrees with bounded inspection".into());
+        }
+        let has_default_image = animation.is_some_and(|value| value.has_default_image);
+        let encoded_frames = expected_frames + usize::from(has_default_image);
+        let output_capacity = reader.output_buffer_size();
+        if output_capacity > 32 * 1024 * 1024 {
+            return Err("PNG decoded frame exceeds the 32 MiB frame budget".into());
+        }
+        let mut decoded = vec![0u8; output_capacity];
+        let mut canvas = vec![0u8; canvas_len];
+        let mut frames = Vec::with_capacity(expected_frames);
+        let mut delays_seconds = Vec::with_capacity(expected_frames);
+
+        for input_index in 0..encoded_frames {
+            if input_index > 0 {
+                reader.next_frame_info().map_err(|error| format!("PNG frame header failed: {error}"))?;
+            }
+            let frame_control = reader.info().frame_control;
+            let output = reader.next_frame(&mut decoded).map_err(|error| format!("PNG frame decode failed: {error}"))?;
+            if output.bit_depth != png::BitDepth::Eight {
+                return Err("PNG decoder did not normalize frame samples to 8 bits".into());
+            }
+            let is_default_image = animation.is_some() && frame_control.is_none();
+            if is_default_image { continue; }
+
+            let (x_offset, y_offset, frame_width, frame_height, blend, dispose, delay) =
+                if let Some(frame) = frame_control {
+                    if (frame.width, frame.height) != (output.width, output.height)
+                        || frame.x_offset.checked_add(frame.width).is_none_or(|right| right > width)
+                        || frame.y_offset.checked_add(frame.height).is_none_or(|bottom| bottom > height) {
+                        return Err("PNG decoder returned an invalid APNG subframe".into());
+                    }
+                    let denominator = if frame.delay_den == 0 { 100.0 } else { f64::from(frame.delay_den) };
+                    let delay = (f64::from(frame.delay_num) / denominator).max(0.01);
+                    (frame.x_offset, frame.y_offset, frame.width, frame.height,
+                        frame.blend_op, frame.dispose_op, delay)
+                } else {
+                    if (output.width, output.height) != (width, height) {
+                        return Err("PNG decoder returned invalid static image dimensions".into());
+                    }
+                    (0, 0, width, height, png::BlendOp::Source, png::DisposeOp::None, 0.1)
+                };
+
+            let source_channels = match output.color_type {
+                png::ColorType::Grayscale => 1,
+                png::ColorType::Rgb => 3,
+                png::ColorType::GrayscaleAlpha => 2,
+                png::ColorType::Rgba => 4,
+                png::ColorType::Indexed => return Err("PNG palette was not expanded by the decoder".into()),
+            };
+            let required = output.line_size.checked_mul(frame_height as usize)
+                .ok_or("PNG decoded frame byte count overflow")?;
+            if output.buffer_size() < required || required > decoded.len() {
+                return Err("PNG decoder returned an incomplete frame buffer".into());
+            }
+            let previous = if dispose == png::DisposeOp::Previous && !frames.is_empty() {
+                Some(canvas.clone())
+            } else { None };
+            for y in 0..frame_height {
+                for x in 0..frame_width {
+                    let source = y as usize * output.line_size + x as usize * source_channels;
+                    let (red, green, blue, alpha) = match output.color_type {
+                        png::ColorType::Grayscale => (decoded[source], decoded[source], decoded[source], 255),
+                        png::ColorType::Rgb => (decoded[source], decoded[source + 1], decoded[source + 2], 255),
+                        png::ColorType::GrayscaleAlpha => (decoded[source], decoded[source], decoded[source], decoded[source + 1]),
+                        png::ColorType::Rgba => (decoded[source], decoded[source + 1], decoded[source + 2], decoded[source + 3]),
+                        png::ColorType::Indexed => unreachable!(),
+                    };
+                    let destination = (((y_offset + y) * width + x_offset + x) * 4) as usize;
+                    if blend == png::BlendOp::Source {
+                        canvas[destination..destination + 4].copy_from_slice(&[red, green, blue, alpha]);
+                    } else {
+                        let foreground_alpha = u64::from(alpha);
+                        let background_alpha = u64::from(canvas[destination + 3]);
+                        let inverse_alpha = 255 - foreground_alpha;
+                        let output_alpha = foreground_alpha * 255 + background_alpha * inverse_alpha;
+                        if output_alpha == 0 {
+                            canvas[destination..destination + 4].fill(0);
+                        } else {
+                            for channel in 0..3 {
+                                let foreground = [red, green, blue][channel] as u64;
+                                let background = u64::from(canvas[destination + channel]);
+                                let numerator = foreground * foreground_alpha * 255
+                                    + background * background_alpha * inverse_alpha;
+                                canvas[destination + channel] = ((numerator + output_alpha / 2) / output_alpha) as u8;
+                            }
+                            canvas[destination + 3] = ((output_alpha + 127) / 255) as u8;
+                        }
+                    }
+                }
+            }
+            frames.push(RgbaImage { width, height, pixels: canvas.clone() });
+            delays_seconds.push(delay);
+            let disposal = if frames.len() == 1 && dispose == png::DisposeOp::Previous {
+                png::DisposeOp::Background
+            } else { dispose };
+            match disposal {
+                png::DisposeOp::None => {}
+                png::DisposeOp::Background => {
+                    for y in y_offset..(y_offset + frame_height) {
+                        let start = ((y * width + x_offset) * 4) as usize;
+                        let end = (start as u64 + u64::from(frame_width) * 4) as usize;
+                        canvas[start..end].fill(0);
+                    }
+                }
+                png::DisposeOp::Previous => if let Some(previous) = previous { canvas = previous; },
+            }
+        }
+        if frames.len() != expected_frames {
+            return Err("PNG decoder returned an incomplete animation".into());
+        }
+        let repeat_count = animation.and_then(|meta| meta.repeat_count);
+        Ok(RgbaAnimation { width, height, frames, delays_seconds, repeat_count })
     }
 
     pub fn decode_gif(&self) -> Result<RgbaAnimation, String> {
