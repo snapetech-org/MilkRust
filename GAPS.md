@@ -360,3 +360,8 @@ per-vertex mix saturates through the reference's ordered clamp, while a NaN mix
 fails closed. Regression sources cover raw positive and
 negative values, state carry, serialization, and mask endpoints; no build,
 test, or reference capture has run for this change.
+
+
+## 2026-10-30 saved-preset host inputs
+
+MilkRust now exposes the standard `mousex`, `mousey`, `mousedown`, and `mouseclick` EEL host variables while retaining its existing underscore-style input aliases. A runtime samples one rising-edge `mouseclick` for all active preset scopes. The frame-clock fallback also supplies `year` through `totalseconds` (zero calendar fields, derived time-of-day). MilkDrop 3 cosine-mixes mouse positions and clock fields and snaps button values at its shader-dependent threshold; the temporary blend values are restored after scene generation. Source regressions cover input binding, click edges, interpolation and snap behavior; they have not run.

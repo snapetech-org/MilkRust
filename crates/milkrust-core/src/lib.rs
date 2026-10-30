@@ -505,7 +505,7 @@ fn create_milkrust_scope(
      insert_num(&mut scope, "wave_r", milkrust_base_number(&preset.base_values, "wave_r", 1.0));
      insert_num(&mut scope, "wave_g", milkrust_base_number(&preset.base_values, "wave_g", 1.0));
      insert_num(&mut scope, "wave_b", milkrust_base_number(&preset.base_values, "wave_b", 1.0));
-     update_milkrust_scope_input(&mut scope, MilkRustInputState::default());
+     update_milkrust_scope_input(&mut scope, MilkRustInputState::default(), 0.0);
      scope
  }
 
@@ -553,6 +553,7 @@ fn update_milkrust_scope_audio(
      insert_num(scope, "time", time_seconds);
      insert_num(scope, "frame", frame_index);
      insert_num(scope, "fps", 60.0);
+     update_milkrust_scope_clock(scope, time_seconds);
      insert_num(scope, "sample_rate", 44_100.0);
      insert_num(scope, "samplerate", 44_100.0);
      insert_num(scope, "canvas_width", 1.0);
@@ -565,6 +566,7 @@ fn update_milkrust_scope_audio(
 fn update_milkrust_scope_input(
      scope: &mut BTreeMap<String, MilkRustValue>,
      input: MilkRustInputState,
+     mouse_click: f64,
  ) {
      let insert_num =
          |scope: &mut BTreeMap<String, MilkRustValue>, key: &str, value: f64| {
@@ -575,6 +577,38 @@ fn update_milkrust_scope_input(
      insert_num(scope, "mouse_dy", input.mouse_dy);
      insert_num(scope, "mouse_x", input.mouse_x);
      insert_num(scope, "mouse_y", input.mouse_y);
+     insert_num(scope, "mousex", input.mouse_x);
+     insert_num(scope, "mousey", input.mouse_y);
+     insert_num(scope, "mousedown", milkrust_bool_number(input.mouse_down > 0.5));
+     insert_num(scope, "mouseclick", mouse_click);
+ }
+
+fn milkrust_bool_number(value: bool) -> f64 {
+    if value { 1.0 } else { 0.0 }
+}
+
+fn next_milkrust_mouse_click(input: MilkRustInputState, previous_down: &mut bool) -> f64 {
+    let down = input.mouse_down > 0.5;
+    let click = down && !*previous_down;
+    *previous_down = down;
+    milkrust_bool_number(click)
+}
+
+fn update_milkrust_scope_clock(scope: &mut BTreeMap<String, MilkRustValue>, time_seconds: f64) {
+    let day_seconds = if time_seconds.is_finite() { time_seconds.rem_euclid(86_400.0) } else { 0.0 };
+    let whole_seconds = day_seconds.floor();
+    let hour = (whole_seconds / 3_600.0).floor();
+    let minute = ((whole_seconds % 3_600.0) / 60.0).floor();
+    let second = whole_seconds % 60.0;
+    let milliseconds = ((day_seconds - whole_seconds) * 1_000.0).floor().clamp(0.0, 999.0);
+    let total_seconds = f64::from(day_seconds as f32);
+    for (name, value) in [
+        ("year", 0.0), ("month", 0.0), ("day", 0.0), ("weekday", 0.0),
+        ("hour", hour), ("minute", minute), ("second", second),
+        ("milliseconds", milliseconds), ("totalseconds", total_seconds),
+    ] {
+        scope.insert(name.to_string(), MilkRustValue::Number(value));
+    }
  }
 
 fn milkrust_sample_text(values: &[f64]) -> String {
@@ -713,7 +747,8 @@ pub fn milkrust_frame_from_source(
 }
 
 // The `.milk2` frame controls mixed by MilkDrop's saved-preset path. Mouse
-// inputs and the integer wave mode belong to the independent preset states.
+// positions and clock fields use the cosine mix; mouse buttons and integer wave
+// mode snap at the same shader-dependent threshold.
 const MILK2_BLEND_NUMERIC_KEYS: &[(&str, f64)] = &[
     ("decay", 0.98), ("wave_a", 0.8), ("wave_r", 1.0), ("wave_g", 1.0), ("wave_b", 1.0),
     ("wave_x", 0.5), ("wave_y", 0.5), ("wave_mystery", 0.0),
@@ -724,12 +759,16 @@ const MILK2_BLEND_NUMERIC_KEYS: &[(&str, f64)] = &[
     ("echo_zoom", 2.0), ("echo_alpha", 0.0), ("gamma", 2.0),
     ("blur1_min", 0.0), ("blur2_min", 0.0), ("blur3_min", 0.0),
     ("blur1_max", 1.0), ("blur2_max", 1.0), ("blur3_max", 1.0), ("blur1_edge_darken", 0.25),
+    ("mousex", -1.0), ("mousey", -1.0),
+    ("year", 0.0), ("month", 0.0), ("day", 0.0), ("weekday", 0.0),
+    ("hour", 0.0), ("minute", 0.0), ("second", 0.0), ("milliseconds", 0.0), ("totalseconds", 0.0),
 ];
 
 const MILK2_BLEND_SNAP_KEYS: &[(&str, f64)] = &[
     ("echo_orient", 0.0), ("wave_usedots", 0.0), ("wave_thick", 0.0),
     ("wave_additive", 0.0), ("wave_brighten", 1.0), ("darken_center", 0.0),
     ("wrap", 1.0), ("invert", 0.0), ("brighten", 0.0), ("darken", 0.0), ("solarize", 0.0),
+    ("mousedown", 0.0), ("mouseclick", 0.0),
 ];
 
 fn milkrust_milk2_blend_mix(progress: f64) -> f64 {
@@ -1005,7 +1044,7 @@ pub fn milkrust_frame_from_source_with_audio_and_input(
         waveform,
         spectrum,
     );
-    update_milkrust_scope_input(&mut scope, input);
+    update_milkrust_scope_input(&mut scope, input, milkrust_bool_number(input.mouse_down > 0.5));
     if !preset_document.equations.init.trim().is_empty() {
         if let Ok(next_scope) =
             evaluate_milkrust_equations(&preset_document.equations.init, &scope)
@@ -1091,7 +1130,7 @@ pub fn milkrust_frame_set_from_source_with_audio_and_input(
             waveform,
             spectrum,
         );
-        update_milkrust_scope_input(&mut scope, input);
+        update_milkrust_scope_input(&mut scope, input, milkrust_bool_number(input.mouse_down > 0.5));
         if !preset_document.equations.init.trim().is_empty() {
             if let Ok(next_scope) = evaluate_milkrust_equations(&preset_document.equations.init, &scope) {
                 scope = next_scope;
@@ -1182,6 +1221,7 @@ pub fn milkrust_frame_set_from_source(
 #[derive(Clone, Debug, Default)]
 pub struct MilkRustRuntime {
     last_error: Option<String>,
+    previous_mouse_down: bool,
      initialized: bool,
      preset_document: Option<MilkRustPresetDocument>,
      scope: BTreeMap<String, MilkRustValue>,
@@ -1325,7 +1365,8 @@ impl MilkRustRuntime {
             waveform,
             spectrum,
         );
-        update_milkrust_scope_input(&mut self.scope, input);
+        let mouse_click = next_milkrust_mouse_click(input, &mut self.previous_mouse_down);
+        update_milkrust_scope_input(&mut self.scope, input, mouse_click);
         if !self.initialized {
             if !preset_document.equations.init.trim().is_empty() {
                 if let Ok(next_scope) =
@@ -1368,6 +1409,7 @@ impl MilkRustRuntime {
 #[derive(Clone, Debug, Default)]
 pub struct MilkRustFrameSetRuntime {
     milk2_header_state: milk2::HeaderState,
+    previous_mouse_down: bool,
     stereo_audio: Option<audio::Stereo>,
     previous_time: Option<f64>,
     viewport: Option<(u32, u32)>,
@@ -1579,6 +1621,7 @@ impl MilkRustFrameSetRuntime {
         let transition_mode = milkrust_transition_mode(preset_set);
         let transition_seconds = milkrust_transition_seconds(preset_set);
         let capture_softcut_header = preset_set.saved_blend.is_none() && self.preset_documents.len() == 1;
+        let mouse_click = next_milkrust_mouse_click(input, &mut self.previous_mouse_down);
         for index in 0..self.preset_documents.len() {
             let preset_document = &mut self.preset_documents[index];
             let scope = &mut self.scopes[index];
@@ -1602,7 +1645,7 @@ impl MilkRustFrameSetRuntime {
                      scope.insert(name.into(), MilkRustValue::Number(value));
                  }
              }
-             update_milkrust_scope_input(scope, input);
+             update_milkrust_scope_input(scope, input, mouse_click);
              if !self.initialized.get(index).copied().unwrap_or_default() {
                  if !preset_document.equations.init.trim().is_empty() {
                      if let Ok(next_scope) =
@@ -8050,6 +8093,71 @@ comp_shader_2=ret = vec3(shifted, energy * bass_att);
         let frames = runtime.try_render_source_with_audio_and_input(&source, 0.0, 0.0, 0.0, 0.0,
             &[], &[], MilkRustInputState::default()).unwrap();
         assert_eq!(frames.entries[0].frame.background_alpha, 1.0);
+    }
+
+    #[test]
+    fn milk2_blends_mouse_clock_and_button_inputs_like_the_reference() {
+        let old = BTreeMap::from([
+            ("mousex".to_string(), MilkRustValue::Number(0.25)),
+            ("mousey".to_string(), MilkRustValue::Number(0.75)),
+            ("year".to_string(), MilkRustValue::Number(2024.0)),
+            ("totalseconds".to_string(), MilkRustValue::Number(100.0)),
+            ("mousedown".to_string(), MilkRustValue::Number(0.0)),
+            ("mouseclick".to_string(), MilkRustValue::Number(1.0)),
+        ]);
+        let mut new = BTreeMap::from([
+            ("mousex".to_string(), MilkRustValue::Number(0.75)),
+            ("mousey".to_string(), MilkRustValue::Number(0.25)),
+            ("year".to_string(), MilkRustValue::Number(2026.0)),
+            ("totalseconds".to_string(), MilkRustValue::Number(200.0)),
+            ("mousedown".to_string(), MilkRustValue::Number(1.0)),
+            ("mouseclick".to_string(), MilkRustValue::Number(0.0)),
+        ]);
+        blend_milkrust_milk2_scope(&mut new, &old, 0.25, 0.5);
+        assert_eq!(new["mousex"], MilkRustValue::Number(0.375));
+        assert_eq!(new["mousey"], MilkRustValue::Number(0.625));
+        assert_eq!(new["year"], MilkRustValue::Number(2024.5));
+        assert_eq!(new["totalseconds"], MilkRustValue::Number(125.0));
+        assert_eq!(new["mousedown"], MilkRustValue::Number(0.0));
+        assert_eq!(new["mouseclick"], MilkRustValue::Number(1.0));
+        new.insert("mousedown".into(), MilkRustValue::Number(1.0));
+        new.insert("mouseclick".into(), MilkRustValue::Number(0.0));
+        blend_milkrust_milk2_scope(&mut new, &old, 0.75, 0.5);
+        assert_eq!(new["mousedown"], MilkRustValue::Number(1.0));
+        assert_eq!(new["mouseclick"], MilkRustValue::Number(0.0));
+    }
+
+    #[test]
+    fn standard_milkdrop_mouse_and_clock_registers_are_bound() {
+        let input = MilkRustInputState {
+            mouse_down: 1.0,
+            mouse_dx: 0.1,
+            mouse_dy: -0.1,
+            mouse_x: 0.25,
+            mouse_y: 0.75,
+        };
+        let mut scope = BTreeMap::new();
+        update_milkrust_scope_audio(&mut scope, 86_401.25, 1.0, 0.0, 0.0, 0.0, &[], &[]);
+        update_milkrust_scope_input(&mut scope, input, 1.0);
+        for (key, value) in [
+            ("mousex", 0.25), ("mousey", 0.75), ("mousedown", 1.0), ("mouseclick", 1.0),
+            ("year", 0.0), ("month", 0.0), ("day", 0.0), ("weekday", 0.0),
+            ("hour", 0.0), ("minute", 0.0), ("second", 1.0), ("milliseconds", 250.0),
+            ("totalseconds", 1.25),
+        ] {
+            assert_eq!(scope[key], MilkRustValue::Number(value), "{key}");
+        }
+    }
+
+    #[test]
+    fn mouseclick_is_a_shared_rising_edge() {
+        let down = MilkRustInputState { mouse_down: 1.0, ..MilkRustInputState::default() };
+        let up = MilkRustInputState::default();
+        let mut was_down = false;
+        assert_eq!(next_milkrust_mouse_click(down, &mut was_down), 1.0);
+        assert_eq!(next_milkrust_mouse_click(down, &mut was_down), 0.0);
+        assert_eq!(next_milkrust_mouse_click(up, &mut was_down), 0.0);
+        assert_eq!(next_milkrust_mouse_click(down, &mut was_down), 1.0);
     }
 
     #[test]

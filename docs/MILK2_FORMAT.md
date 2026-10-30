@@ -54,10 +54,13 @@ first edge-darken value. `wave_mode` remains an integer and is not interpolated.
 Echo orientation, waveform dots/thickness/additive/brightness, center darkening,
 texture wrapping, invert, brighten, darken and solarize snap at the
 composite-shader boundary (or the midpoint when both presets use the same
-shader mode). Live mouse input is passed to each preset's own scope and is not
-part of the saved render-control mix. That temporary mixed scope is restored
-after scene generation, so its values do not become PRESET2's next-frame
-equation state. Custom shape fills, outlines and custom waves use linear
+shader mode). Standard `mousex`/`mousey` coordinates and the date/time
+registers (`year` through `totalseconds`) use the cosine mix. `mousedown` and
+the shared rising-edge `mouseclick` snap at the same shader-dependent threshold.
+The clock fallback derives time-of-day from the frame clock and leaves calendar
+fields zero; it does not read the system clock. The temporary mixed scope is
+restored after scene generation, so its values do not become PRESET2's
+next-frame equation state. Custom shape fills, outlines and custom waves use linear
 `1 - P` / `P` alpha weights for PRESET1 / PRESET2. Outer and inner preset
 borders are hidden throughout a saved double preset. In classic presets,
 `bWaveDots` and `bUseDots` seed the same `wave_usedots` render control used by
