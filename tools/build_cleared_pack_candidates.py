@@ -143,7 +143,7 @@ def main() -> int:
             "Every asset remains NOASSERTION until independent rights review is complete.\n"
             "It is not a production download catalog. No preset was executed or rendered.\n"
             "Review candidate-catalog.json and conversion/conversion-report.json before any\n"
-            "qualification work. The current conversion subset is shaderless and unqualified.\n",
+            "qualification work. The bounded numeric and shader conversion profile requires MilkRust and remains unqualified.\n",
             encoding="utf-8",
         )
         os.replace(staging, args.output)

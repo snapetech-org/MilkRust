@@ -535,6 +535,13 @@ fn parse_pack_preset(
     if !value.is_object() {
         errors.push(format!("{field}[{index}] must be an object"));
     }
+    if value.get("requiredEngine").is_some_and(|v| v.as_str() != Some("milkrust")) {
+        errors.push(format!("{field}[{index}] requires an unknown engine"));
+    }
+    if value.get("requiredProfile").is_some_and(|v|
+        v.as_str() != Some("butterchurn-numeric-v1") || value.get("requiredEngine").and_then(Value::as_str) != Some("milkrust")) {
+        errors.push(format!("{field}[{index}] requires an unknown or unbound conversion profile"));
+    }
     MilkRustPackPreset {
         id: required_string(value.get("id"), &format!("{field}[{index}].id"), errors),
         title: optional_string(value.get("title")).unwrap_or_default(),

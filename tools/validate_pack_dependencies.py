@@ -9,6 +9,17 @@ def validate_pack_dependencies(manifest):
     kind = manifest.get("kind", "presets")
     if kind not in ("presets", "textures"):
         raise ValueError("unknown pack kind")
+    presets = manifest.get("presets", [])
+    if not isinstance(presets, list) or len(presets) > 2500:
+        raise ValueError("invalid or oversized preset inventory")
+    for preset in presets:
+        if not isinstance(preset, dict):
+            raise ValueError("invalid preset entry")
+        if "requiredEngine" in preset and preset["requiredEngine"] != "milkrust":
+            raise ValueError("unknown required preset engine")
+        if "requiredProfile" in preset and (preset["requiredProfile"] != "butterchurn-numeric-v1"
+                                            or preset.get("requiredEngine") != "milkrust"):
+            raise ValueError("unknown or unbound preset conversion profile")
     dependencies = manifest.get("dependencies", [])
     if not isinstance(dependencies, list) or len(dependencies) > 16:
         raise ValueError("at most 16 texture dependencies are allowed")

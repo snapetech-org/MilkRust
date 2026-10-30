@@ -51,6 +51,10 @@ jobs:
       - name: Check WASM target
         run: cargo check -p milkrust-wasm --target wasm32-unknown-unknown
 
+      - name: Test declarative conversion and pack schemas
+        if: matrix.os == 'linux-x64'
+        run: python3 -m unittest discover -s tools/tests -p 'test_*.py'
+
       - name: Run MilkRust tool checks
         if: matrix.os == 'linux-x64'
         run: |

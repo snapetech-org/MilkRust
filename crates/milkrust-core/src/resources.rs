@@ -308,7 +308,7 @@ pub fn noise_texture_with_runtime_seed(
 
 pub const BLUR_FRAGMENT: &str = "#version 300 es\nprecision highp float; uniform sampler2D previousFrame; uniform vec2 blurStep; uniform vec2 sourceTexel; uniform vec2 blurTransform; uniform vec4 blurWeights; uniform vec4 blurOffsets; uniform float blurWeightScale; uniform vec4 blurEdge; uniform float blurHorizontal; in vec2 uv; out vec4 outColor; void main(){bool horizontal=blurHorizontal>0.5;vec2 base=uv+sourceTexel*(horizontal?vec2(1.0,1.0):vec2(1.0,0.0));vec3 c;if(horizontal){c=((texture(previousFrame,base+blurStep*blurOffsets.x).rgb+texture(previousFrame,base-blurStep*blurOffsets.x).rgb)*blurWeights.x)+((texture(previousFrame,base+blurStep*blurOffsets.y).rgb+texture(previousFrame,base-blurStep*blurOffsets.y).rgb)*blurWeights.y)+((texture(previousFrame,base+blurStep*blurOffsets.z).rgb+texture(previousFrame,base-blurStep*blurOffsets.z).rgb)*blurWeights.z)+((texture(previousFrame,base+blurStep*blurOffsets.w).rgb+texture(previousFrame,base-blurStep*blurOffsets.w).rgb)*blurWeights.w);c*=blurWeightScale;c=c*blurTransform.x+blurTransform.y;}else{c=((texture(previousFrame,base+blurStep*blurOffsets.x).rgb+texture(previousFrame,base-blurStep*blurOffsets.x).rgb)*blurWeights.x)+((texture(previousFrame,base+blurStep*blurOffsets.y).rgb+texture(previousFrame,base-blurStep*blurOffsets.y).rgb)*blurWeights.y);c*=blurWeightScale;float edge=min(min(uv.x,uv.y),1.0-max(uv.x,uv.y));edge=sqrt(max(edge,0.0));edge=blurEdge.x+blurEdge.y*clamp(edge*blurEdge.z,0.0,1.0);c*=edge;}outColor=vec4(c,1.0); }";
 
-pub const SCALAR_UNIFORMS: &[&str] = &["frame", "fps", "progress", "decay", "vol", "vol_att", "blur1_edge_darken",
+pub const SCALAR_UNIFORMS: &[&str] = &["frame", "fps", "progress", "decay", "vol", "vol_att", "fShader", "blur1_edge_darken",
     "blur1_min", "blur1_max", "blur2_min", "blur2_max", "blur3_min", "blur3_max"];
 pub const VECTOR_UNIFORMS: &[&str] = &["rand_frame", "rand_preset", "roam_sin", "roam_cos", "slow_roam_sin", "slow_roam_cos",
     "hue_corner1", "hue_corner2", "hue_corner3", "hue_corner4",
@@ -323,6 +323,8 @@ pub fn frame_values(scope: &std::collections::BTreeMap<String, crate::MilkRustVa
         let value = match scope.get(name) { Some(crate::MilkRustValue::Number(v)) if v.is_finite() => *v, _ => fallback };
         values.insert(name.to_string(), value);
     }
+    let shader = crate::milkrust_scope_number(scope, "fshader", 0.0);
+    values.insert("fShader".into(), if shader.is_finite() { shader } else { 0.0 });
     for (name, fallback) in crate::classic::VALUES {
         let value = crate::milkrust_scope_number(scope, name, *fallback);
         values.insert((*name).into(), if value.is_finite() { value } else { *fallback });

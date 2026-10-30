@@ -27,6 +27,14 @@ class DependencySchemaTests(unittest.TestCase):
             with self.subTest(bad=bad), self.assertRaises(ValueError):
                 validate_pack_dependencies(bad)
 
+    def test_engine_requirements_are_explicit_and_versioned(self):
+        preset = {"requiredEngine": "milkrust", "requiredProfile": "butterchurn-numeric-v1"}
+        self.assertEqual(validate_pack_dependencies({"presets": [preset]}), "presets")
+        for bad in [{"requiredEngine": "future"}, {"requiredProfile": "butterchurn-numeric-v1"},
+                    {**preset, "requiredProfile": "future"}]:
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                validate_pack_dependencies({"presets": [bad]})
+
 
 if __name__ == "__main__":
     unittest.main()

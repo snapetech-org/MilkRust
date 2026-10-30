@@ -25,6 +25,9 @@
 use std::collections::BTreeMap;
 use std::fmt;
 
+mod butterchurn;
+pub use butterchurn::supports_function as is_butterchurn_function_supported;
+
 pub mod limits;
 use limits::{ExpressionBudget, MAX_EXPRESSION_TOKENS, validate_expression_source};
 
@@ -893,6 +896,9 @@ impl<'a> MilkRustExpressionParser<'a> {
     }
 
     fn call_function(&mut self, name: &str, args: &[f64]) -> Result<f64, String> {
+        if let Some(result) = butterchurn::evaluate(name, args) {
+            return result;
+        }
         let arg = |index: usize, default: f64| args.get(index).copied().unwrap_or(default);
         let out = match name {
             "abs" => arg(0, 0.0).abs(),
@@ -981,7 +987,10 @@ impl<'a> MilkRustExpressionParser<'a> {
                         .min(upper - 1.0)
                 }
             }
-            "sign" => arg(0, 0.0).signum(),
+            "sign" => {
+                let value = arg(0, 0.0);
+                (value > 0.0) as i32 as f64 - (value < 0.0) as i32 as f64
+            },
             "sigmoid" => {
                 let constraint = if arg(1, 1.0) == 0.0 { 1.0 } else { arg(1, 1.0) };
                 1.0 / (1.0 + (-arg(0, 0.0) * constraint).exp())
@@ -1098,9 +1107,9 @@ impl<'a> MilkRustExpressionParser<'a> {
             self.index += 1;
             let right = self.parse_term()?;
             value = if op == "<<" {
-                ((value.trunc() as i64) << (right.trunc() as u32)) as f64
+                (value.trunc() as i64).wrapping_shl(right.trunc() as u32) as f64
             } else {
-                ((value.trunc() as i64) >> (right.trunc() as u32)) as f64
+                (value.trunc() as i64).wrapping_shr(right.trunc() as u32) as f64
             };
         }
         Ok(value)
@@ -2166,6 +2175,16 @@ mod tests {
         assert_eq!(changed["megabuf_10"], MilkRustValue::Number(0.75));
         assert_eq!(changed["megabuf_11"], MilkRustValue::Number(1.25));
         assert_eq!(changed["side_effect"], MilkRustValue::Number(1.0));
+    }
+
+    #[test]
+    fn sign_zero_and_large_shift_counts_are_defined() {
+        let scope = BTreeMap::new();
+        for value in ["sign(0)", "sign(-0)"] {
+            assert_eq!(evaluate_milkrust_expression(value, &scope).unwrap(), 0.0);
+        }
+        assert_eq!(evaluate_milkrust_expression("1 << 65", &scope).unwrap(), 2.0);
+        assert_eq!(evaluate_milkrust_expression("-8 >> 66", &scope).unwrap(), -2.0);
     }
 
 }

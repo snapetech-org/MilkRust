@@ -16,7 +16,7 @@ jobs:
         with:
           fetch-depth: 1
           persist-credentials: false
-      - name: Convert the shaderless subset into non-promotable review candidates
+      - name: Convert bounded equations and shaders into non-promotable review candidates
         env:
           SOURCE_REVISION: ${{ github.sha }}
         run: >-

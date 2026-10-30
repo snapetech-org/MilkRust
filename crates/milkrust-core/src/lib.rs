@@ -3812,7 +3812,7 @@ pub struct MilkRustPresetCompatibility {
 }
 
 pub fn is_milkrust_function_supported(name: &str) -> bool {
-    matches!(
+    milkrust_expr::is_butterchurn_function_supported(name) || matches!(
         name.to_ascii_lowercase().as_str(),
         "abs"
             | "above"
