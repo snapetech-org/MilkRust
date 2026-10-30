@@ -91,10 +91,12 @@ range in both hosts. The blur filter now uses MilkDrop's paired-tap horizontal
 and vertical weights, source-texel offsets, nested range transforms and first-
 level edge darkening. Nested/reversed ranges are made finite and nondegenerate;
 this deliberately avoids the divide-by-zero typo in historical min/max repair.
-Pixel comparison remains open, and generated noise is still an independent
-implementation requiring reference-image comparison. These changes supply missing environment behavior, not evidence
-that every legacy shader is visually conformant. New regression sources are
-unrun under the source-only instruction.
+Built-in 2D/3D noise now uses MilkDrop's physical dimensions, quality-specific
+cubic expansion and one-level texture setup in native GL and WebGL. The generator
+retains stable fixed seeds rather than the reference's runtime-clock reseeding,
+so generated noise still requires reference-image comparison. Blur and full
+shader pixel parity remain open; source implementation is not visual evidence.
+New regression sources are unrun under the source-only restriction.
 
 Algorithm/reference: `jecassis/foo_vis_milk2`, `vis_milk2/milkdropfs.cpp`
 (`ApplyShaderParams`, `UvToMathSpace`) and `state.cpp` (`RandomizePresetVars`),
