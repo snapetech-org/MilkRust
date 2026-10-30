@@ -292,7 +292,9 @@ and reference-frame comparison remain pending.
 Classic `.milk` saved sprites retain the default-on behavior, with
 `sprite=0` disabling execution. Trailing sprites in a `.milk2` wrapper now
 require an explicit `sprite=1`; a missing flag or `sprite=0` leaves the
-blocks preserved but inert. Both the import path and direct saved-blend
-validation apply the same rule, including BOM-prefixed wrapper headers. The change follows the pinned compatible
-behavioral source in Lactea's MIT-licensed parser. No build, test or reference
-capture has run yet.
+blocks preserved but inert. MilkDrop's Created/version and URL preamble is
+accepted and retained; duplicate header records use their last value, and
+numeric fields consume the compatible decimal prefix. Both import and direct
+saved-blend validation apply the same sprite rule, including BOM-prefixed
+wrapper headers. The change follows the pinned compatible source in Lactea's
+MIT-licensed parser. No build, test or reference capture has run yet.

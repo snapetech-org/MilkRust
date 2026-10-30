@@ -65,7 +65,10 @@ per-frame equations.
 saved-blend and sprite behavior is implemented from the compatible MIT
 behavioral specification identified in
 `crates/milkrust-core/THIRD_PARTY_NOTICES.md` and the public MilkDrop3 format
-documentation. No noncommercial renderer implementation is incorporated.
+documentation. MilkDrop's free-form Created/version and URL preamble lines are
+preserved, duplicate key/value records use the last value, and numeric fields
+consume the compatible decimal prefix. No noncommercial renderer
+implementation is incorporated.
 
 The WebGL and native GL/GLES renderers consume the saved pattern name, progress,
 direction and five saved random values. The 30 MD3 `(a,c)` blend-mask formulas

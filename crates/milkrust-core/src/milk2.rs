@@ -115,8 +115,10 @@ pub struct SavedBlend {
     /// Whether saved random state has ever been initialized in this header
     /// history. The five values themselves may be inherited from prior files.
     pub randoms_active: bool,
-    /// Retain all header records for lossless export of unknown extensions.
+    /// Retain all key/value header records for export of unknown extensions.
     pub header: BTreeMap<String, String>,
+    /// Retain non-record preamble lines such as MilkDrop's Created/version and URL.
+    pub preamble: Vec<String>,
     /// Trailing sprite blocks and metadata are retained for lossless export.
     pub trailer: String,
 }
@@ -160,15 +162,15 @@ impl SavedBlend {
     fn has_supported_header(&self) -> bool {
         self.header.iter().all(|(key, value)| match key.as_str() {
             "blending_pattern" => value.eq_ignore_ascii_case(&self.pattern),
-            "blending_progress" => value.parse::<f64>()
-                .is_ok_and(|number| number.is_finite() && (0.0..=1.0).contains(&number)),
+            "blending_progress" => parse_header_float(value, "blending_progress")
+                .is_ok_and(|number| (0.0..=1.0).contains(&number)),
             // The saved header stores direction as a signed integer. The
             // renderer's direction-sensitive patterns test exactly `-1`;
             // other integer values are valid and behave like the default
             // orientation.
-            "blending_direction" => value.parse::<i32>().is_ok(),
-            "random_1" | "random_2" | "random_3" | "random_4" | "random_5" => value.parse::<f64>()
-                .is_ok_and(|number| number.is_finite() && (0.0..=1.0).contains(&number)),
+            "blending_direction" => parse_header_integer(value, "blending_direction").is_ok(),
+            "random_1" | "random_2" | "random_3" | "random_4" | "random_5" => parse_header_float(value, key)
+                .is_ok_and(|number| (0.0..=1.0).contains(&number)),
             "sprite" => matches!(value.as_str(), "0" | "1"),
             _ => false,
         })
@@ -207,7 +209,8 @@ impl SavedBlend {
                 else { header.remove(&key); }
             }
         }
-        let mut result = header.into_iter().map(|(k, v)| format!("{k}={v}\n")).collect::<String>();
+        let mut result = self.preamble.iter().map(|line| format!("{line}\n")).collect::<String>();
+        result.push_str(&header.into_iter().map(|(k, v)| format!("{k}={v}\n")).collect::<String>());
         for (index, preset) in presets.iter().enumerate() {
             let number = index + 1;
             result.push_str(&format!("[PRESET{number}_BEGIN]\n{}\n[PRESET{number}_END]\n", preset.trim_end()));
@@ -319,6 +322,54 @@ pub fn has_wrapper(source: &str) -> bool {
     })
 }
 
+/// Match the decimal prefix accepted by the Windows CRT's `std::stof`
+/// without accepting a hexadecimal literal. MilkDrop files may have a harmless
+/// suffix after the numeric value.
+fn parse_header_float(value: &str, key: &str) -> Result<f64, String> {
+    let value = value.trim_start_matches(|ch: char| ch.is_ascii_whitespace());
+    let bytes = value.as_bytes();
+    let mut cursor = usize::from(matches!(bytes.first(), Some(b'+' | b'-')));
+    let start = cursor;
+    let lower = value[cursor..].to_ascii_lowercase();
+    if lower.starts_with("infinity") { cursor += 8; }
+    else if lower.starts_with("inf") || lower.starts_with("nan") { cursor += 3; }
+    else {
+        let integer_start = cursor;
+        while bytes.get(cursor).is_some_and(u8::is_ascii_digit) { cursor += 1; }
+        let mut digits = cursor - integer_start;
+        if bytes.get(cursor) == Some(&b'.') {
+            cursor += 1;
+            let fraction_start = cursor;
+            while bytes.get(cursor).is_some_and(u8::is_ascii_digit) { cursor += 1; }
+            digits += cursor - fraction_start;
+        }
+        if digits == 0 { return Err(format!("invalid milk2 {key}")); }
+        let mantissa_end = cursor;
+        if matches!(bytes.get(cursor), Some(b'e' | b'E')) {
+            let mut exponent = cursor + 1;
+            if matches!(bytes.get(exponent), Some(b'+' | b'-')) { exponent += 1; }
+            let exponent_start = exponent;
+            while bytes.get(exponent).is_some_and(u8::is_ascii_digit) { exponent += 1; }
+            cursor = if exponent > exponent_start { exponent } else { mantissa_end };
+        }
+    }
+    if cursor <= start { return Err(format!("invalid milk2 {key}")); }
+    let number = value[..cursor].parse::<f32>().map_err(|_| format!("invalid milk2 {key}"))?;
+    if !number.is_finite() { return Err(format!("non-finite milk2 {key}")); }
+    Ok(f64::from(number))
+}
+
+/// Match `std::stoi(text, nullptr, 10)`: consume a signed decimal prefix.
+fn parse_header_integer(value: &str, key: &str) -> Result<i32, String> {
+    let value = value.trim_start_matches(|ch: char| ch.is_ascii_whitespace());
+    let bytes = value.as_bytes();
+    let mut cursor = usize::from(matches!(bytes.first(), Some(b'+' | b'-')));
+    let start = cursor;
+    while bytes.get(cursor).is_some_and(u8::is_ascii_digit) { cursor += 1; }
+    if cursor == start { return Err(format!("invalid milk2 {key}")); }
+    value[..cursor].parse::<i32>().map_err(|_| format!("invalid milk2 {key}"))
+}
+
 /// Parse ordered, complete blocks without confusing the [preset00] section
 /// inside each block with the envelope itself. No filesystem or code execution.
 pub fn parse(source: &str) -> Result<(SavedBlend, [String; 2]), String> {
@@ -326,6 +377,7 @@ pub fn parse(source: &str) -> Result<(SavedBlend, [String; 2]), String> {
     let normalized = source.trim_start_matches('\u{feff}').replace("\r\n", "\n").replace('\r', "\n");
     let mut state = 0usize;
     let mut header = BTreeMap::new();
+    let mut preamble = Vec::new();
     let mut presets = [String::new(), String::new()];
     let mut trailer = String::new();
     let markers = ["[PRESET1_BEGIN]", "[PRESET1_END]", "[PRESET2_BEGIN]", "[PRESET2_END]"];
@@ -338,12 +390,21 @@ pub fn parse(source: &str) -> Result<(SavedBlend, [String; 2]), String> {
         }
         match state {
             0 => {
-                if trimmed.is_empty() || trimmed.starts_with("//") || trimmed.starts_with(';') { continue; }
-                let (key, value) = trimmed.split_once('=').ok_or("milk2 header record has no value")?;
-                let key = key.trim().to_ascii_lowercase();
-                if key.is_empty() || key.len() > 256 || header.insert(key, value.trim().to_string()).is_some() {
-                    return Err("milk2 header key is empty, oversized or duplicated".into());
+                if trimmed.is_empty() || trimmed.starts_with("//") || trimmed.starts_with(';') {
+                    preamble.push(line.to_string());
+                    continue;
                 }
+                let Some((key, value)) = trimmed.split_once('=') else {
+                    // Real MD3 files begin with free-form Created/version and URL lines.
+                    preamble.push(line.to_string());
+                    continue;
+                };
+                let key = key.trim().to_ascii_lowercase();
+                if key.is_empty() || key.len() > 256 {
+                    return Err("milk2 header key is empty or oversized".into());
+                }
+                // The last occurrence wins, matching the original loader.
+                header.insert(key, value.trim().to_string());
             }
             1 | 3 => {
                 let index = if state == 1 { 0 } else { 1 };
@@ -364,17 +425,15 @@ pub fn parse(source: &str) -> Result<(SavedBlend, [String; 2]), String> {
     let pattern = header.get("blending_pattern").cloned().unwrap_or_default();
     if pattern.len() > 80 { return Err("invalid milk2 blending pattern".into()); }
     let number = |key: &str, default: f64| -> Result<f64, String> {
-        let value = match header.get(key) {
-            Some(value) => value.parse::<f64>().map_err(|_| format!("invalid milk2 {key}"))?,
-            None => default,
-        };
-        if !value.is_finite() { return Err(format!("non-finite milk2 {key}")); }
-        Ok(value)
+        match header.get(key) {
+            Some(value) => parse_header_float(value, key),
+            None => Ok(default),
+        }
     };
     let progress = number("blending_progress", 1.0)?;
     if !(0.0..=1.0).contains(&progress) { return Err("milk2 progress is outside 0..1".into()); }
     let direction = match header.get("blending_direction") {
-        Some(value) => value.parse::<i32>().map_err(|_| "invalid milk2 blending_direction")?,
+        Some(value) => parse_header_integer(value, "blending_direction")?,
         None => 0,
     };
     let mut random = [None; 5];
@@ -389,7 +448,7 @@ pub fn parse(source: &str) -> Result<(SavedBlend, [String; 2]), String> {
         }
     }
     let randoms_active = random.iter().any(Option::is_some);
-    Ok((SavedBlend { pattern, progress, direction, random, resolved_random, randoms_active, header, trailer }, presets))
+    Ok((SavedBlend { pattern, progress, direction, random, resolved_random, randoms_active, header, preamble, trailer }, presets))
 }
 
 #[cfg(test)]
@@ -466,9 +525,11 @@ mod tests {
     fn malformed_blocks_and_nonfinite_metadata_fail() {
         for source in [PAIR.replace("[PRESET1_END]", ""), PAIR.replace("[PRESET2_BEGIN]", "[PRESET1_BEGIN]"),
             PAIR.replace("progress=0.3", "progress=NaN"), PAIR.replace("progress=0.3", "progress=1.01"),
-            PAIR.replace("direction=-1", "direction=not-an-integer"), PAIR.replace("blending_pattern=Zoom", "blending_pattern=Zoom\nblending_pattern=Plasma")] {
+            PAIR.replace("direction=-1", "direction=not-an-integer")] {
             assert!(parse(&source).is_err());
         }
+        let repeated = PAIR.replace("blending_pattern=Zoom\\n", "blending_pattern=Plasma\\nblending_pattern=Zoom\\n");
+        assert_eq!(parse(&repeated).unwrap().0.pattern, "Zoom");
     }
 
     #[test]
