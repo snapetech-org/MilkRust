@@ -29,42 +29,53 @@ text and oversized values wrap to 32 bits. A missing, empty, or unparseable
 `SpriteName` produces no sprite. The loader matches the low 24 RGB bits and
 uses `0xFFFFFFFF` as its no-key sentinel.
 
-Each sprite has its own persistent scope. `init_N` executes once, `code_N` in
+Each sprite has its own persistent scope. init_N executes once, code_N in
 contiguous numeric order each frame, with elapsed sprite time, a sprite-local
 frame counter, the owning preset's fps and audio bands, and saved blend
-progress. EEL `a` defaults to `1`; the per-frame value is clamped to `0..1`
-then multiplied by `SpriteAlpha` without a second clamp. The packed vertex
-alpha truncates and wraps to eight bits. `SpriteBurn=0` disables burning,
-`SpriteBurn=1` always burns, and any other integer follows the EEL `burn`
-variable (which defaults to `1`). `SpriteBlend` and `SpriteLayer` are static
-draw selectors; assignments to similarly named EEL variables do not change
-them. The missing `SpriteBlend` default is `4`; values outside `0..10` select
-mode `0`. A `SpriteLayer` outside `0..4` leaves the saved block preserved but
-does not admit its image or run its code. `SpriteRepeatX/Y` multiply the
-clamped EEL repeat registers. Exactly `SpriteRot=1` adds `time * SpriteSpeed`
-to the EEL `rot` angle and exactly `SpriteRot=2` subtracts it; other values do
-not add rotation. Speed is radians per second and uses absolute host time.
-`done` retires the sprite after its final drawable frame. A final `done &&
-burn` primary feedback draw uses MilkDrop's 4:3 aspect correction; its
-secondary layer burn and display copy use normal screen geometry.
+progress. EEL a defaults to 1; the per-frame value is clamped to 0..1 then
+multiplied by SpriteAlpha without a second clamp. The packed vertex alpha
+truncates and wraps to eight bits.
+
+The upstream MilkDrop blendmode value is an EEL variable. It defaults to 0,
+is evaluated after each frame's equations, truncated to int, then clamped to
+0..4 before drawing. This matches MilkDrop 3's DrawUserSprites path at
+https://github.com/milkdrop2077/MilkDrop3/blob/6b39088f789441e18cc1665519ee7ffe439cece5/code/vis_milk2/milkdropfs.cpp
+and texmgr.cpp. EEL blendmode assignments therefore affect the next sprite
+draw; a missing value uses mode 0.
+
+SpriteBlend, SpriteLayer, SpriteAlpha, SpriteBurn, SpriteRot, SpriteSpeed,
+SpriteRepeatX and SpriteRepeatY are MilkRust-specific saved-field extensions,
+not keys in the upstream MilkDrop 3 DrawUserSprites implementation. SpriteBlend
+is a static override: values 0..10 use the optional engine table; modes 5..10
+are nonstandard extensions. If SpriteBlend is absent, dynamic upstream
+blendmode behavior is used. SpriteLayer selects the engine's ordered feedback
+stage. SpriteAlpha multiplies the clamped EEL a value. SpriteBurn=0 disables
+burning, SpriteBurn=1 always burns, and any other integer follows EEL burn
+(which defaults to 1). Exactly SpriteRot=1 adds time * SpriteSpeed to EEL rot;
+exactly SpriteRot=2 subtracts it. Speed is radians per second and uses absolute
+host time. SpriteRepeatX/Y multiply the clamped EEL repeat registers. The done
+variable retires the sprite after its final drawable frame. A final done &&
+burn primary feedback draw uses MilkDrop's 4:3 aspect correction; its secondary
+layer burn and display copy use normal screen geometry.
 The checked runtime reports errors and resets partially evaluated state. A new
 preset resets sprite lifetimes. WebGL retains the evaluated frame while textures
 load, preventing short-lived sprites from expiring before their first draw.
 
-Saved image offsets and scale offsets remain separate from script `x/y/sx/sy`,
-so a script assignment does not erase them. MilkDrop clamps mapped EEL position and scale values before adding their saved
-offsets. Signed scales mirror the quad and nonzero
-`flipx`/`flipy` values reverse the corresponding UV axis. Image aspect,
-rotation, display aspect and repeated UVs are shared Rust geometry. EEL repeat values clamp to 0.01–100 after equations, then multiply by saved
-SpriteRepeatX/Y. EEL `burn` defaults to `1`;
-the saved `SpriteBurn` field determines whether that value is honored.
-`SpriteLayer` and `SpriteBlend` are read from the saved fields. Layers 1–4
-are valid for MilkDrop 3 `.milk` and `.milk2` presets; an invalid saved layer
-is inert. EEL `layer` and `blendmode` assignments do not override those fields.
-EEL `a` starts at 1, can be changed by equations, is clamped to `0..1`, then
-multiplied by `SpriteAlpha`; the product is not clamped before eight-bit D3D
-color packing.
+Saved image offsets and scale offsets remain separate from script x/y/sx/sy, so a
+script assignment does not erase them. MilkDrop clamps mapped EEL position and
+scale values before adding saved offsets. Signed scales mirror the quad and
+nonzero flipx/flipy values reverse the corresponding UV axis. Image aspect,
+rotation, display aspect and repeated UVs use shared Rust geometry. EEL repeat
+values clamp to 0.01–100 after equations, then multiply by saved repeat
+multipliers. EEL a starts at 1, can be changed by equations, and is clamped to
+0..1 before SpriteAlpha multiplication; the product is not clamped before
+eight-bit D3D color packing.
 
+SpriteLayer and SpriteBlend are engine-extension fields. Layers 1–4 enter
+MilkRust's ordered feedback stages; upstream MilkDrop 3 exposes no SpriteLayer
+field and draws user sprites through its final overlay/burn pass. Invalid
+engine-extension layers preserve the block but prevent image admission and code
+execution.
 GIF sprite assets are decoded into a bounded full-canvas RGBA sequence before
 upload. The shared decoder applies frame offsets and disposal operations,
 composites transparent pixels, and maps zero frame delays to 100 ms. It caps
@@ -77,10 +88,10 @@ play. Other animated raster formats remain outside the admitted texture profile.
 
 Both GPU hosts use the same fragment source and per-resource sampler profile,
 sampling a distinct destination snapshot for each sprite. They never sample the
-current draw attachment. The
-eleven modes follow MilkDrop 3's `DrawUserSprites` table. Diffuse RGBA bytes are
-computed in shared Rust code before either GL host binds them, avoiding
-driver-dependent shader rounding at byte boundaries:
+current draw attachment. Standard upstream modes 0–4 follow the D3D9
+DrawUserSprites table. The optional SpriteBlend extension adds modes 5–10.
+Diffuse RGBA bytes are computed in shared Rust code before either GL host binds
+them, avoiding driver-dependent shader rounding at byte boundaries:
 
 | Mode | Stage color / alpha | RGB blend factors |
 | --- | --- | --- |
@@ -96,7 +107,7 @@ driver-dependent shader rounding at byte boundaries:
 | 9 Darken | saturate(texture + diffuse − 0.5) / diffuse alpha | zero, source color |
 | 10 Vivid | saturate(2 × diffuse × texture) / diffuse alpha | one, one |
 
-Modes 1 and 2 premultiply diffuse RGB by alpha before byte conversion. Mode 3
+Modes 1 and 2 premultiply diffuse RGB by alpha before byte conversion. The first five standard modes match the upstream selector; modes 5–10 are engine-only extensions. Mode 3
 uses texture RGB as both the source color and blend factor, with white diffuse
 color. Mode 7 uses white diffuse color and blends the inverted texture by
 combined alpha. Mode 8 uses the adjusted diffuse color and combined alpha.
@@ -109,7 +120,7 @@ independent min/mag/mip filtering and per-axis Wrap/Clamp/Mirror addressing; an
 unqualified name defaults to trilinear repeat. Animated GIF frames bypass color
 keying and mip generation, and use the dedicated linear, no-mipmap repeat
 profile. `0xFFFFFFFF` disables keying; an omitted key is zero. Out-of-range
-saved blend IDs select mode 0. GPU filtering and reference-pixel parity remain
+invalid SpriteBlend extension IDs select mode 0; upstream EEL blendmode clamps to 0..4. GPU filtering and reference-pixel parity remain
 unqualified.
 
 Layers 1–4 use shared scene-command markers in native and WebGL: after
@@ -134,7 +145,7 @@ geometry and GL code are independent implementations.
 
 No build, tests, GPU capture or device run was performed in this source-only
 continuation. Core regression source covers bounds, round trips, disabled blocks,
-private state, final-frame lifetime, signed transforms, all eleven modes and
+private state, final-frame lifetime, signed transforms, the five upstream modes plus six optional engine extensions and
 error recovery. The private browser gate has authored pixel checks for all eleven
 modes, 66 alpha/key combinations and the one-frame loading case. These
 controls validate implementation arithmetic when run; they are not MilkDrop3
@@ -152,7 +163,7 @@ saved sprite-block loader; saved color-key semantics follow the compatible MIT
 behavioral specification identified in `crates/milkrust-core/THIRD_PARTY_NOTICES.md`.
 The keyed native/WebGL paths now produce transparent-black mipmapped variants;
 GIF variants skip keying and mipmaps. The
-browser source checks all eleven modes and 66 combinations of sprite
+browser source checks the five upstream modes plus six optional engine extensions and 66 combinations of sprite
 blend mode, transparent/partial/opaque image alpha and matching/nonmatching color keys.
 Core source checks unwrapped rotation lifetime and scripted numeric selectors.
 These are authored controls, not executed results or MD3 captures.

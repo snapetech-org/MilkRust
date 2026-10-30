@@ -18,23 +18,14 @@ run is recorded for this checkpoint.
   imported format.
   The corpus denominator retains unreadable and unsupported files.
 - Saved sprites have bounded independent equations/lifetimes, relative texture
-  dependencies, transforms and all eleven MilkDrop 3 blend modes (default mode 4;
-  invalid selectors use mode 0), final-frame retirement and shared native/WebGL
-  draw markers. Layers 1–4 enter feedback at the warp, shape, custom-wave, and
-  main-wave/border stages. Burning layer sprites draw twice at their feedback
-  stage; layer 0 draws over the composite and stamps feedback once. The final
-  `done && burn` primary feedback draw uses the 4:3 correction. Saved alpha
-  multiplies clamped EEL `a`; burn semantics follow the saved integer; layer and
-  blend are static selectors. `SpriteRot` modes 1 and 2 add/subtract absolute
-  `time * SpriteSpeed`. `SpriteName` uses its last saved occurrence; other saved
-  fields use their first. Repeated code lines run contiguously through line 255.
-  Both hosts admit the documented 100-name image cache under the aggregate
-  pixel budget. Color keys use the legacy hexadecimal scan. Static keyed
-  images are converted to transparent-black derivatives before mip generation;
-  GIFs bypass color keying and mip generation. These source paths still need
-  reference-pixel and GPU filtering qualification.
-  WebGL retains frames during image admission.
-  See [sprite semantics and reference limits](docs/EMBEDDED_SPRITES.md).
+  dependencies and transforms. The upstream dynamic blendmode uses five modes,
+  defaults to 0, and truncates/clamps each frame to 0..4. Six optional
+  SpriteBlend modes, SpriteLayer stages and other saved sprite controls are
+  MilkRust extensions, not upstream MilkDrop 3 fields. Final-frame retirement,
+  shared native/WebGL drawing, feedback layering, color keys, and animated
+  sprite lifetimes are implemented; reference-pixel and GPU filtering
+  qualification remain open. See
+  [sprite semantics and reference limits](docs/EMBEDDED_SPRITES.md).
 - Classic display controls and full feedback-coordinate transforms reach both
   hosts. All nine classic wave modes, stereo PCM, bounded custom point inputs,
   point colors, portable dots/thick strokes and source regressions are present.
@@ -77,15 +68,11 @@ run is recorded for this checkpoint.
   now cover arrays within structs, matrix/vector selections and arithmetic within
   the profile. User names are isolated from GLSL keywords/intrinsics. Readonly
   initializers use valid GLSL storage, and writes to readonly values fail.
-- Sprite modes 0–10 follow the saved D3D9 texture-stage and blend-factor table;
-  the missing `SpriteBlend` default is 4 and invalid saved selectors use 0.
-  `SpriteLayer` and `SpriteBlend` are static fields, not EEL selectors. Invalid
-  layers are inert. SpriteSpeed uses absolute time only for saved `SpriteRot`
-  modes 1 and 2; saved `SpriteAlpha` multiplies the clamped EEL alpha without a
-  second clamp; saved burn mode controls whether EEL `burn` applies. The keyed
-  static-image key-before-mip derivatives and the GIF-specific no-key/no-mip
-  path are implemented; reference-pixel and physical-renderer qualification
-  remain open.
+- Standard EEL blendmode follows upstream dynamic semantics; SpriteBlend modes
+  5–10 and SpriteLayer are separate MilkRust extensions. SpriteSpeed, saved alpha
+  and burn modifiers are also labeled extensions. Key-before-mip static-image
+  color keys and the GIF-specific no-key/no-mip path are implemented; reference
+  pixels and physical-renderer qualification remain open.
 - All 24 legacy rotation matrices, constant registers `_c0.._c13`, canonical
   coordinate/roam/mip helpers and matched blur range encoding/decoding are bound
   in native and WebGL hosts. Regression sources are present but unrun.
@@ -201,8 +188,8 @@ render frames, resolve external texture packs, or establish fidelity.
   new platform/preset cells is qualified.
 - Reference captures for MilkDrop shader resources and `.milk2` mesh
   interpolation/compositing, per-frame variable blending, weighted custom
-  objects, border suppression, all eleven sprite blend modes/filtering and
-  layer ordering. These are source paths pending reference-image comparison.
+  objects, border suppression, the five upstream sprite blend modes, optional
+  engine extensions/filtering and layer ordering. These are source paths pending reference-image comparison.
   The typed HLSL
   profile now lowers common `Texture1D`/`Texture2D`/`Texture3D` sampling methods and direct
   resource parameters/fields, including the static offset overloads supported
@@ -512,3 +499,18 @@ compiler/build/test/render was run for this source update.
 ## 2026-10-30 Texture1D comparison-sampling continuation
 
 Texture1D `SampleCmp` and `SampleCmpLevelZero` now lower through the existing center-row mapping, accept their scalar integer offset form and share the bounded comparison filter/LOD implementation with Texture2D. The source requires a one-row backing image for parity. Gather remains Texture2D-only; Texture3D/cube comparison calls remain explicit errors. No compiler/build/test/render was run for this source update.
+
+
+## 2026-10-30 upstream sprite blend contract correction
+
+The pinned MilkDrop 3 reference initializes the per-sprite EEL blendmode to 0,
+then truncates its value to int and clamps it to 0..4 in DrawUserSprites. MilkRust
+now evaluates that EEL value after each frame's sprite equations, so code can
+change the standard mode dynamically. SpriteBlend and modes 5..10 remain an
+explicit MilkRust extension, separate from the upstream compatibility claim.
+The source behavior is in the upstream
+[texmgr.cpp](https://github.com/milkdrop2077/MilkDrop3/blob/6b39088f789441e18cc1665519ee7ffe439cece5/code/vis_milk2/texmgr.cpp)
+and [milkdropfs.cpp](https://github.com/milkdrop2077/MilkDrop3/blob/6b39088f789441e18cc1665519ee7ffe439cece5/code/vis_milk2/milkdropfs.cpp).
+Regression source covers default 0, dynamic assignment, fractional truncation,
+and under/overflow clamping. Source changes are unbuilt; private JIT and pixel
+qualification remain outstanding.

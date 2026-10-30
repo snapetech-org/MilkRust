@@ -8,7 +8,10 @@ use crate::{MilkRustValue, evaluate_milkrust_equations, milkrust_scope_number};
 pub const MAX_SPRITES: usize = 16;
 const MAX_SPRITE_RECORDS: usize = 64;
 const DEFAULT_COLOR_KEY_ARGB: u32 = 0;
+/// Optional MilkRust-only static SpriteBlend table. Modes 0–4 match the
+/// upstream MilkDrop blendmode table; modes 5–10 are engine extensions.
 pub const SPRITE_BLEND_MODES: usize = 11;
+pub const MILKDROP_BLEND_MODES: usize = 5;
 
 fn parse_color_key(value: &str) -> Option<u32> {
     // Mirror the saved-sprite `%X` scan: leading blanks and an optional
@@ -31,12 +34,14 @@ pub struct Definition {
     pub index: u32,
     /// Zero-based owner preset. A trailing sprite block in a `.milk2` belongs to PRESET2.
     pub preset_index: usize,
-    /// MilkDrop 3 feedback layer: 0 is the output overlay; 1–4 enter feedback.
+    /// MilkRust extension layer: 0 is output overlay; 1–4 enter ordered feedback stages.
     pub milk2: bool,
     pub texture: String,
     pub color_key: u32,
     pub layer: i32,
     pub blend_mode: i32,
+    /// SpriteBlend is an explicit MilkRust extension; upstream blendmode is per-frame EEL state.
+    pub static_blend_mode: bool,
     pub alpha: f64,
     pub burn_mode: i32,
     pub rotation_mode: f64,
@@ -185,11 +190,12 @@ fn definition(index: u32, preset_index: usize, records: &BTreeMap<String, String
     let mut values = BTreeMap::new();
     for (key, fallback) in [("x", 0.5), ("y", 0.5), ("sx", 1.0), ("sy", 1.0), ("rot", 0.0),
         ("repeatx", 1.0), ("repeaty", 1.0), ("r", 1.0), ("g", 1.0), ("b", 1.0),
-        ("a", 1.0), ("burn", 1.0), ("flipx", 0.0), ("flipy", 0.0), ("done", 0.0)] {
+        ("a", 1.0), ("burn", 1.0), ("blendmode", 0.0), ("flipx", 0.0), ("flipy", 0.0), ("done", 0.0)] {
         values.insert(key.into(), MilkRustValue::Number(fallback));
     }
     let mut layer = 0i32;
-    let mut blend_mode = 4i32;
+    let mut blend_mode = 0i32;
+    let mut static_blend_mode = false;
     let mut alpha = 1.0;
     let mut burn_mode = 1i32;
     let mut rotation_mode = 0.0;
@@ -216,8 +222,16 @@ fn definition(index: u32, preset_index: usize, records: &BTreeMap<String, String
             layer = value.parse::<i32>().map_err(|_| "Invalid sprite layer")?;
             continue;
         }
-        if matches!(key.as_str(), "spriteblend" | "blendmode") {
-            blend_mode = value.parse::<i32>().map_err(|_| "Invalid sprite blend mode")?;
+        if key == "spriteblend" {
+            blend_mode = value.parse::<i32>().map_err(|_| "Invalid SpriteBlend extension value")?;
+            static_blend_mode = true;
+            continue;
+        }
+        if key == "blendmode" {
+            let number = value.parse::<f64>().ok()
+                .filter(|v| v.is_finite() && v.abs() <= 1.0e9)
+                .ok_or("Invalid MilkDrop blendmode value")?;
+            values.insert("blendmode".into(), MilkRustValue::Number(number));
             continue;
         }
         if matches!(key.as_str(), "spriteburn" | "burnmode") {
@@ -252,13 +266,13 @@ fn definition(index: u32, preset_index: usize, records: &BTreeMap<String, String
         let number = value.parse::<f64>().ok().filter(|v| v.is_finite() && v.abs() <= 1.0e9).ok_or("Non-finite or oversized sprite value")?;
         values.insert(variable.into(), MilkRustValue::Number(number));
     }
-    // SpriteAlpha multiplies the clamped EEL `a`; SpriteBurn selects whether
-    // EEL `burn` is honored. Layer and blend are static draw selectors.
+    // SpriteAlpha and SpriteBurn are optional MilkRust saved-field extensions.
+    // Upstream blendmode remains an EEL input; SpriteBlend opts into the
+    // additional static selector. SpriteLayer is also engine-specific.
     let saved_layer = layer;
-    blend_mode = sprite_blend_mode(blend_mode);
+    if static_blend_mode { blend_mode = sprite_blend_mode(blend_mode); }
     values.insert("a".into(), MilkRustValue::Number(1.0));
     values.insert("burn".into(), MilkRustValue::Number(1.0));
-    values.insert("blendmode".into(), MilkRustValue::Number(f64::from(blend_mode)));
     values.insert("layer".into(), MilkRustValue::Number(f64::from(saved_layer)));
     let join = |lines: BTreeMap<u32, &str>| {
         let mut contiguous = Vec::new();
@@ -270,7 +284,7 @@ fn definition(index: u32, preset_index: usize, records: &BTreeMap<String, String
     };
     // Standalone block extraction has not seen the enclosing format yet. The
     // preset-set parser narrows ordinary `.milk` definitions to layer 0–1.
-    let result = Definition { index, preset_index, milk2: true, texture, color_key, layer: saved_layer, blend_mode, alpha, burn_mode,
+    let result = Definition { index, preset_index, milk2: true, texture, color_key, layer: saved_layer, blend_mode, static_blend_mode, alpha, burn_mode,
         rotation_mode, rotation_speed, offset, size_offset, repeat_multiplier, values, init: join(init), code: join(code) };
     Ok(Some(result))
 }
@@ -461,9 +475,15 @@ impl Runtime {
             // MilkDrop clamps the EEL coordinate before adding its saved offset.
             let x = ((value("x") * 2.0 - 1.0).clamp(-1000.0, 1000.0) + definition.offset[0] + 1.0) * 0.5;
             let y = ((value("y") * 2.0 - 1.0).clamp(-1000.0, 1000.0) + definition.offset[1] + 1.0) * 0.5;
-            // Layer and blend selectors are saved preset fields in MD3;
-            // assigning similarly named EEL variables does not change them.
+            // Layer is an optional MilkRust extension. A static SpriteBlend
+            // selector takes precedence; standard blendmode follows MilkDrop's
+            // per-frame integer conversion and 0..4 clamp.
             let layer = definition.layer as usize;
+            let blend_mode = if definition.static_blend_mode {
+                definition.blend_mode
+            } else {
+                milkdrop_blend_mode(value("blendmode"))
+            };
             let alpha = value("a").clamp(0.0, 1.0);
             let repeat = [
                 value("repeatx").clamp(0.01, 100.0) * definition.repeat_multiplier[0],
@@ -476,7 +496,7 @@ impl Runtime {
             frames.push(Frame {
                 preset_index: definition.preset_index, milk2: definition.milk2,
                 texture: definition.texture.clone(), time: elapsed, color_key: definition.color_key,
-                blend_mode: definition.blend_mode, layer, burn,
+                blend_mode, layer, burn,
                 color: [value("r").clamp(0.0, 1.0), value("g").clamp(0.0, 1.0),
                     value("b").clamp(0.0, 1.0), alpha * definition.alpha],
                 center: [x, y],
@@ -494,7 +514,13 @@ impl Runtime {
     }
 }
 
-/// MilkDrop 3 has eleven saved sprite blend modes; invalid values use mode 0.
+/// Clamp the upstream per-frame EEL blend selector after truncating to int.
+fn milkdrop_blend_mode(requested: f64) -> i32 {
+    if !requested.is_finite() { return 0; }
+    requested.trunc().clamp(0.0, (MILKDROP_BLEND_MODES - 1) as f64) as i32
+}
+
+/// Normalize an optional MilkRust-only static SpriteBlend selector.
 pub fn sprite_blend_mode(requested: i32) -> i32 {
     if (0..SPRITE_BLEND_MODES as i32).contains(&requested) { requested } else { 0 }
 }
@@ -570,8 +596,8 @@ pub fn sprite_blend_pixel(mode: i32, rgba: [f64; 4], texel: [u8; 4], dst: [u8; 3
 }
 
 /// Common native/WebGL sprite compositing; destination is a distinct snapshot,
-/// never the texture attached to the draw framebuffer. The eleven mode IDs
-/// follow MilkDrop 3's fixed-function `DrawUserSprites` blend table.
+/// never the texture attached to the draw framebuffer. Modes 0–4 follow the
+/// upstream blendmode table; modes 5–10 are MilkRust-only extensions.
 pub const FRAGMENT: &str = r#"#version 300 es
 precision highp float;
 uniform sampler2D spriteImage;
@@ -687,19 +713,21 @@ mod tests {
     }
 
     #[test]
-    fn saved_blend_defaults_to_four_and_invalid_modes_use_zero() {
+    fn upstream_blend_defaults_to_zero_and_uses_a_dynamic_truncated_clamp() {
         let default = extract(&block(""), true).unwrap().definitions;
-        assert_eq!(default[0].blend_mode, 4);
-        assert_eq!(Runtime::default().render(&default, &BTreeMap::new(), 0.0, 0.0).unwrap()[0].blend_mode, 4);
+        assert_eq!(default[0].blend_mode, 0);
+        assert_eq!(Runtime::default().render(&default, &BTreeMap::new(), 0.0, 0.0).unwrap()[0].blend_mode, 0);
         for mode in 0..=10 {
             let definitions = extract(&block(&format!("SpriteBlend={mode}\ncode_1=blendmode={mode};")), true).unwrap().definitions;
             let frame = Runtime::default().render(&definitions, &BTreeMap::new(), 0.0, 0.0).unwrap().remove(0);
             assert_eq!(frame.blend_mode, mode);
         }
-        for (script, expected) in [("blendmode=-9;", 4), ("blendmode=99;", 4)] {
+        for (script, expected) in [("blendmode=-9;", 0), ("blendmode=2.9;", 2), ("blendmode=99;", 4)] {
             let out_of_range = extract(&block(&format!("code_1={script}")), true).unwrap().definitions;
             assert_eq!(Runtime::default().render(&out_of_range, &BTreeMap::new(), 0.0, 0.0).unwrap()[0].blend_mode, expected);
         }
+        let initial = extract(&block("blendmode=3\ncode_1=blendmode=1;"), true).unwrap().definitions;
+        assert_eq!(Runtime::default().render(&initial, &BTreeMap::new(), 0.0, 0.0).unwrap()[0].blend_mode, 1);
     }
 
     #[test]
