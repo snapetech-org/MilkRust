@@ -567,8 +567,8 @@ dependencies = [
  "gif",
  "milkrust-expr",
  "milkrust-hlsl",
- "serde_json",
  "png",
+ "serde_json",
 ]
 
 [[package]]
