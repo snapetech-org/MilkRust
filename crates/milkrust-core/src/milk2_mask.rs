@@ -300,7 +300,7 @@ fn gen_plasma(values: &mut [f32], gx: usize, aspect: (f32, f32), random: [f32; 5
             Span { x0: mx, x1, y0, y1: my },
             Span { x0, x1: mx, y0: my, y1 },
             Span { x0: mx, x1, y0: my, y1 },
-        ] { gen_plasma(values, gx, aspect, random, rng, quadrant, half); }
+        ] { gen_plasma(values, gx, aspect, random, quadrant, half); }
     }
 }
 
