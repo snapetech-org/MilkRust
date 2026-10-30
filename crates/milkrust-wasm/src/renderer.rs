@@ -1616,12 +1616,16 @@ fn create_milkrust_texture_from_data_url(
     };
     let animated_png = matches!(source.format, Format::Png)
         && source.has_animated_png().map_err(|e| JsValue::from_str(&e))?;
-    if matches!(source.format, Format::Gif) || animated_png {
+    let animated_webp = matches!(source.format, Format::WebP)
+        && source.has_animated_webp().map_err(|e| JsValue::from_str(&e))?;
+    if matches!(source.format, Format::Gif) || animated_png || animated_webp {
         asset.animated = true;
         let animation = if matches!(source.format, Format::Gif) {
             source.decode_gif().map_err(|e| JsValue::from_str(&e))?
-        } else {
+        } else if animated_png {
             source.decode_png_animation().map_err(|e| JsValue::from_str(&e))?
+        } else {
+            source.decode_webp_animation().map_err(|e| JsValue::from_str(&e))?
         };
         if animation.decoded_pixels() != pixels {
             return Err(JsValue::from_str("Animated image frame count changed after pixel reservation"));
