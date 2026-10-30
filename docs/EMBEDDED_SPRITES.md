@@ -46,12 +46,11 @@ preset resets sprite lifetimes. WebGL retains the evaluated frame while textures
 load, preventing short-lived sprites from expiring before their first draw.
 
 Saved image offsets and scale offsets remain separate from script `x/y/sx/sy`,
-so a script assignment does not erase them. Position offsets join EEL
-coordinates before the final clip-space clamp; size offsets join the EEL scales
-before the final scale clamp. Signed scales mirror the quad and nonzero
+so a script assignment does not erase them. MilkDrop clamps mapped EEL position and scale values before adding their saved
+offsets. Signed scales mirror the quad and nonzero
 `flipx`/`flipy` values reverse the corresponding UV axis. Image aspect,
-rotation, display aspect and repeated UVs are shared Rust geometry. `repeatx`
-and `repeaty` clamp to 0.01–100 after equations. EEL `burn` defaults to `1`;
+rotation, display aspect and repeated UVs are shared Rust geometry. EEL repeat values clamp to 0.01–100 after equations, then multiply by saved
+SpriteRepeatX/Y. EEL `burn` defaults to `1`;
 the saved `SpriteBurn` field determines whether that value is honored.
 `SpriteLayer` and `SpriteBlend` are read from the saved fields. Layers 1–4
 are valid for MilkDrop 3 `.milk` and `.milk2` presets; an invalid saved layer
@@ -70,8 +69,9 @@ without loop metadata the animation plays once and holds its last frame, zero
 repeats forever, and a positive value repeats that many times after the first
 play. Other animated raster formats remain outside the admitted texture profile.
 
-Both GPU hosts use the same fragment source, sampling a distinct destination
-snapshot for each sprite. They never sample the current draw attachment. The
+Both GPU hosts use the same fragment source and per-resource sampler profile,
+sampling a distinct destination snapshot for each sprite. They never sample the
+current draw attachment. The
 eleven modes follow MilkDrop 3's `DrawUserSprites` table. Diffuse RGBA bytes are
 computed in shared Rust code before either GL host binds them, avoiding
 driver-dependent shader rounding at byte boundaries:
@@ -98,9 +98,11 @@ Mode 9 multiplies the destination by the darken stage color; mode 10 adds the
 clamped 2× stage color. Modes 0, 5, 6, 9 and 10 do not use image alpha for
 blending. Static-image color keys match opaque source texels by their low 24
 RGB bits and replace a match with transparent black before generating the mip
-chain. The resulting texture uses trilinear filtering and repeat addressing.
-Animated GIF frames bypass color keying and mip generation, and use linear
-filtering. `0xFFFFFFFF` disables keying; an omitted key is zero. Out-of-range
+chain. Static images use the shared sampler profile for their resource name, including
+independent min/mag/mip filtering and per-axis Wrap/Clamp/Mirror addressing; an
+unqualified name defaults to trilinear repeat. Animated GIF frames bypass color
+keying and mip generation, and use the dedicated linear, no-mipmap repeat
+profile. `0xFFFFFFFF` disables keying; an omitted key is zero. Out-of-range
 saved blend IDs select mode 0. GPU filtering and reference-pixel parity remain
 unqualified.
 
