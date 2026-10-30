@@ -328,19 +328,19 @@ pub fn has_wrapper(source: &str) -> bool {
 fn parse_header_float(value: &str, key: &str) -> Result<f64, String> {
     let value = value.trim_start_matches(|ch: char| ch.is_ascii_whitespace());
     let bytes = value.as_bytes();
-    let mut cursor = usize::from(matches!(bytes.first(), Some(b'+' | b'-')));
+    let mut cursor = usize::from(bytes.first().is_some_and(|byte| *byte == b'+' || *byte == b'-'));
     let start = cursor;
     let lower = value[cursor..].to_ascii_lowercase();
     if lower.starts_with("infinity") { cursor += 8; }
     else if lower.starts_with("inf") || lower.starts_with("nan") { cursor += 3; }
     else {
         let integer_start = cursor;
-        while bytes.get(cursor).is_some_and(u8::is_ascii_digit) { cursor += 1; }
+        while bytes.get(cursor).is_some_and(|byte| byte.is_ascii_digit()) { cursor += 1; }
         let mut digits = cursor - integer_start;
         if bytes.get(cursor) == Some(&b'.') {
             cursor += 1;
             let fraction_start = cursor;
-            while bytes.get(cursor).is_some_and(u8::is_ascii_digit) { cursor += 1; }
+            while bytes.get(cursor).is_some_and(|byte| byte.is_ascii_digit()) { cursor += 1; }
             digits += cursor - fraction_start;
         }
         if digits == 0 { return Err(format!("invalid milk2 {key}")); }
@@ -349,7 +349,7 @@ fn parse_header_float(value: &str, key: &str) -> Result<f64, String> {
             let mut exponent = cursor + 1;
             if matches!(bytes.get(exponent), Some(b'+' | b'-')) { exponent += 1; }
             let exponent_start = exponent;
-            while bytes.get(exponent).is_some_and(u8::is_ascii_digit) { exponent += 1; }
+            while bytes.get(exponent).is_some_and(|byte| byte.is_ascii_digit()) { exponent += 1; }
             cursor = if exponent > exponent_start { exponent } else { mantissa_end };
         }
     }
@@ -363,9 +363,9 @@ fn parse_header_float(value: &str, key: &str) -> Result<f64, String> {
 fn parse_header_integer(value: &str, key: &str) -> Result<i32, String> {
     let value = value.trim_start_matches(|ch: char| ch.is_ascii_whitespace());
     let bytes = value.as_bytes();
-    let mut cursor = usize::from(matches!(bytes.first(), Some(b'+' | b'-')));
+    let mut cursor = usize::from(bytes.first().is_some_and(|byte| *byte == b'+' || *byte == b'-'));
     let start = cursor;
-    while bytes.get(cursor).is_some_and(u8::is_ascii_digit) { cursor += 1; }
+    while bytes.get(cursor).is_some_and(|byte| byte.is_ascii_digit()) { cursor += 1; }
     if cursor == start { return Err(format!("invalid milk2 {key}")); }
     value[..cursor].parse::<i32>().map_err(|_| format!("invalid milk2 {key}"))
 }
