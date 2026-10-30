@@ -109,11 +109,11 @@ run is recorded for this checkpoint.
   loads with process-start defaults of empty pattern, progress `1.0`, direction
   `0`, and random values zero. Ordinary single-preset scopes carry valid
   writes to those shared globals across soft cuts, and the runtime exposes a
-  validated snapshot/restore API for host recreation. Before random initialization, analytic
-  masks use the reference midpoint and plasma uses seeded legacy draws; after
-  initialization, omitted slots inherit prior values. A fresh stateless parse
-  uses process-start defaults. A missing pattern fails closed rather than
-  inventing a transition.
+  validated snapshot/restore API for host recreation. Pattern formulas use
+  the effective carried random registers directly: process-start masks use the
+  zero-valued defaults, and partial headers inherit prior values for omitted
+  slots. Mask evaluation never invents midpoint or seeded fallback values. A
+  missing pattern fails closed rather than inventing a transition.
   Formula provenance and the remaining pixel-qualification boundary are in
   [the format notes](docs/MILK2_FORMAT.md).
 - Deterministic archives with integrity indexes and per-file provenance/notices;
