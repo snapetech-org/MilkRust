@@ -63,8 +63,9 @@ The runtime clock derives elapsed time from each source load. Hour, minute,
 second and millisecond fields derive from that preset-relative clock unless a
 host supplies local clock state. `MilkRustClockState` provides validated local
 year, month, day, weekday and wall-clock values. The Rust engine does not read
-the system clock; stateless callers and hosts that omit the setter retain zero
-calendar fields. The temporary mixed scope is
+the system clock: the PlezyNG native adapter and MilkRust browser SDK supply
+host-local time, while direct WASM/stateless callers that omit the setter retain
+zero calendar fields. The temporary mixed scope is
 restored after scene generation, so its values do not become PRESET2's
 next-frame equation state. Custom shape fills, outlines and custom waves use linear
 `1 - P` / `P` alpha weights for PRESET1 / PRESET2. Outer and inner preset
