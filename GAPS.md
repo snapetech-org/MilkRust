@@ -61,8 +61,11 @@ run is recorded for this checkpoint.
   `GetDimensions` calls across those names; legacy sampler arrays dispatch
   supported `tex*` intrinsics when used as the first argument. Out-of-range
   dynamic reads return zero (or zero dimension outputs), and dispatch code is
-  capped at 512 KiB. Dynamic accesses with calls or side effects, function-local
-  arrays, and nested resource-bearing structs fail closed.
+  capped at 512 KiB. Function-local opaque arrays with direct brace initializers
+  containing matching global bindings support literal element accesses. Uninitialized,
+  computed or mutated local arrays and dynamic local indexing fail closed. Dynamic
+  global array accesses with calls or side effects and nested resource-bearing
+  structs outside the bounded global path also fail closed.
 - The bounded WGSL expression path lowers floating scalar/vector HLSL `fmod` to
   signed WGSL remainder; its integer/boolean, advanced sampling and broader
   shader-language limits remain explicit.
@@ -203,7 +206,7 @@ render frames, resolve external texture packs, or establish fidelity.
   when accessed through an unambiguous global struct instance, including
   resource-bearing helper parameters specialized to that instance. The compiler
   still rejects texture types outside those three dimensions, integer/non-color
-  texture element types, resource arrays in function scopes, nested resource-struct aggregate initializers,
+  texture element types, uninitialized/computed/mutated or dynamically indexed resource arrays in function scopes, nested resource-struct aggregate initializers,
   aggregate resource-struct initializers outside the bounded global alias form,
   and resource-bearing struct arguments outside the simple immutable local-copy of a global resource-only struct case; uninitialized, computed, mutated, shadowed and nested-scope locals remain explicit failures. Comparison methods outside the bounded Texture2D
   `GatherCmp`/`GatherCmpRed`/`GatherCmpGreen`/`GatherCmpBlue`/`GatherCmpAlpha` and Texture1D/Texture2D
@@ -572,9 +575,14 @@ remains a historical snapshot until the full private-runner report is regenerate
 
 ## 2026-10-30 nested resource-struct source support
 
-The typed compiler now flattens scalar Texture1D/Texture2D/Texture3D resource fields through plain nested structs, records the original leaf shape, and lowers dotted access through an unambiguous global struct instance. Resource-bearing helper parameters specialize through the same global binding. Global resource arrays nested through plain structs now support literal and side-effect-free dynamic indices, with each layer bound through its flattened global field path. Native regression sources cover direct nested access, helper specialization, literal/dynamic array selection, binding reflection and rejection of nested aggregate initializers. Function-local resource arrays, nested sampler-state forwarding, uninitialized/computed/mutated/shadowed struct locals and nested aggregate initializers remain explicit failures. Simple immutable local copies of global resource-only structs are normalized before specialization. Compiler and render execution have not been run.
+The typed compiler now flattens scalar Texture1D/Texture2D/Texture3D resource fields through plain nested structs, records the original leaf shape, and lowers dotted access through an unambiguous global struct instance. Resource-bearing helper parameters specialize through the same global binding. Global resource arrays nested through plain structs now support literal and side-effect-free dynamic indices, with each layer bound through its flattened global field path. Native regression sources cover direct nested access, helper specialization, literal/dynamic array selection, binding reflection and rejection of nested aggregate initializers. Computed/uninitialized/mutated or dynamically indexed local resource arrays, nested sampler-state forwarding, uninitialized/computed/mutated/shadowed struct locals and nested aggregate initializers remain explicit failures. Directly initialized local resource arrays with literal element accesses now normalize to matching global bindings. Simple immutable local copies of global resource-only structs are normalized before specialization. Compiler and render execution have not been run.
 
 
 ## 2026-10-30 immutable local resource-struct aliases
 
 The HLSL helper pass now recognizes a simple local declaration that copies a global resource-only struct instance. When the type matches the global declaration and the local is not shadowed or mutated, it removes the opaque local value and substitutes the original global binding through the current function or shader body. Mixed numeric/resource structs, dynamic or aggregate initializers, local copies inside nested scopes, mutation, shadowing and uninitialized locals remain explicit failures. This source change has not been built or executed; compilation and rendering qualification remain open.
+
+
+## 2026-10-30 statically indexed local opaque arrays
+
+HLSL resource and sampler arrays declared directly in a function body or shader body now lower when they have a literal bound from 1–15, a complete brace initializer of type-matching global opaque bindings, and only literal element accesses. The lowering removes the opaque local array and substitutes each selected global binding before helper specialization. Dynamic indices, computed or partial initializers, nested-scope declarations, assignments, shadowing and mismatched bindings remain explicit failures. This source change has not been built or executed; private compiler and renderer qualification remain open.

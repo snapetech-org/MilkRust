@@ -312,6 +312,260 @@ fn access_chain_end(tokens: &[String], start: usize) -> usize {
     }
 }
 
+
+#[derive(Clone)]
+struct GlobalResource {
+    ty: Vec<String>,
+    array_len: Option<usize>,
+}
+
+fn resource_type_signature(tokens: &[String], start: usize) -> Option<(Vec<String>, usize)> {
+    let opaque = ["Texture1D", "Texture2D", "Texture3D", "SamplerState",
+        "SamplerComparisonState", "sampler", "sampler2D", "sampler3D"];
+    if !tokens.get(start).is_some_and(|ty| opaque.contains(&ty.as_str())) {
+        return None;
+    }
+    let mut end = start + 1;
+    if tokens.get(end).map(String::as_str) == Some("<") {
+        let mut angle_depth = 0i32;
+        while end < tokens.len() {
+            if tokens[end] == "<" { angle_depth += 1; }
+            if tokens[end] == ">" { angle_depth -= 1; }
+            if tokens[end] == ">>" { angle_depth -= 2; }
+            end += 1;
+            if angle_depth <= 0 { break; }
+        }
+        if angle_depth != 0 { return None; }
+    }
+    Some((tokens[start..end].to_vec(), end))
+}
+
+fn global_resource_declarations(tokens: &[String], functions: &[Function]) -> BTreeMap<String, GlobalResource> {
+    let mut resources = BTreeMap::new();
+    let mut index = 0usize;
+    while index < tokens.len() {
+        if let Some(function) = functions.iter().find(|function| function.span.start == index) {
+            index = function.span.end;
+            continue;
+        }
+        if tokens[index] == "{" {
+            if let Ok(end) = close_brace(tokens, index) { index = end; continue; }
+        }
+        let Some((ty, name_index)) = resource_type_signature(tokens, index) else {
+            index += 1;
+            continue;
+        };
+        if !tokens.get(name_index).is_some_and(|name| is_identifier(name)) {
+            index += 1;
+            continue;
+        }
+        let name = tokens[name_index].clone();
+        let mut cursor = name_index + 1;
+        let mut array_len = None;
+        if tokens.get(cursor).map(String::as_str) == Some("[") {
+            let Some(length) = tokens.get(cursor + 1).and_then(|value| value.parse::<usize>().ok()) else {
+                index += 1;
+                continue;
+            };
+            if tokens.get(cursor + 2).map(String::as_str) != Some("]") || length == 0 {
+                index += 1;
+                continue;
+            }
+            array_len = Some(length);
+            cursor += 3;
+        }
+        if matches!(tokens.get(cursor).map(String::as_str), Some(";") | Some("=") | Some("{")) {
+            resources.insert(name, GlobalResource { ty, array_len });
+        }
+        index = name_index + 1;
+    }
+    resources
+}
+
+fn resource_binding_matches(
+    expression: &[String],
+    expected_type: &[String],
+    globals: &BTreeMap<String, GlobalResource>,
+) -> bool {
+    let Some(root) = expression.first().filter(|root| is_identifier(root)) else { return false; };
+    let Some(global) = globals.get(root) else { return false; };
+    if global.ty.as_slice() != expected_type { return false; }
+    match expression {
+        [_] => global.array_len.is_none(),
+        [_, open, index, close] if open == "[" && close == "]" => {
+            index.parse::<usize>().ok().is_some_and(|index| global.array_len.is_some_and(|length| index < length))
+        }
+        _ => false,
+    }
+}
+
+fn split_initializer_values(tokens: &[String]) -> Option<Vec<Vec<String>>> {
+    let mut result = Vec::new();
+    let mut start = 0usize;
+    let (mut parens, mut brackets, mut angles, mut braces) = (0i32, 0i32, 0i32, 0i32);
+    for (index, token) in tokens.iter().enumerate() {
+        match token.as_str() {
+            "(" => parens += 1, ")" => parens -= 1,
+            "[" => brackets += 1, "]" => brackets -= 1,
+            "<" => angles += 1, ">" => angles -= 1,
+            ">>" if angles >= 2 => angles -= 2,
+            "{" => braces += 1, "}" => braces -= 1,
+            "," if parens == 0 && brackets == 0 && angles == 0 && braces == 0 => {
+                if index == start { return None; }
+                result.push(tokens[start..index].to_vec());
+                start = index + 1;
+            }
+            _ => {}
+        }
+        if parens < 0 || brackets < 0 || angles < 0 || braces < 0 { return None; }
+    }
+    if start < tokens.len() {
+        result.push(tokens[start..].to_vec());
+    } else if !tokens.is_empty() {
+        return None;
+    }
+    Some(result)
+}
+
+fn normalize_static_local_resource_arrays(tokens: &mut Vec<String>) -> Result<(), String> {
+    let functions = declarations(tokens)?;
+    let globals = global_resource_declarations(tokens, &functions);
+    if globals.is_empty() { return Ok(()); }
+    let mut scopes = Vec::<(Range<usize>, Option<usize>)>::new();
+    for (function_index, function) in functions.iter().enumerate() {
+        let Some(body) = &function.body else { continue; };
+        let body_start = function.span.end.checked_sub(body.len()).ok_or("Invalid HLSL function body range")?;
+        scopes.push((body_start..function.span.end, Some(function_index)));
+    }
+    let mut index = 0usize;
+    while index + 1 < tokens.len() {
+        if tokens[index] == "shader_body" && tokens[index + 1] == "{" {
+            let end = close_brace(tokens, index + 1)?;
+            scopes.push((index + 1..end, None));
+            index = end;
+        } else {
+            index += 1;
+        }
+    }
+
+    let mut edits = Vec::<(Range<usize>, Vec<String>)>::new();
+    for (scope, function_index) in scopes {
+        let mut depth = 0i32;
+        let mut candidates = Vec::<(usize, usize, String, Vec<Vec<String>>)>::new();
+        let mut index = scope.start;
+        while index < scope.end {
+            if tokens[index] == "{" { depth += 1; index += 1; continue; }
+            if tokens[index] == "}" { depth -= 1; index += 1; continue; }
+            let Some((ty, name_index)) = resource_type_signature(tokens, index) else {
+                index += 1;
+                continue;
+            };
+            if depth != 1 || !tokens.get(name_index).is_some_and(|name| is_identifier(name))
+                || tokens.get(name_index + 1).map(String::as_str) != Some("[") {
+                index += 1;
+                continue;
+            }
+            let name = tokens[name_index].clone();
+            let Some(length) = tokens.get(name_index + 2).and_then(|value| value.parse::<usize>().ok()) else {
+                index += 1;
+                continue;
+            };
+            if length == 0 || length > 15
+                || tokens.get(name_index + 3).map(String::as_str) != Some("]")
+                || tokens.get(name_index + 4).map(String::as_str) != Some("=")
+                || tokens.get(name_index + 5).map(String::as_str) != Some("{") {
+                index += 1;
+                continue;
+            }
+            let initializer_open = name_index + 5;
+            let mut initializer_depth = 1i32;
+            let mut initializer_close = initializer_open + 1;
+            while initializer_close < scope.end && initializer_depth > 0 {
+                if tokens[initializer_close] == "{" { initializer_depth += 1; }
+                if tokens[initializer_close] == "}" { initializer_depth -= 1; }
+                initializer_close += 1;
+            }
+            if initializer_depth != 0
+                || tokens.get(initializer_close).map(String::as_str) != Some(";") {
+                index += 1;
+                continue;
+            }
+            let values = split_initializer_values(&tokens[initializer_open + 1..initializer_close - 1]);
+            let Some(values) = values.filter(|values| values.len() == length
+                && values.iter().all(|value| resource_binding_matches(value, &ty, &globals))) else {
+                index += 1;
+                continue;
+            };
+            candidates.push((index, initializer_close + 1, name, values));
+            index = initializer_close + 1;
+        }
+        if candidates.is_empty() { continue; }
+
+        let mut counts = BTreeMap::<String, usize>::new();
+        for (_, _, name, _) in &candidates { *counts.entry(name.clone()).or_default() += 1; }
+        let parameter_names: BTreeSet<String> = function_index
+            .and_then(|function_index| functions.get(function_index))
+            .into_iter()
+            .flat_map(|function| function.parameters.iter())
+            .filter_map(|parameter| {
+                let end = parameter.iter().position(|token| matches!(token.as_str(), ":" | "=" | "["))
+                    .unwrap_or(parameter.len());
+                parameter[..end].last().filter(|name| is_identifier(name)).cloned()
+            })
+            .collect();
+
+        for (declaration_start, declaration_end, name, values) in candidates {
+            if counts.get(&name).copied() != Some(1) || parameter_names.contains(&name) { continue; }
+            if (scope.start..scope.end).any(|index| {
+                (index < declaration_start || index >= declaration_end)
+                    && declaration_of_name(tokens, index, &name)
+            }) {
+                continue;
+            }
+            let roots_are_global = values.iter().all(|value| {
+                value.first().is_some_and(|root| !parameter_names.contains(root))
+                    && !(scope.start..scope.end).any(|index| declaration_of_name(tokens, index, &value[0]))
+            });
+            if !roots_are_global { continue; }
+
+            let mut uses = Vec::<(Range<usize>, Vec<String>)>::new();
+            let mut unsupported_use = false;
+            for index in scope.clone() {
+                if (declaration_start..declaration_end).contains(&index)
+                    || tokens[index] != name || (index > 0 && tokens[index - 1] == ".") {
+                    continue;
+                }
+                let Some(array_index) = tokens.get(index + 2).and_then(|value| value.parse::<usize>().ok()) else {
+                    unsupported_use = true;
+                    break;
+                };
+                if tokens.get(index + 1).map(String::as_str) != Some("[")
+                    || tokens.get(index + 3).map(String::as_str) != Some("]")
+                    || array_index >= values.len() {
+                    unsupported_use = true;
+                    break;
+                }
+                let chain_end = access_chain_end(tokens, index);
+                if matches!(tokens.get(chain_end).map(String::as_str), Some("=") | Some("+=") | Some("-=")
+                    | Some("*=") | Some("/=") | Some("%=") | Some("&=") | Some("|=")
+                    | Some("^=") | Some("<<=") | Some(">>=") | Some("++") | Some("--"))
+                    || index > scope.start && matches!(tokens[index - 1].as_str(), "++" | "--") {
+                    unsupported_use = true;
+                    break;
+                }
+                uses.push((index..index + 4, values[array_index].clone()));
+            }
+            if unsupported_use { continue; }
+            edits.push((declaration_start..declaration_end, Vec::new()));
+            edits.extend(uses);
+        }
+    }
+
+    edits.sort_by(|left, right| right.0.start.cmp(&left.0.start));
+    for (range, replacement) in edits { tokens.splice(range, replacement); }
+    Ok(())
+}
+
 fn normalize_static_local_resource_aliases(tokens: &mut Vec<String>) -> Result<(), String> {
     let functions = declarations(tokens)?;
     let resource_only = resource_only_struct_types(tokens);
@@ -583,10 +837,14 @@ impl Expansion<'_> {
 }
 
 pub(super) fn specialize(tokens: &mut Vec<String>) -> Result<(), String> {
+    // Normalize opaque local values that can be resolved to named global bindings
+    // before helper specialization and typed method lowering.
+    normalize_static_local_resource_arrays(tokens)?;
+    normalize_static_local_resource_aliases(tokens)?;
     // Preserve the existing typed opaque-parameter path (including overloads)
     // when no initialized state needs forwarding through a global alias.
     let resource_structs = resource_struct_types(tokens);
-    let mut functions = declarations(tokens)?;
+    let functions = declarations(tokens)?;
     let has_resource_struct_parameter = functions.iter().flat_map(|function| &function.parameters).any(|parameter| {
         let first = parameter.iter().position(|token| !matches!(token.as_str(), "in" | "const" | "uniform" | "out" | "inout"));
         first.and_then(|index| parameter.get(index)).is_some_and(|ty| resource_structs.contains(ty))
@@ -595,8 +853,6 @@ pub(super) fn specialize(tokens: &mut Vec<String>) -> Result<(), String> {
         || matches!(token.as_str(), "SamplerState" | "SamplerComparisonState")
             && matches!(tokens.get(index + 2).map(String::as_str), Some("{") | Some("=")));
     if !has_static_state { return Ok(()); }
-    normalize_static_local_resource_aliases(tokens)?;
-    functions = declarations(tokens)?;
     let mut templates = BTreeMap::<String, Vec<Template>>::new();
     for function in functions.iter().filter(|f| f.body.is_some()) {
         let opaque = function.parameters.iter().map(|p| opaque_name(p, &resource_structs)).collect::<Result<Vec<_>, _>>()?;

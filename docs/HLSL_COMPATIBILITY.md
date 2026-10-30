@@ -497,7 +497,7 @@ still fail explicitly. Recursive helpers, output/array/default opaque parameters
 uninitialized, computed, mutated, shadowed or non-global opaque arguments,
 resource-bearing struct arguments outside the supported immutable global-alias case,
 and substitutions that capture existing body or value-parameter
-names fail explicitly. Scalar texture-resource fields and bounded resource arrays now flatten through plain struct members when they resolve to an unambiguous global struct instance, including helper parameters specialized to that instance. Literal and side-effect-free dynamic nested-array indices dispatch over named global elements. Function-local arrays, nested aggregate initializers, nested sampler-state propagation, state assignment/arithmetic and dynamically selected state still require a separate binding model. A simple immutable local copy of a global resource-only struct is normalized to its global binding before specialization; mixed structs and mutated, shadowed, dynamically constructed or uninitialized locals remain unsupported. This is a bounded pixel-shader profile, not every HLSL
+names fail explicitly. Scalar texture-resource fields and bounded resource arrays now flatten through plain struct members when they resolve to an unambiguous global struct instance, including helper parameters specialized to that instance. Literal and side-effect-free dynamic nested-array indices dispatch over named global elements. Function-local opaque arrays now normalize only when fully initialized from matching global bindings and accessed with literal indices. Dynamic local indices, computed/uninitialized/mutated arrays, nested aggregate initializers, nested sampler-state propagation, state assignment/arithmetic and dynamically selected state still require a separate binding model. A simple immutable local copy of a global resource-only struct is normalized to its global binding before specialization; mixed structs and mutated, shadowed, dynamically constructed or uninitialized locals remain unsupported. This is a bounded pixel-shader profile, not every HLSL
 resource feature.
 
 Native regression sources cover binding reflection, nested forwarding, legacy
@@ -572,3 +572,8 @@ Bounded Texture1D/2D/3D and legacy sampler arrays declared in struct fields can 
 ## Immutable local resource-struct aliases — 2026-10-30
 
 A local resource-only struct may copy one unambiguously declared global instance with a direct initializer. The helper pass checks the source and destination struct types, rejects local/global shadowing and mutation, removes the local opaque value, and rewrites its reads to the original global binding within that function or shader body. The bounded pass does not normalize mixed numeric/resource structs, aggregate or computed initializers, uninitialized locals, or declarations inside nested blocks. Source is unbuilt and unexecuted; no shader or device qualification is claimed.
+
+
+## Statically indexed local opaque arrays — 2026-10-30
+
+Direct function-body and shader-body arrays of Texture1D/2D/3D, legacy sampler, SamplerState or SamplerComparisonState now normalize when their literal bound is 1–15, each brace-initializer element is a matching global opaque binding, and all accesses use literal indices. The local opaque array is erased before helper specialization. Dynamic indexing, partial/computed initialization, nested-scope declarations, writes, shadowing and type mismatches remain unsupported. No compiler, build, test or render was run for this source update.
