@@ -144,7 +144,7 @@ impl SavedBlend {
     /// It is metadata, not an executable sprite/shader extension, so it must
     /// not disable an otherwise supported uniform Zoom blend.
     fn has_only_supported_trailer_metadata(&self) -> bool {
-        let enabled = self.header.get("sprite").is_none_or(|value| value != "0");
+        let enabled = self.header.get("sprite").is_some_and(|value| value == "1");
         let Ok(blocks) = crate::sprites::extract(&self.trailer, enabled) else { return false; };
         let mut saw_name = false;
         for line in blocks.body.lines() {

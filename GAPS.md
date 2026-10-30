@@ -285,3 +285,14 @@ the saved `SpriteRepeatX`/`SpriteRepeatY`. Saved position and scale offsets are
 also applied after their equation values are clamped, matching the pinned
 behavioral source. The existing regression expectation was updated; execution
 and reference-frame comparison remain pending.
+
+
+## 2026-10-30 MilkDrop 3 saved-sprite enable flag
+
+Classic `.milk` saved sprites retain the default-on behavior, with
+`sprite=0` disabling execution. Trailing sprites in a `.milk2` wrapper now
+require an explicit `sprite=1`; a missing flag or `sprite=0` leaves the
+blocks preserved but inert. Both the import path and direct saved-blend
+validation apply the same rule. The change follows the pinned compatible
+behavioral source in Lactea's MIT-licensed parser. No build, test or reference
+capture has run yet.

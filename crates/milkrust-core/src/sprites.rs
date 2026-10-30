@@ -140,18 +140,21 @@ pub fn extract(source: &str, enabled: bool) -> Result<Blocks, String> {
 }
 
 /// The saved enable flag belongs to the envelope/header, not to sprite code.
+/// Classic .milk files default on; a .milk2 trailer requires explicit sprite=1.
 pub fn enabled(source: &str) -> bool {
-    for line in source.lines() {
-        let line = line.trim();
+    let is_milk2 = crate::milk2::has_wrapper(source);
+    for (index, raw_line) in source.lines().enumerate() {
+        let line = raw_line.trim();
+        let line = if index == 0 { line.trim_start_matches('\u{feff}') } else { line };
         if line.starts_with('[') { break; }
         if let Some((key, value)) = line.split_once('=') {
             if key.trim().eq_ignore_ascii_case("sprite") {
-                return value.trim() != "0";
+                let value = value.trim();
+                return if is_milk2 { value == "1" } else { value != "0" };
             }
         }
     }
-    // Saved blocks execute by default in both formats; only sprite=0 disables them.
-    true
+    !is_milk2
 }
 
 fn definition(index: u32, preset_index: usize, records: &BTreeMap<String, String>) -> Result<Option<Definition>, String> {

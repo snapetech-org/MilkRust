@@ -79,11 +79,12 @@ Canvas fallback rejects spatial patterns instead of silently showing a uniform
 cross-fade. Saved sprite blocks execute on native GL/GLES and WebGL; see
 [EMBEDDED_SPRITES.md](EMBEDDED_SPRITES.md).
 
-Bounded `NAME=` metadata and well-formed trailing sprite blocks disabled by
-`sprite=0` are preserved without execution. Trailing sprites execute by
-default, including when the `sprite` flag is omitted. Unknown flag values, unmatched/nested
-blocks and unrelated trailer records remain gated. The wrapper enforces the same
-2 MiB source budget when called independently of the preset importer.
+Bounded `NAME=` metadata and well-formed trailing sprite blocks are preserved.
+A trailing sprite block executes only when the wrapper header explicitly
+contains `sprite=1`; an absent flag or `sprite=0` preserves the block without
+execution. Unknown flag values, unmatched/nested blocks and unrelated trailer
+records remain gated. The wrapper enforces the same 2 MiB source budget when
+called independently of the preset importer.
 
 Within an active sprite block, repeated saved fields use their first value,
 except `SpriteName`, whose last occurrence wins. A block with no non-empty
