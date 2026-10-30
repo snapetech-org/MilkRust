@@ -93,9 +93,13 @@ run is recorded for this checkpoint.
   and animated corner hue inputs, explicit legacy entry semantics and actual
   named-texture dimensions are wired through both renderer hosts. User preamble
   globals initialize after that environment, with bounded array/struct defaults.
-- Three blur levels, deterministic original 2D/3D noise, mipmaps and per-binding
-  filtering/wrapping; q registers, frame uniforms, texture sizes and random/roam
-  vectors. Missing resources and compiler/driver errors do not become a placeholder.
+- Three blur levels use MilkDrop's paired-tap horizontal/vertical weights,
+  source-texel offsets, nested range transforms and first-level edge darkening in
+  native/WebGL; safe nondegenerate bounds avoid the historical zero-span typo.
+  Deterministic original 2D/3D noise, mipmaps and per-binding filtering/wrapping
+  are also present. q registers, frame uniforms, texture sizes and random/roam
+  vectors are bound. Blur pixel parity and generated-noise reference comparison
+  remain open; missing resources and compiler/driver errors do not become a placeholder.
 - A bounded `.milk2` wrapper parser, round-trip metadata preservation, two
   independent states, all 30 saved-pattern formulas with per-fragment 64x48
   triangle interpolation from a packed 32-bit vertex field, and the documented sprite
@@ -241,6 +245,15 @@ The original PlezyNG plan and current status live under
 `docs/plezyng/visualizations/` in that repository. All executable work must use
 compatible private ephemeral JIT runners; missing capacity never authorizes a
 hosted fallback. Keep untrusted PR work isolated and secret-free.
+
+
+## 2026-10-30 MilkDrop blur-kernel source update
+
+Native GL and WebGL now implement MilkDrop's paired-tap horizontal and
+vertical blur kernels from the compatible reference shader sources, including
+source-texture texel offsets, per-level range normalization, and first-level
+edge darkening. Safe bounds avoid the reference implementation's zero-span
+repair typo. No build or pixel comparison was run; filter parity remains open.
 
 
 ## 2026-10-30 dynamic resource-array lowering
