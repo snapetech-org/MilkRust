@@ -140,6 +140,15 @@ run is recorded for this checkpoint.
   Regression sources cover the typed compiler, resource bindings, unsafe input,
   initialization retry and browser render failures; they remain unrun.
 
+## Aggregate correction — 2026-10-30
+
+Static review found that the integer/Boolean matrix aggregate constructor
+advanced the flattened input cursor twice. It now consumes each matrix exactly
+once, including matrices followed by other struct fields. Per-fragment default
+initialization now constructs these emulated matrices from typed zero rows.
+The aggregate control covers signed/unsigned/Boolean matrices, trailing fields,
+flattening, casts and global defaults. These controls are authored and unrun.
+
 ## Public corpus source inventory — 2026-10-29
 
 A filesystem inventory of `content/community-unlicensed` found 14,576 preset
