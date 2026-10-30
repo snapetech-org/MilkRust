@@ -422,14 +422,13 @@ reference captures remain pending.
 
 ## 2026-10-30 bounded APNG decoding
 
-Static PNG and APNG now pass the same encoded-byte limits into MilkRust's
-bounded Rust decoder on native and WebGL hosts. APNG inspection validates the
-declared frame count, canvas/subframe bounds and decoded-pixel budget before
-decode. The compositor implements full-canvas Source/Over blending, None,
-Background and Previous disposal, frame delays, poster-frame exclusion and
-finite/single-play/infinite play counts. Native hosts route PNG bytes through
-the new ABI; WebGL routes animated PNG frames through the same upload profile
-as GIF. A static-PNG check no longer scans compressed image bytes for an
+Native PNG decoding now uses the shared Rust decoder; WebGL static PNG remains
+on its disposable browser worker, while animated PNG uses the same bounded Rust
+decoder on both hosts. APNG inspection validates the declared frame count,
+canvas/subframe bounds and decoded-pixel budget before decode. The compositor
+implements full-canvas Source/Over blending, None, Background and Previous
+disposal, frame delays, poster-frame exclusion and finite/single-play/infinite
+play counts. The static-PNG check no longer scans compressed image bytes for an
 `fdAT` substring.
 
 The source path and dependency/license records are committed. Native/browser
@@ -443,9 +442,9 @@ Animated WebP is now inspected against canvas, frame-count and aggregate
 decoded-pixel limits before the shared Rust decoder allocates frame images.
 The Rust decoder composites full-canvas frames, preserves frame durations and
 maps finite/infinite WebP loop metadata to the common animation clock. Native
-hosts route encoded WebP through the new ABI; WebGL routes animated WebP through
-the same upload and timing path as GIF and APNG. Static WebP continues through
-the bounded existing host/browser decode paths.
+hosts route static and animated WebP through the new ABI; WebGL routes animated
+WebP through the same upload and timing path as GIF and APNG, while static WebP
+remains in the disposable browser worker.
 
 The decoder, ABI and import paths are source-complete. Decoder, upload,
 malformed-input, disposal/loop and reference-pixel checks remain unrun; no
