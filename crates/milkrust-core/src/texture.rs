@@ -33,7 +33,7 @@ impl RgbaAnimation {
     }
 }
 
-/// Select the visible animation frame. GIF repeat counts describe repeats
+/// Select the visible animation frame. GIF/APNG repeat counts describe repeats
 /// after the initial play; a missing loop extension holds the final frame.
 pub fn animation_frame_index(delays_seconds: &[f64], repeat_count: Option<u32>, seconds: f64) -> usize {
     if delays_seconds.len() <= 1 || !seconds.is_finite()
@@ -121,8 +121,8 @@ fn inspect_png(bytes: &[u8]) -> Result<(u32, u32, Option<ApngInspection>), Strin
                 let height = read(bytes, data + 8, 4, true)?;
                 let x = read(bytes, data + 12, 4, true)?;
                 let y = read(bytes, data + 16, 4, true)?;
-                if width == 0 || height == 0 || x.checked_add(width).is_none_or(|right| right > canvas_width)
-                    || y.checked_add(height).is_none_or(|bottom| bottom > canvas_height) {
+                if width == 0 || height == 0 || x.checked_add(width).map_or(true, |right| right > canvas_width)
+                    || y.checked_add(height).map_or(true, |bottom| bottom > canvas_height) {
                     return Err("APNG subframe exceeds its canvas".into());
                 }
                 frame_controls = frame_controls.checked_add(1).ok_or("APNG frame count overflow")?;
@@ -167,7 +167,10 @@ fn inspect_png(bytes: &[u8]) -> Result<(u32, u32, Option<ApngInspection>), Strin
             has_default_image: !first_control_before_idat,
         })
     } else {
-        if frame_controls != 0 || bytes.windows(4).any(|chunk| chunk == b"fdAT") {
+        // An fdAT chunk without acTL is rejected in the chunk loop above. Do
+        // not search compressed IDAT payload bytes for the ASCII "fdAT": those
+        // four bytes can appear in an otherwise ordinary PNG image stream.
+        if frame_controls != 0 {
             return Err("PNG contains APNG frame chunks without animation control".into());
         }
         None
@@ -215,8 +218,8 @@ fn inspect_gif(bytes: &[u8]) -> Result<GifInspection, String> {
             let frame_width = read(bytes, offset + 4, 2, false)?;
             let frame_height = read(bytes, offset + 6, 2, false)?;
             let flags = *bytes.get(offset + 8).ok_or("Truncated GIF image descriptor")?;
-            if frame_width == 0 || frame_height == 0 || left.checked_add(frame_width).is_none_or(|right| right > width)
-                || top.checked_add(frame_height).is_none_or(|bottom| bottom > height) {
+            if frame_width == 0 || frame_height == 0 || left.checked_add(frame_width).map_or(true, |right| right > width)
+                || top.checked_add(frame_height).map_or(true, |bottom| bottom > height) {
                 return Err("GIF image exceeds its canvas".into());
             }
             offset = offset.checked_add(9).ok_or("GIF offset overflow")?;
@@ -448,8 +451,8 @@ impl ImageSource {
             let (x_offset, y_offset, frame_width, frame_height, blend, dispose, delay) =
                 if let Some(frame) = frame_control {
                     if (frame.width, frame.height) != (output.width, output.height)
-                        || frame.x_offset.checked_add(frame.width).is_none_or(|right| right > width)
-                        || frame.y_offset.checked_add(frame.height).is_none_or(|bottom| bottom > height) {
+                        || frame.x_offset.checked_add(frame.width).map_or(true, |right| right > width)
+                        || frame.y_offset.checked_add(frame.height).map_or(true, |bottom| bottom > height) {
                         return Err("PNG decoder returned an invalid APNG subframe".into());
                     }
                     let denominator = if frame.delay_den == 0 { 100.0 } else { f64::from(frame.delay_den) };
@@ -557,8 +560,8 @@ impl ImageSource {
             let Some(frame) = decoder.read_next_frame().map_err(|error| format!("GIF decode failed: {error}"))? else { break; };
             let (left, top) = (u32::from(frame.left), u32::from(frame.top));
             let (frame_width, frame_height) = (u32::from(frame.width), u32::from(frame.height));
-            if frame_width == 0 || frame_height == 0 || left.checked_add(frame_width).is_none_or(|right| right > width)
-                || top.checked_add(frame_height).is_none_or(|bottom| bottom > height) {
+            if frame_width == 0 || frame_height == 0 || left.checked_add(frame_width).map_or(true, |right| right > width)
+                || top.checked_add(frame_height).map_or(true, |bottom| bottom > height) {
                 return Err("GIF decoder returned a frame outside its canvas".into());
             }
             let expected_frame_bytes = usize::try_from(u64::from(frame_width) * u64::from(frame_height) * 4)
