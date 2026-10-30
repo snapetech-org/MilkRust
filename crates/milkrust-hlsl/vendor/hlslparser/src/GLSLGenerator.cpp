@@ -2096,6 +2096,15 @@ void GLSLGenerator::OutputDefaultValue(const HLSLType& type)
             CheckBudget(); OutputDefaultValue(field->type); if (field->nextField) m_writer.Write(", ");
         }
         m_writer.Write(")");
+    } else if (IsCustomMatrixType(type.baseType)) {
+        const int rows = MatrixRows(type.baseType), columns = NumericWidth(type.baseType);
+        const HLSLType rowType(NumericShape(ScalarBaseType[type.baseType], 0, columns));
+        m_writer.Write("%s(", GetTypeName(type));
+        for (int row = 0; row < rows; ++row) {
+            if (row) m_writer.Write(", ");
+            m_writer.Write("%s(0)", GetTypeName(rowType));
+        }
+        m_writer.Write(")");
     } else m_writer.Write("%s(0)", GetTypeName(type));
 }
 
