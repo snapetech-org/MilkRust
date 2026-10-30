@@ -940,7 +940,7 @@ fn lower_modern_resource_syntax(tokens: &mut Vec<String>) -> Result<(), String> 
             if resource_shapes.contains_key(&shape_name) {
                 let method = tokens.get(close_index + 2).map(String::as_str).unwrap_or("");
                 if tokens.get(close_index + 1).map(String::as_str) != Some(".")
-                    || !matches!(method, "Sample" | "SampleLevel" | "SampleBias" | "SampleGrad" | "Gather" | "GatherRed" | "GatherGreen" | "GatherBlue" | "GatherAlpha" | "GatherCmp" | "GatherCmpRed" | "SampleCmp" | "SampleCmpLevelZero" | "Load" | "GetDimensions") {
+                    || !matches!(method, "Sample" | "SampleLevel" | "SampleBias" | "SampleGrad" | "Gather" | "GatherRed" | "GatherGreen" | "GatherBlue" | "GatherAlpha" | "GatherCmp" | "GatherCmpRed" | "GatherCmpGreen" | "GatherCmpBlue" | "GatherCmpAlpha" | "SampleCmp" | "SampleCmpLevelZero" | "Load" | "GetDimensions") {
                     return Err("HLSL texture array elements must use a supported resource method".into());
                 }
             }
@@ -960,7 +960,7 @@ fn lower_modern_resource_syntax(tokens: &mut Vec<String>) -> Result<(), String> 
             let method_index = close_index + 2;
             let method = tokens.get(method_index).map(String::as_str).unwrap_or("");
             if tokens.get(close_index + 1).map(String::as_str) != Some(".")
-                || !matches!(method, "Sample" | "SampleLevel" | "SampleBias" | "SampleGrad" | "Gather" | "GatherRed" | "GatherGreen" | "GatherBlue" | "GatherAlpha" | "GatherCmp" | "GatherCmpRed" | "SampleCmp" | "SampleCmpLevelZero" | "Load" | "GetDimensions")
+                || !matches!(method, "Sample" | "SampleLevel" | "SampleBias" | "SampleGrad" | "Gather" | "GatherRed" | "GatherGreen" | "GatherBlue" | "GatherAlpha" | "GatherCmp" | "GatherCmpRed" | "GatherCmpGreen" | "GatherCmpBlue" | "GatherCmpAlpha" | "SampleCmp" | "SampleCmpLevelZero" | "Load" | "GetDimensions")
                 || tokens.get(method_index + 1).map(String::as_str) != Some("(") {
                 return Err("Dynamically indexed HLSL texture arrays must immediately call a supported texture method".into());
             }
@@ -1014,7 +1014,7 @@ fn lower_modern_resource_syntax(tokens: &mut Vec<String>) -> Result<(), String> 
                 continue;
             }
 
-            let width = if matches!(method, "Gather" | "GatherRed" | "GatherGreen" | "GatherBlue" | "GatherAlpha" | "GatherCmp" | "GatherCmpRed") {
+            let width = if matches!(method, "Gather" | "GatherRed" | "GatherGreen" | "GatherBlue" | "GatherAlpha" | "GatherCmp" | "GatherCmpRed" | "GatherCmpGreen" | "GatherCmpBlue" | "GatherCmpAlpha") {
                 4
             } else if matches!(method, "SampleCmp" | "SampleCmpLevelZero") {
                 1
@@ -1093,7 +1093,7 @@ fn lower_modern_resource_syntax(tokens: &mut Vec<String>) -> Result<(), String> 
             continue;
         }
         let method = tokens[index + 1].as_str();
-        if !matches!(method, "Sample" | "SampleLevel" | "SampleBias" | "SampleGrad" | "SampleCmp" | "SampleCmpLevelZero" | "Gather" | "GatherRed" | "GatherGreen" | "GatherBlue" | "GatherAlpha" | "GatherCmp" | "GatherCmpRed" | "Load" | "GetDimensions") {
+        if !matches!(method, "Sample" | "SampleLevel" | "SampleBias" | "SampleGrad" | "SampleCmp" | "SampleCmpLevelZero" | "Gather" | "GatherRed" | "GatherGreen" | "GatherBlue" | "GatherAlpha" | "GatherCmp" | "GatherCmpRed" | "GatherCmpGreen" | "GatherCmpBlue" | "GatherCmpAlpha" | "Load" | "GetDimensions") {
             if index > 0 && is_identifier(&tokens[index - 1]) {
                 let mut base_start = index - 1;
                 while base_start >= 2 && tokens[base_start - 1] == "." && is_identifier(&tokens[base_start - 2]) {
@@ -1136,8 +1136,15 @@ fn lower_modern_resource_syntax(tokens: &mut Vec<String>) -> Result<(), String> 
         }.ok_or_else(|| format!("HLSL resource method receiver {base_name} has no unambiguous Texture1D/Texture2D/Texture3D declaration"))?;
         let dimension = resource_shape.dimension;
         let (args, end) = split_hlsl_call(tokens, index + 2)?;
-        let gather_cmp = matches!(method, "GatherCmp" | "GatherCmpRed");
+        let gather_cmp = matches!(method, "GatherCmp" | "GatherCmpRed" | "GatherCmpGreen" | "GatherCmpBlue" | "GatherCmpAlpha");
         let sample_cmp = matches!(method, "SampleCmp" | "SampleCmpLevelZero");
+        let gather_cmp_component = match method {
+            "GatherCmp" | "GatherCmpRed" => Some(0),
+            "GatherCmpGreen" => Some(1),
+            "GatherCmpBlue" => Some(2),
+            "GatherCmpAlpha" => Some(3),
+            _ => None,
+        };
         let gather_component = match method {
             "Gather" | "GatherRed" => Some(0),
             "GatherGreen" => Some(1),
@@ -1237,7 +1244,7 @@ fn lower_modern_resource_syntax(tokens: &mut Vec<String>) -> Result<(), String> 
             ("SampleGrad", 4 | 5, 3) => ("tex3Dgrad", args[1].clone()),
             ("Gather" | "GatherRed" | "GatherGreen" | "GatherBlue" | "GatherAlpha", 2 | 3, 2) =>
                 ("milkRustInternalGather2D", args[1].clone()),
-            ("GatherCmp" | "GatherCmpRed", 3 | 4, 2) => ("milkRustInternalGatherCmp2D", args[1].clone()),
+            ("GatherCmp" | "GatherCmpRed" | "GatherCmpGreen" | "GatherCmpBlue" | "GatherCmpAlpha", 3 | 4, 2) => ("milkRustInternalGatherCmp2D", args[1].clone()),
             ("SampleCmp" | "SampleCmpLevelZero", 3 | 4, 1 | 2) => ("milkRustInternalSampleCmp2D", args[1].clone()),
             ("Load", 1 | 2, 1 | 2) => ("tex2Dfetch", args[0].clone()),
             ("Load", 1 | 2, 3) => ("tex3Dfetch", args[0].clone()),
@@ -1343,7 +1350,7 @@ fn lower_modern_resource_syntax(tokens: &mut Vec<String>) -> Result<(), String> 
             ("SampleLevel", 4) | ("SampleBias", 4) => Some(3),
             ("SampleGrad", 5) => Some(4),
             ("Load", 2) => Some(1),
-            ("GatherCmp" | "GatherCmpRed", 4) => Some(3),
+            ("GatherCmp" | "GatherCmpRed" | "GatherCmpGreen" | "GatherCmpBlue" | "GatherCmpAlpha", 4) => Some(3),
             ("SampleCmp" | "SampleCmpLevelZero", 4) => Some(3),
             _ => None,
         };
@@ -1363,6 +1370,10 @@ fn lower_modern_resource_syntax(tokens: &mut Vec<String>) -> Result<(), String> 
             }
             rewritten.push(",".into());
             rewritten.push(comparison_function.ok_or_else(|| format!("Missing comparison function for Texture{dimension}D {method}"))?.to_string());
+            if let Some(component) = gather_cmp_component {
+                rewritten.push(",".into());
+                rewritten.push(component.to_string());
+            }
             if sample_cmp {
                 let profile = sampler_profile.ok_or_else(|| format!("Missing comparison filter for Texture{dimension}D {method}"))?;
                 let mip_point = profile.mip == crate::resources::MipFilter::Point;
@@ -1858,7 +1869,7 @@ pub(crate) fn compile(source: &str, legacy_feedback: bool) -> Result<String, Str
         preamble.push_str("float4 milkRustInternalGather2D(sampler2D source, float2 location, int2 offset, int component);\n");
     }
     if needs_gather_cmp {
-        preamble.push_str("float4 milkRustInternalGatherCmp2D(sampler2D source, float2 location, float compareValue, int2 offset, int comparisonFunction);\n");
+        preamble.push_str("float4 milkRustInternalGatherCmp2D(sampler2D source, float2 location, float compareValue, int2 offset, int comparisonFunction, int component);\n");
     }
     if needs_sample_cmp {
         preamble.push_str("float4 milkRustInternalGatherCmpLevel2D(sampler2D source, float2 location, float compareValue, int2 offset, int comparisonFunction, int mipLevel);\n");
@@ -2005,8 +2016,8 @@ float milkRustInternalCompare(float referenceValue, float texelValue, int compar
     if (comparisonFunction == 6) return referenceValue >= texelValue ? 1.0 : 0.0;
     return 1.0;
 }
-vec4 milkRustInternalGatherCmp2D(sampler2D source, vec2 location, float compareValue, ivec2 offset, int comparisonFunction) {
-    vec4 values = milkRustInternalGather2D(source, location, offset, 0);
+vec4 milkRustInternalGatherCmp2D(sampler2D source, vec2 location, float compareValue, ivec2 offset, int comparisonFunction, int component) {
+    vec4 values = milkRustInternalGather2D(source, location, offset, component);
     return vec4(
         milkRustInternalCompare(compareValue, values.x, comparisonFunction),
         milkRustInternalCompare(compareValue, values.y, comparisonFunction),
