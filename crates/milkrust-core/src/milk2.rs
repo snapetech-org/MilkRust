@@ -528,7 +528,7 @@ mod tests {
             PAIR.replace("direction=-1", "direction=not-an-integer")] {
             assert!(parse(&source).is_err());
         }
-        let repeated = PAIR.replace("blending_pattern=Zoom\\n", "blending_pattern=Plasma\\nblending_pattern=Zoom\\n");
+        let repeated = PAIR.replace("blending_pattern=Zoom\n", "blending_pattern=Plasma\nblending_pattern=Zoom\n");
         assert_eq!(parse(&repeated).unwrap().0.pattern, "Zoom");
     }
 
