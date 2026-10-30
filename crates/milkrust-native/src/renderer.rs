@@ -43,8 +43,8 @@ impl TextureAsset {
     }
 }
 type TransitionMask = (milk2::TransitionMaskKey, Texture);
-struct Samplers { gl: Gl, ids: [u32; 17] }
-impl Drop for Samplers { fn drop(&mut self) { unsafe { (self.gl.delete_samplers)(17, self.ids.as_ptr()); } } }
+struct Samplers { gl: Gl, ids: [u32; resources::SAMPLER_OBJECT_COUNT] }
+impl Drop for Samplers { fn drop(&mut self) { unsafe { (self.gl.delete_samplers)(resources::SAMPLER_OBJECT_COUNT as i32, self.ids.as_ptr()); } } }
 impl Drop for Texture { fn drop(&mut self) { unsafe { (self.gl.delete_textures)(1, &self.id); } } }
 struct Target { gl: Gl, id: u32, texture: Texture }
 impl Drop for Target { fn drop(&mut self) { unsafe { (self.gl.delete_framebuffers)(1, &self.id); } } }
@@ -206,22 +206,31 @@ impl Renderer {
         let sprite_program = Program::new(gl, gles, milkrust_core::sprites::FRAGMENT)?;
         let sprite_key_program = Program::new(gl, gles, SPRITE_KEY)?;
         let blur_program = Program::new(gl, gles, resources::BLUR_FRAGMENT)?;
-        let mut samplers = Samplers { gl, ids: [0; 17] };
+        let mut samplers = Samplers { gl, ids: [0; resources::SAMPLER_OBJECT_COUNT] };
         unsafe {
-            (gl.gen_samplers)(17, samplers.ids.as_mut_ptr());
-            for (index, id) in samplers.ids.iter().enumerate().take(16) {
+            (gl.gen_samplers)(resources::SAMPLER_OBJECT_COUNT as i32, samplers.ids.as_mut_ptr());
+            for (index, id) in samplers.ids.iter().enumerate().take(resources::SAMPLER_VARIANTS) {
                 if *id == 0 { return Err("GL could not allocate samplers".into()); }
-                let point = index & 1 != 0;
-                (gl.sampler_parameter)(*id, 0x2801, if point { 0x2700 } else { 0x2703 });
-                (gl.sampler_parameter)(*id, 0x2800, if point { 0x2600 } else { 0x2601 });
-                for (axis, mask) in [(0x2802, 2usize), (0x2803, 4), (0x8072, 8)] {
-                    (gl.sampler_parameter)(*id, axis, if index & mask != 0 { 0x2901 } else { 0x812F });
+                let settings = resources::sampler_parameters(index).ok_or("Invalid generated sampler profile")?;
+                let min_filter = match (settings.min_point, settings.mip) {
+                    (true, resources::MipFilter::None) => 0x2600,
+                    (false, resources::MipFilter::None) => 0x2601,
+                    (true, resources::MipFilter::Point) => 0x2700,
+                    (false, resources::MipFilter::Point) => 0x2701,
+                    (true, resources::MipFilter::Linear) => 0x2702,
+                    (false, resources::MipFilter::Linear) => 0x2703,
+                };
+                (gl.sampler_parameter)(*id, 0x2801, min_filter);
+                (gl.sampler_parameter)(*id, 0x2800, if settings.mag_point { 0x2600 } else { 0x2601 });
+                for (axis, wrap) in [0x2802, 0x2803, 0x8072].iter().copied().zip(settings.wrap.iter().copied()) {
+                    (gl.sampler_parameter)(*id, axis, if wrap { 0x2901 } else { 0x812F });
                 }
             }
-            if samplers.ids[16] == 0 { return Err("GL could not allocate animated sprite sampler".into()); }
-            (gl.sampler_parameter)(samplers.ids[16], 0x2801, 0x2601);
-            (gl.sampler_parameter)(samplers.ids[16], 0x2800, 0x2601);
-            for axis in [0x2802, 0x2803, 0x8072] { (gl.sampler_parameter)(samplers.ids[16], axis, 0x2901); }
+            let animated = samplers.ids[resources::ANIMATED_SPRITE_SAMPLER];
+            if animated == 0 { return Err("GL could not allocate animated sprite sampler".into()); }
+            (gl.sampler_parameter)(animated, 0x2801, 0x2601);
+            (gl.sampler_parameter)(animated, 0x2800, 0x2601);
+            for axis in [0x2802, 0x2803, 0x8072] { (gl.sampler_parameter)(animated, axis, 0x2901); }
         }
         let (mut buffer, mut vao, mut max_texture, mut units) = (0, 0, 0, 0);
         unsafe {
@@ -495,7 +504,7 @@ impl Renderer {
         program.vector4("classicEcho", echo[0], echo[1], echo[2], echo[3]);
         program.vector4("classicFilters", filters[0], filters[1], filters[2], filters[3]);
         program.float("classicWrap", wrap);
-        unsafe { (self.gl.bind_sampler)(0, self.samplers.ids[14]); }
+        unsafe { (self.gl.bind_sampler)(0, self.samplers.ids[resources::LINEAR_REPEAT_SAMPLER]); }
         program.float("feedback", feedback); program.float("outputAlpha", alpha);
         program.integer("u_transitionPattern", transition.pattern);
         program.float("u_transitionProgress", transition.progress);
@@ -588,7 +597,7 @@ impl Renderer {
                 self.blur_program.float("blurWeightScale", normalization);
                 self.blur_program.vector4("blurEdge", edge[0], edge[1], edge[2], edge[3]);
                 self.blur_program.float("blurHorizontal", if pass == 0 { 1.0 } else { 0.0 });
-                unsafe { (self.gl.bind_sampler)(0, self.samplers.ids[0]); }
+                unsafe { (self.gl.bind_sampler)(0, self.samplers.ids[resources::LINEAR_CLAMP_SAMPLER]); }
                 self.draw(0x0004, &quad())?;
                 source = target.texture.id;
                 source_size = (width, height);
@@ -653,7 +662,7 @@ impl Renderer {
             (self.gl.disable)(BLEND);
         }
         self.bind_texture(0, image_id);
-        unsafe { (self.gl.bind_sampler)(0, self.samplers.ids[if animated { 16 } else { resources::sampler_index(&sprite.texture) }]); }
+        unsafe { (self.gl.bind_sampler)(0, self.samplers.ids[if animated { resources::ANIMATED_SPRITE_SAMPLER } else { resources::sampler_index(&sprite.texture) }]); }
         let program = &self.sprite_program;
         program.bind(); program.integer("spriteImage", 0); program.integer("spriteBackground", 1);
         program.vector2("spriteResolution", self.width as f32, self.height as f32);
@@ -795,3 +804,4 @@ fn feedback_vertices(frame: &MilkRustFrame) -> Result<Vec<f32>, String> {
     }
     Ok(vertices)
 }
+
