@@ -375,7 +375,9 @@ and embedded sprite playback at each source load. Both halves of a saved
 state; frame-rate estimation continues to use host-clock deltas. Regression
 sources cover initial time/frame values, successive frames and source changes.
 They have not run. The calendar fields (`year`, `month`, `day`, `weekday`) remain
-zero unless a host supplies local clock state. MilkRust now exposes validated
-`MilkRustClockState` injection in its runtime and native C ABI; the PlezyNG
-native adapter wires it to the device's local clock. Browser/stateless callers
-that omit the setter retain the deterministic preset-relative fallback.
+zero unless a host supplies local clock state. MilkRust exposes validated
+`MilkRustClockState` injection in its runtime, native C ABI, and WebAssembly API.
+PlezyNG's native adapter supplies the device's local clock; the browser SDK
+refreshes it from the user's local `Date` before each frame. Direct WASM/stateless
+callers that omit the setter retain zero calendar fields and the deterministic
+preset-relative fallback.
