@@ -86,11 +86,15 @@ fn split_hlsl_call(tokens: &[String], open: usize) -> Result<(Vec<Vec<String>>, 
 }
 
 /// Lower the common HLSL resource-object surface into the legacy sampler
-/// intrinsics already represented in the typed AST. Resource arrays and custom
-/// sampler-state objects need different host binding models and fail explicitly.
+/// intrinsics already represented in the typed AST. Global 1D/2D texture arrays
+/// with constant element access are expanded into separately bound named textures.
+/// Resource-bearing structs, dynamically indexed arrays and custom sampler-state
+/// objects need different host binding models and fail explicitly.
 fn lower_modern_resource_syntax(tokens: &mut Vec<String>) -> Result<(), String> {
     let struct_ranges = hlsl_struct_ranges(tokens)?;
     let mut resource_shapes = BTreeMap::<String, Option<ResourceShape>>::new();
+    let mut resource_arrays = BTreeMap::<String, usize>::new();
+    let mut resource_array_edits = Vec::<(std::ops::Range<usize>, Vec<String>)>::new();
     let mut sampler_state_names = std::collections::BTreeSet::new();
     let mut sampler_state_fields = BTreeMap::<String, std::collections::BTreeSet<String>>::new();
     let mut generic_ranges = Vec::new();
@@ -115,6 +119,7 @@ fn lower_modern_resource_syntax(tokens: &mut Vec<String>) -> Result<(), String> 
             let type_index = index;
             let after_type = index + 1;
             let mut generic_end = None;
+            let mut generic_range = None;
             let mut width = 4;
             if tokens.get(after_type).map(String::as_str) == Some("<") {
                 let Some(relative_end) = tokens[after_type + 1..].iter().position(|token| token == ">") else {
@@ -125,7 +130,7 @@ fn lower_modern_resource_syntax(tokens: &mut Vec<String>) -> Result<(), String> 
                     return Err("Unsupported HLSL texture element type".into());
                 }
                 width = texture_element_width(&tokens[after_type + 1..end])?;
-                generic_ranges.push(after_type..=end);
+                generic_range = Some(after_type..=end);
                 generic_end = Some(end);
             }
             let name_index = generic_end.map_or(after_type, |end| end + 1);
@@ -135,21 +140,61 @@ fn lower_modern_resource_syntax(tokens: &mut Vec<String>) -> Result<(), String> 
             let Some(name) = tokens.get(name_index).filter(|token| is_identifier(token)) else {
                 return Err("Malformed HLSL texture object declaration".into());
             };
-            if tokens.get(name_index + 1).map(String::as_str) == Some("[") {
-                return Err("HLSL texture resource arrays are unsupported".into());
-            }
             if tokens.get(name_index + 1).map(String::as_str) == Some("=") {
                 return Err("Initialized HLSL texture objects are unsupported".into());
             }
             let structure = struct_ranges.iter().find(|(_, range)| range.contains(&type_index)).map(|(name, _)| name.as_str());
             let shape = ResourceShape { dimension, width };
+            if tokens.get(name_index + 1).map(String::as_str) == Some("[") {
+                if dimension == 3 {
+                    return Err("Texture3D arrays cannot be represented by named MilkDrop image bindings".into());
+                }
+                if structure.is_some() {
+                    return Err("Texture resource arrays inside structs are unsupported".into());
+                }
+                let mut parens = 0i32;
+                let mut braces = 0i32;
+                for token in &tokens[..type_index] {
+                    if token == "(" { parens += 1; }
+                    if token == ")" { parens -= 1; }
+                    if token == "{" { braces += 1; }
+                    if token == "}" { braces -= 1; }
+                }
+                if parens != 0 || braces != 0 {
+                    return Err("Texture resource arrays are supported only as global declarations".into());
+                }
+                let size_token = tokens.get(name_index + 2).map(String::as_str).unwrap_or("");
+                let size = size_token.parse::<usize>().ok().filter(|size| (1..=15).contains(size))
+                    .ok_or_else(|| "Global HLSL texture arrays require a decimal literal bound from 1 through 15".to_string())?;
+                if tokens.get(name_index + 3).map(String::as_str) != Some("]") {
+                    return Err("Global HLSL texture array bounds must be a single decimal literal".into());
+                }
+                if tokens.get(name_index + 4).map(String::as_str) == Some(",") {
+                    return Err("Grouped HLSL texture-array declarations are unsupported".into());
+                }
+                let mut declaration = vec![if dimension <= 2 { "sampler2D" } else { "sampler3D" }.to_string()];
+                for element in 0..size {
+                    let element_name = format!("{}_{}", name, element);
+                    if tokens.iter().any(|token| token == &element_name) {
+                        return Err(format!("Generated HLSL texture-array binding {element_name} collides with a user identifier"));
+                    }
+                    if element != 0 { declaration.push(",".into()); }
+                    declaration.push(element_name.clone());
+                    resource_shapes.insert(element_name, Some(shape));
+                }
+                resource_arrays.insert(name.clone(), size);
+                resource_array_edits.push((type_index..name_index + 4, declaration));
+                index = name_index + 4;
+                continue;
+            }
+            if let Some(range) = generic_range { generic_ranges.push(range); }
             let mut declarators = vec![name.clone()];
             let mut declarator = name_index + 1;
             while tokens.get(declarator).map(String::as_str) == Some(",") {
                 let candidate = declarator + 1;
                 let next = tokens.get(candidate + 1).map(String::as_str);
                 if !tokens.get(candidate).is_some_and(|token| is_identifier(token)) { break; }
-                if next == Some("[") { return Err("HLSL texture resource arrays are unsupported".into()); }
+                if next == Some("[") { return Err("Grouped HLSL texture-array declarations are unsupported".into()); }
                 if next == Some("=") { return Err("Initialized HLSL texture objects are unsupported".into()); }
                 // A grouped declaration has `name, name[, ...];`. A function
                 // signature's comma is followed by a type and a parameter.
@@ -256,7 +301,34 @@ fn lower_modern_resource_syntax(tokens: &mut Vec<String>) -> Result<(), String> 
         }
         cursor += 1;
     }
-    for range in generic_ranges.into_iter().rev() { tokens.drain(range); }
+    let mut edits: Vec<(std::ops::Range<usize>, Vec<String>)> = generic_ranges.into_iter()
+        .map(|range| (range, Vec::new())).chain(resource_array_edits).collect();
+    edits.sort_by_key(|(range, _)| std::cmp::Reverse(range.start));
+    for (range, replacement) in edits { tokens.splice(range, replacement); }
+
+    // ESSL 3.00 restricts indexing of opaque sampler arrays. Expand constant
+    // element references before type checking so each asset receives its own
+    // ordinary MilkDrop texture binding. Dynamic indices cannot be represented
+    // by this host's per-name texture model.
+    let mut index = 0;
+    while index < tokens.len() {
+        let Some(size) = resource_arrays.get(&tokens[index]).copied() else { index += 1; continue; };
+        if tokens.get(index + 1).map(String::as_str) != Some("[") { index += 1; continue; }
+        let element = tokens.get(index + 2).and_then(|token| token.parse::<usize>().ok())
+            .ok_or_else(|| "HLSL texture resource arrays require constant decimal element indices".to_string())?;
+        if tokens.get(index + 3).map(String::as_str) != Some("]") {
+            return Err("HLSL texture resource arrays require a single constant element index".into());
+        }
+        if element >= size { return Err("HLSL texture resource array index is out of bounds".into()); }
+        let method = tokens.get(index + 5).map(String::as_str).unwrap_or("");
+        if tokens.get(index + 4).map(String::as_str) != Some(".")
+            || !matches!(method, "Sample" | "SampleLevel" | "SampleBias" | "SampleGrad" | "Load" | "GetDimensions") {
+            return Err("HLSL texture array elements must use a supported resource method".into());
+        }
+        let element_name = format!("{}_{}", tokens[index], element);
+        tokens.splice(index..index + 4, [element_name]);
+        index += 1;
+    }
 
     // Reject sampler arrays in globals, function signatures, and structs
     // before they can be lowered as one unrelated texture binding.
@@ -1080,3 +1152,4 @@ mod tests {
     }
 
 }
+
