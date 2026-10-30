@@ -250,7 +250,7 @@ fn splice_bounded_resource_expansion(
 /// represented in the typed AST. Bounded global 1D/2D/3D texture and legacy
 /// sampler arrays expand into named bindings; constant and side-effect-free
 /// dynamic indices dispatch over those names. Static global point/linear
-/// SamplerState definitions lower through the same legacy binding prefixes.
+/// SamplerState definitions lower through bounded per-resource aliases.
 /// Function-local arrays, nested resource structs and advanced sampler states
 /// need different host binding models and fail explicitly.
 fn lower_modern_resource_syntax(tokens: &mut Vec<String>) -> Result<(), String> {
