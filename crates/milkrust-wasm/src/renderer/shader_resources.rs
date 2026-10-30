@@ -28,15 +28,25 @@ impl ShaderResources {
         }};
         let mut result = Self { gl: gl.clone(), program, buffer, samplers: Vec::new(),
             noise: BTreeMap::new(), blur: Vec::new(), history: None, size: (0, 0) };
-        for index in 0..16 {
+        for index in 0..resources::SAMPLER_VARIANTS {
             let sampler = gl.create_sampler().ok_or_else(|| JsValue::from_str("Sampler allocation failed"))?;
-            let point = index & 1 != 0;
-            gl.sampler_parameteri(&sampler, Gl::TEXTURE_MIN_FILTER,
-                if point { Gl::NEAREST_MIPMAP_NEAREST } else { Gl::LINEAR_MIPMAP_LINEAR } as i32);
+            let settings = resources::sampler_parameters(index)
+                .ok_or_else(|| JsValue::from_str("Invalid generated sampler profile"))?;
+            let min_filter = match (settings.min_point, settings.mip) {
+                (true, resources::MipFilter::None) => Gl::NEAREST,
+                (false, resources::MipFilter::None) => Gl::LINEAR,
+                (true, resources::MipFilter::Point) => Gl::NEAREST_MIPMAP_NEAREST,
+                (false, resources::MipFilter::Point) => Gl::LINEAR_MIPMAP_NEAREST,
+                (true, resources::MipFilter::Linear) => Gl::NEAREST_MIPMAP_LINEAR,
+                (false, resources::MipFilter::Linear) => Gl::LINEAR_MIPMAP_LINEAR,
+            };
+            gl.sampler_parameteri(&sampler, Gl::TEXTURE_MIN_FILTER, min_filter as i32);
             gl.sampler_parameteri(&sampler, Gl::TEXTURE_MAG_FILTER,
-                if point { Gl::NEAREST } else { Gl::LINEAR } as i32);
-            for (axis, mask) in [(Gl::TEXTURE_WRAP_S, 2usize), (Gl::TEXTURE_WRAP_T, 4), (Gl::TEXTURE_WRAP_R, 8)] {
-                gl.sampler_parameteri(&sampler, axis, if index & mask != 0 { Gl::REPEAT } else { Gl::CLAMP_TO_EDGE } as i32);
+                (if settings.mag_point { Gl::NEAREST } else { Gl::LINEAR }) as i32);
+            for (axis, wrap) in [(Gl::TEXTURE_WRAP_S, settings.wrap[0]),
+                (Gl::TEXTURE_WRAP_T, settings.wrap[1]), (Gl::TEXTURE_WRAP_R, settings.wrap[2])] {
+                gl.sampler_parameteri(&sampler, axis,
+                    (if wrap { Gl::REPEAT } else { Gl::CLAMP_TO_EDGE }) as i32);
             }
             result.samplers.push(sampler);
         }
@@ -125,7 +135,7 @@ impl ShaderResources {
                     edge[0], edge[1], edge[2], edge[3]);
                 gl.uniform1f(gl.get_uniform_location(&self.program, "blurHorizontal").as_ref(),
                     if pass == 0 { 1.0 } else { 0.0 });
-                gl.bind_sampler(0, self.samplers.get(0));
+                gl.bind_sampler(0, self.samplers.get(resources::LINEAR_CLAMP_SAMPLER));
                 gl.draw_arrays(Gl::TRIANGLE_STRIP, 0, 4);
                 source = target.texture.clone();
                 source_size = (level.width, level.height);
@@ -165,3 +175,4 @@ impl Drop for ShaderResources {
         for target in &self.blur { delete_milkrust_feedback_targets(&self.gl, target); }
     }
 }
+
