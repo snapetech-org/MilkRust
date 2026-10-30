@@ -276,3 +276,12 @@ magnification, mip, and U/V/W address profile as native GL, including
 Wrap/Clamp/Mirror. Animated sprites retain their dedicated linear, no-mipmap,
 repeat profile. This closes a source-path mismatch; sprite filtering and
 addressing still require reference captures. The change is unbuilt and unrun.
+
+
+## 2026-10-30 saved-sprite transform and repeat semantics
+
+Sprite `repeatx`/`repeaty` now clamp the equation value first and then multiply by
+the saved `SpriteRepeatX`/`SpriteRepeatY`. Saved position and scale offsets are
+also applied after their equation values are clamped, matching the pinned
+behavioral source. The existing regression expectation was updated; execution
+and reference-frame comparison remain pending.
