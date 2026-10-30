@@ -213,9 +213,10 @@ render frames, resolve external texture packs, or establish fidelity.
   initialization remain outside the profile.
   Dynamic array dispatch is limited to side-effect-free indices, supported
   sampling/load methods, standalone `GetDimensions`, and legacy `tex*` calls
-  with the array element as their first argument. Direct `SamplerState` fields are accepted as method arguments but use the
-  resource prefix. Global initialized states lower through per-resource aliases;
-  parameter and struct-field state propagation is not implemented. The compiler remains a
+  with the array element as their first argument. Direct `SamplerState` fields
+  are accepted as method arguments but use resource prefixes. Global initialized
+  states lower through per-resource aliases; parameter and struct-field state
+  propagation is not implemented. The compiler remains a
   bounded pixel-shader profile, not all HLSL shader models. The separate WGSL
   path remains limited.
 - Complete format/EEL/texture behavior for every corpus file, including other legacy
