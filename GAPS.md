@@ -213,15 +213,16 @@ render frames, resolve external texture packs, or establish fidelity.
   element types, resource arrays in function scopes or nested resource-bearing
   structs, initialized resource instances, and resource-bearing struct
   parameters. Comparison methods outside the bounded Texture2D
-  `GatherCmp`/`GatherCmpRed`/`SampleCmp`/`SampleCmpLevelZero` paths remain
-  unsupported. Static `SamplerComparisonState` declarations lower supported
+  `GatherCmp`/`GatherCmpRed` and Texture1D/Texture2D
+  `SampleCmp`/`SampleCmpLevelZero` paths remain unsupported. Static `SamplerComparisonState` declarations lower supported
   comparison filters, all eight comparison functions and U/V/W
   Wrap/Clamp/Mirror modes. GatherCmp compares four base-level red-channel texels
   in D3D order and accepts an optional literal int2 offset. SampleCmp and
   SampleCmpLevelZero compare before filtering. SampleCmp selects point/linear
   minification or magnification filters from derivatives and applies point or
   linear mip selection. Both require a static comparison state; other texture
-  dimensions and reference-pixel parity remain open. The five ordinary `Texture2D.Gather` methods also read the four
+  dimensions beyond Texture1D/Texture2D and reference-pixel parity remain open.
+  The five ordinary `Texture2D.Gather` methods also read the four
   base-level texels in D3D order; reference-pixel comparison remains open.
   Global static `SamplerState` definitions
   support all eight standard point/linear min/mag/mip `Filter` combinations and
@@ -501,3 +502,7 @@ Texture2D Gather implementation. SampleCmp and SampleCmpLevelZero compare
 before point/bilinear filtering; SampleCmp also selects min/mag filters from
 derivatives and point/linear mip selection from the static comparison filter.
 Other texture dimensions and pixel-reference qualification remain open. No compiler/build/test/render was run for this source update.
+
+## 2026-10-30 Texture1D comparison-sampling continuation
+
+Texture1D `SampleCmp` and `SampleCmpLevelZero` now lower through the existing center-row mapping, accept their scalar integer offset form and share the bounded comparison filter/LOD implementation with Texture2D. The source requires a one-row backing image for parity. Gather remains Texture2D-only; Texture3D/cube comparison calls remain explicit errors. No compiler/build/test/render was run for this source update.

@@ -1151,11 +1151,22 @@ fn lower_modern_resource_syntax(tokens: &mut Vec<String>) -> Result<(), String> 
         if gather_cmp && (dimension != 2 || !matches!(args.len(), 3 | 4)) {
             return Err("Texture2D GatherCmp requires a comparison sampler, float2 location, compare value, and optional int2 offset".into());
         }
-        if sample_cmp && (dimension != 2 || !matches!(args.len(), 3 | 4)) {
-            return Err(format!("Texture2D {method} requires a comparison sampler, float2 location, compare value, and optional int2 offset"));
+        if sample_cmp && !matches!(dimension, 1 | 2) {
+            return Err(format!("Texture{dimension}D {method} is supported only for Texture1D and Texture2D"));
         }
-        if (gather_cmp || sample_cmp) && args.len() == 4 && !is_static_int2_offset(&args[3]) {
-            return Err(format!("Texture2D {method} offset must be a literal int2 in this profile"));
+        if sample_cmp && !matches!(args.len(), 3 | 4) {
+            return Err(format!("Texture{dimension}D {method} requires a comparison sampler, location, compare value, and optional offset"));
+        }
+        if (gather_cmp || sample_cmp) && args.len() == 4 {
+            let valid_offset = if dimension == 1 {
+                is_signed_integer_literal(&args[3])
+            } else {
+                is_static_int2_offset(&args[3])
+            };
+            if !valid_offset {
+                let expected = if dimension == 1 { "integer literal" } else { "literal int2" };
+                return Err(format!("Texture{dimension}D {method} offset must be a {expected} in this profile"));
+            }
         }
         if method == "GetDimensions" {
             let expected = usize::from(dimension);
@@ -1227,7 +1238,7 @@ fn lower_modern_resource_syntax(tokens: &mut Vec<String>) -> Result<(), String> 
             ("Gather" | "GatherRed" | "GatherGreen" | "GatherBlue" | "GatherAlpha", 2 | 3, 2) =>
                 ("milkRustInternalGather2D", args[1].clone()),
             ("GatherCmp" | "GatherCmpRed", 3 | 4, 2) => ("milkRustInternalGatherCmp2D", args[1].clone()),
-            ("SampleCmp" | "SampleCmpLevelZero", 3 | 4, 2) => ("milkRustInternalSampleCmp2D", args[1].clone()),
+            ("SampleCmp" | "SampleCmpLevelZero", 3 | 4, 1 | 2) => ("milkRustInternalSampleCmp2D", args[1].clone()),
             ("Load", 1 | 2, 1 | 2) => ("tex2Dfetch", args[0].clone()),
             ("Load", 1 | 2, 3) => ("tex3Dfetch", args[0].clone()),
             _ => return Err(format!("Invalid argument count for HLSL texture method {method}")),
@@ -1250,7 +1261,7 @@ fn lower_modern_resource_syntax(tokens: &mut Vec<String>) -> Result<(), String> 
         let comparison_function = sampler_profile.and_then(|profile| profile.comparison);
         let comparison_method = gather_cmp || sample_cmp;
         if comparison_method && comparison_function.is_none() {
-            return Err(format!("Texture2D {method} requires a statically initialized SamplerComparisonState with ComparisonFunc"));
+            return Err(format!("Texture{dimension}D {method} requires a statically initialized SamplerComparisonState with ComparisonFunc"));
         }
         if !comparison_method && comparison_function.is_some() {
             return Err(format!("HLSL comparison sampler cannot be used with texture method {method}"));
@@ -1351,9 +1362,9 @@ fn lower_modern_resource_syntax(tokens: &mut Vec<String>) -> Result<(), String> 
                 rewritten.extend([",".into(), "int2".into(), "(".into(), "0".into(), ",".into(), "0".into(), ")".into()]);
             }
             rewritten.push(",".into());
-            rewritten.push(comparison_function.ok_or_else(|| format!("Missing comparison function for Texture2D {method}"))?.to_string());
+            rewritten.push(comparison_function.ok_or_else(|| format!("Missing comparison function for Texture{dimension}D {method}"))?.to_string());
             if sample_cmp {
-                let profile = sampler_profile.ok_or_else(|| format!("Missing comparison filter for Texture2D {method}"))?;
+                let profile = sampler_profile.ok_or_else(|| format!("Missing comparison filter for Texture{dimension}D {method}"))?;
                 let mip_point = profile.mip == crate::resources::MipFilter::Point;
                 let level_zero = method == "SampleCmpLevelZero";
                 rewritten.extend([

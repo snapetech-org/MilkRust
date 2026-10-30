@@ -517,17 +517,20 @@ four-component results for GatherCmp. Added pixel controls check Gather componen
 order, comparison before bilinear filtering and comparison-state forwarding.
 
 
-## Bounded Texture2D comparison sampling
+## Bounded Texture1D/Texture2D comparison sampling
 
-`Texture2D.GatherCmp`, `GatherCmpRed` and `SampleCmpLevelZero` are implemented
-for global, statically initialized `SamplerComparisonState` profiles on
-Texture2D resources. The bounded profile parses the supported
+`Texture2D.GatherCmp` and `GatherCmpRed`, plus `SampleCmp` and
+`SampleCmpLevelZero` on Texture1D/Texture2D, are implemented for global,
+statically initialized `SamplerComparisonState` profiles. Gather targets
+Texture2D. Texture1D comparison sampling uses the center row of a 2D image and
+needs a one-row asset for parity. The bounded profile parses the supported
 `COMPARISON_MIN_MAG_*` point/linear filter combinations, with
 NEVER, LESS, EQUAL, LESS_EQUAL, GREATER, NOT_EQUAL, GREATER_EQUAL and ALWAYS
-comparison functions. The shader compares the resource's red channel for four
-base-level texels in the same component order used by the bounded ordinary
-Gather helper, honoring the static U/V/W address profile and optional literal int2
-offset.
+comparison functions. Gather compares the red channel at four base-level texels
+in the same component order used by the bounded ordinary Gather helper and honors
+the static U/V/W address profile. Gather accepts a literal int2 offset. Texture1D
+comparison samples accept an integer literal offset; Texture2D comparison samples
+accept a literal int2.
 
 SampleCmp and SampleCmpLevelZero compare the red channel of each fetched texel
 before filtering. SampleCmp derives LOD from texture-coordinate derivatives,
@@ -535,7 +538,6 @@ selects the configured minification or magnification filter, and applies the
 configured point or linear mip selection. SampleCmpLevelZero uses mip zero.
 The compiler rejects comparison states without an explicit ComparisonFunc,
 ordinary texture methods passed a comparison state, and comparison calls without
-a static comparison state. Dynamic comparison state, other texture dimensions,
-and broader resource forms remain unsupported. Optional offsets are restricted
-to literal int2 constructors. This is a bounded source path, not a reference-pixel
+a static comparison state. Dynamic comparison state, Texture3D/cube comparison methods and broader resource
+forms remain unsupported. This is a bounded source path, not a reference-pixel
 claim; no build, compiler test, render, or device check was run for this update.
