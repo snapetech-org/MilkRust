@@ -213,6 +213,34 @@ pub unsafe extern "C" fn milkrust_texture_png(handle: u64, name: *const u8, name
     })
 }
 
+/// # Safety
+/// Name and encoded WebP bytes must be readable; names are at most 512 bytes and
+/// encoded data is at most 16 MiB. Decoded frames share the preset pixel budget.
+#[no_mangle]
+pub unsafe extern "C" fn milkrust_texture_webp(handle: u64, name: *const u8, name_length: usize,
+    encoded: *const u8, length: usize) -> i32 {
+    call(handle, |session| {
+        let name = std::str::from_utf8(unsafe { bytes(name, name_length, 512)? }).map_err(|_| "Texture name must be UTF-8")?;
+        let encoded = unsafe { bytes(encoded, length, milkrust_core::texture::MAX_ENCODED_BYTES)? };
+        let (width, height) = milkrust_core::texture::inspect(milkrust_core::texture::Format::WebP, encoded)?;
+        let source = milkrust_core::texture::ImageSource {
+            format: milkrust_core::texture::Format::WebP, width, height, bytes: encoded.to_vec(),
+        };
+        let animated = source.has_animated_webp()?;
+        let decoded = source.decode_webp_animation()?;
+        if animated {
+            let frames = decoded.frames.iter().map(|frame| frame.pixels.as_slice()).collect::<Vec<_>>();
+            session.renderer.texture_animation(name, width, height, &frames, &decoded.delays_seconds,
+                decoded.repeat_count)
+        } else {
+            if decoded.frames.len() != 1 {
+                return Err("Static WebP decoder returned an unexpected frame count".into());
+            }
+            session.renderer.texture(name, width, height, &decoded.frames[0].pixels)
+        }
+    })
+}
+
 /// Update local calendar/time registers used by EEL equations. All values are
 /// validated before the runtime accepts them; the host should refresh per frame.
 #[no_mangle]
