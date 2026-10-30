@@ -3,7 +3,7 @@
 mod resource_helpers;
 
 use crate::milk2;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 fn is_identifier(token: &str) -> bool {
     token.chars().next().is_some_and(|ch| ch.is_ascii_alphabetic() || ch == '_')
@@ -1144,6 +1144,13 @@ fn lower_modern_resource_syntax(tokens: &mut Vec<String>) -> Result<(), String> 
         index = intrinsic_index + 1;
     }
     let (resource_fields, resource_field_bindings, resource_instances) = resource_struct_fields(tokens)?;
+    let nested_resource_shapes: Vec<_> = resource_fields.iter().filter_map(|field| {
+        resource_shapes.get(&field.resource_key).copied().flatten()
+            .map(|shape| (format!("{}.{}", field.structure, field.field), shape))
+    }).collect();
+    for (name, shape) in nested_resource_shapes {
+        resource_shapes.insert(name, Some(shape));
+    }
 
     let mut rewritten = Vec::with_capacity(tokens.len());
     let mut index = 0;
@@ -1163,8 +1170,9 @@ fn lower_modern_resource_syntax(tokens: &mut Vec<String>) -> Result<(), String> 
                 let receiver = tokens[index - 1].as_str();
                 let is_resource = if index >= base_start + 3 && tokens.get(base_start + 1).map(String::as_str) == Some(".") {
                     let structure = resource_instances.get(&tokens[base_start]);
+                    let member_path = dotted_member_path(tokens, base_start, index).unwrap_or_else(|| receiver.to_string());
                     structure.is_some_and(|structure| resource_fields.iter()
-                        .any(|field| &field.structure == structure && field.field == receiver))
+                        .any(|field| &field.structure == structure && field.field == member_path))
                 } else {
                     resource_shapes.contains_key(receiver)
                 };
@@ -1184,12 +1192,11 @@ fn lower_modern_resource_syntax(tokens: &mut Vec<String>) -> Result<(), String> 
             base_start -= 2;
         }
         let base_name = tokens[index - 1].clone();
+        let member_path = dotted_member_path(tokens, base_start, index);
         let resource_shape = if index >= base_start + 3 && tokens.get(base_start + 1).map(String::as_str) == Some(".") {
             let structure = resource_instances.get(&tokens[base_start]);
-            let field_name = &tokens[index - 1];
             structure.and_then(|structure| {
-                resource_fields.iter().find(|field| &field.structure == structure && &field.field == field_name)
-                    .and_then(|_| resource_shapes.get(&format!("{structure}.{field_name}")))
+                member_path.as_ref().and_then(|path| resource_shapes.get(&format!("{structure}.{path}")))
                     .copied().flatten()
             })
         } else {
@@ -1340,8 +1347,9 @@ fn lower_modern_resource_syntax(tokens: &mut Vec<String>) -> Result<(), String> 
         rewritten.push("(".into());
         if let Some(profile) = sampler_profile {
             let binding_name = if index >= base_start + 3 && tokens.get(base_start + 1).map(String::as_str) == Some(".") {
-                resource_field_bindings.get(&format!("{}.{}", tokens[base_start], base_name)).cloned()
-                    .unwrap_or_else(|| format!("{}_{}", tokens[base_start], base_name))
+                let field_path = member_path.as_deref().unwrap_or(&base_name);
+                resource_field_bindings.get(&format!("{}.{}", tokens[base_start], field_path)).cloned()
+                    .unwrap_or_else(|| format!("{}_{}", tokens[base_start], field_path.replace('.', "_")))
             } else {
                 base_name.clone()
             };
@@ -1592,12 +1600,40 @@ struct ResourceStructField {
     structure: String,
     field: String,
     sampler_type: String,
+    resource_key: String,
     declaration: std::ops::Range<usize>,
+}
+
+fn struct_member_access_end(tokens: &[String], object_index: usize, path: &str) -> Option<usize> {
+    let mut cursor = object_index + 1;
+    for segment in path.split('.') {
+        if tokens.get(cursor).map(String::as_str) != Some(".")
+            || tokens.get(cursor + 1).map(String::as_str) != Some(segment) {
+            return None;
+        }
+        cursor += 2;
+    }
+    Some(cursor)
+}
+
+fn dotted_member_path(tokens: &[String], object_index: usize, end_exclusive: usize) -> Option<String> {
+    let mut cursor = object_index + 1;
+    let mut segments = Vec::new();
+    while cursor < end_exclusive {
+        if tokens.get(cursor).map(String::as_str) != Some(".") {
+            return None;
+        }
+        let segment = tokens.get(cursor + 1).filter(|token| is_identifier(token))?;
+        segments.push(segment.clone());
+        cursor += 2;
+    }
+    (!segments.is_empty() && cursor == end_exclusive).then(|| segments.join("."))
 }
 
 fn resource_struct_fields(tokens: &[String]) -> Result<(Vec<ResourceStructField>, BTreeMap<String, String>, BTreeMap<String, String>), String> {
     let mut fields = Vec::new();
     let mut structure_ranges = Vec::new();
+    let mut structures = Vec::<(String, usize, usize)>::new();
     let mut i = 0;
     let mut depth = 0i32;
     while i + 2 < tokens.len() {
@@ -1617,6 +1653,7 @@ fn resource_struct_fields(tokens: &[String]) -> Result<(Vec<ResourceStructField>
         }
         if level != 0 { return Err("Unterminated HLSL struct declaration".into()); }
         structure_ranges.push(i..close);
+        structures.push((name.clone(), open, close));
         let mut field_index = open + 1;
         while field_index + 1 < close - 1 {
             if !matches!(tokens[field_index].as_str(), "sampler" | "sampler2D" | "sampler3D") {
@@ -1646,7 +1683,10 @@ fn resource_struct_fields(tokens: &[String]) -> Result<(Vec<ResourceStructField>
             let declaration_start = if field_index > open + 1 && tokens[field_index - 1] == "uniform" { field_index - 1 } else { field_index };
             for field_name in field_names {
                 fields.push(ResourceStructField {
-                    structure: name.clone(), field: field_name, sampler_type: sampler_type.clone(),
+                    structure: name.clone(),
+                    field: field_name.clone(),
+                    sampler_type: sampler_type.clone(),
+                    resource_key: format!("{name}.{field_name}"),
                     declaration: declaration_start..end + 1,
                 });
             }
@@ -1655,6 +1695,68 @@ fn resource_struct_fields(tokens: &[String]) -> Result<(Vec<ResourceStructField>
         i = close;
     }
     if fields.is_empty() { return Ok((fields, BTreeMap::new(), BTreeMap::new())); }
+
+    // Flatten resource-bearing child structs into dotted member paths. The
+    // compiler can then bind a global object without emitting opaque structs to
+    // GLSL. Nested aggregate initializers and arrays remain explicit failures.
+    let struct_names: BTreeSet<String> = structures.iter().map(|(name, _, _)| name.clone()).collect();
+    let mut nested_edges = Vec::<(String, String, String, std::ops::Range<usize>, bool)>::new();
+    for (parent, open, close) in &structures {
+        let mut statement_start = open + 1;
+        while statement_start < close - 1 {
+            let Some(end_offset) = tokens[statement_start..close - 1].iter().position(|token| token == ";") else {
+                break;
+            };
+            let statement_end = statement_start + end_offset;
+            let type_index = if tokens.get(statement_start).map(String::as_str) == Some("uniform") {
+                statement_start + 1
+            } else {
+                statement_start
+            };
+            if let Some(child) = tokens.get(type_index).filter(|token| struct_names.contains(*token)) {
+                let simple = type_index + 2 == statement_end
+                    && tokens.get(type_index + 1).is_some_and(|field| is_identifier(field));
+                nested_edges.push((
+                    parent.clone(),
+                    tokens.get(type_index + 1).cloned().unwrap_or_default(),
+                    child.clone(),
+                    statement_start..statement_end + 1,
+                    simple,
+                ));
+            }
+            statement_start = statement_end + 1;
+        }
+    }
+
+    for round in 0..=structures.len() {
+        let mut additions = Vec::new();
+        for (parent, member, child, declaration, simple) in &nested_edges {
+            let child_fields: Vec<_> = fields.iter().filter(|field| field.structure == *child).cloned().collect();
+            if child_fields.is_empty() { continue; }
+            if !simple {
+                return Err("Nested resource-bearing struct fields must be one uninitialized scalar member".into());
+            }
+            for child_field in child_fields {
+                let field = format!("{member}.{}", child_field.field);
+                if fields.iter().any(|existing| existing.structure == *parent && existing.field == field)
+                    || additions.iter().any(|existing: &ResourceStructField| existing.structure == *parent && existing.field == field) {
+                    return Err("Duplicate nested HLSL resource-struct member path".into());
+                }
+                additions.push(ResourceStructField {
+                    structure: parent.clone(),
+                    field,
+                    sampler_type: child_field.sampler_type,
+                    resource_key: child_field.resource_key,
+                    declaration: declaration.clone(),
+                });
+            }
+        }
+        if additions.is_empty() { break; }
+        if round == structures.len() {
+            return Err("Recursive resource-bearing HLSL structs are unsupported".into());
+        }
+        fields.extend(additions);
+    }
 
     // Keep the original resource type for global bindings so a brace
     // initializer can alias a field only to a compatible, top-level resource.
@@ -1696,9 +1798,9 @@ fn resource_struct_fields(tokens: &[String]) -> Result<(Vec<ResourceStructField>
         }
         if depth == 0 && parens == 0
             && fields.iter().any(|field| field.structure.as_str() == tokens[i].as_str())
-            && tokens.get(i + 1).is_some_and(|name| name.chars().next().is_some_and(|c| c.is_ascii_alphabetic() || c == '_')) {
+            && tokens.get(i + 1).is_some_and(|name| is_identifier(name)) {
             let structure = tokens[i].clone();
-            let fields_for_structure: Vec<_> = fields.iter().filter(|field| field.structure.as_str() == structure.as_str()).collect();
+            let fields_for_structure: Vec<_> = fields.iter().filter(|field| field.structure == structure).collect();
             let mut declaration = i + 1;
             loop {
                 let Some(variable) = tokens.get(declaration).filter(|name| is_identifier(name)).cloned() else { break; };
@@ -1706,6 +1808,9 @@ fn resource_struct_fields(tokens: &[String]) -> Result<(Vec<ResourceStructField>
                 if next == Some("[") { return Err("Arrays of resource-bearing structs are unsupported".into()); }
                 instances.insert(variable.clone(), structure.clone());
                 if next == Some("=") {
+                    if fields_for_structure.iter().any(|field| field.field.contains('.')) {
+                        return Err("Nested resource-struct aggregate initializers are unsupported".into());
+                    }
                     let range = structure_ranges.iter().find(|range| tokens.get(range.start + 1) == Some(&structure))
                         .ok_or("Malformed HLSL resource struct declaration")?;
                     let open = tokens[range.start + 2..range.end].iter().position(|token| token == "{")
@@ -1763,35 +1868,39 @@ fn resource_struct_fields(tokens: &[String]) -> Result<(Vec<ResourceStructField>
     }
 
     let mut bindings = initialized_bindings;
-    for window in tokens.windows(3) {
-        if window[1] != "." { continue; }
-        let field = fields.iter().find(|field| field.field == window[2]);
-        let Some(structure) = instances.get(&window[0]) else {
-            if field.is_some() { return Err("Resource struct fields must be accessed through a global struct instance".into()); }
-            continue;
-        };
-        if let Some(field) = fields.iter().find(|field| &field.structure == structure && field.field == window[2]) {
-            let key = format!("{}.{}", window[0], field.field);
+    for object_index in 0..tokens.len() {
+        let Some(object) = tokens.get(object_index) else { continue; };
+        let Some(structure) = instances.get(object) else { continue; };
+        let fields_for_structure: Vec<_> = fields.iter().filter(|field| field.structure == *structure).cloned().collect();
+        for field in fields_for_structure {
+            // Only bind actual source uses; unused resource fields must not
+            // become extra required textures.
+            if struct_member_access_end(tokens, object_index, &field.field).is_none() { continue; }
+            let key = format!("{object}.{}", field.field);
             let name = bindings.get(&key).cloned().unwrap_or_else(|| {
-                if field.field.starts_with("sampler_") { field.field.clone() }
-                else { format!("sampler_{}_{}", window[0], field.field) }
+                let normalized = field.field.replace('.', "_");
+                if normalized.starts_with("sampler_") { normalized }
+                else { format!("sampler_{object}_{normalized}") }
             });
             if field.sampler_type == "sampler2D" && crate::resources::texture_kind(&name).is_volume()
                 || field.sampler_type == "sampler3D" && !crate::resources::texture_kind(&name).is_volume() {
-                return Err(format!("Sampler field {}.{} disagrees with its bound texture dimension", window[0], field.field));
+                return Err(format!("Sampler field {key} disagrees with its bound texture dimension"));
             }
-            bindings.insert(key, name.clone());
+            bindings.insert(key, name);
         }
     }
     Ok((fields, bindings, instances))
 }
 
 fn resource_field_bindings(tokens: &[String]) -> Result<Vec<String>, String> {
-    let (_, bindings, _) = resource_struct_fields(tokens)?;
+    let (fields, bindings, instances) = resource_struct_fields(tokens)?;
     let mut names = Vec::new();
-    for window in tokens.windows(3) {
-        if window[1] == "." {
-            if let Some(name) = bindings.get(&format!("{}.{}", window[0], window[2])) {
+    for index in 0..tokens.len() {
+        let Some(object) = tokens.get(index) else { continue; };
+        let Some(structure) = instances.get(object) else { continue; };
+        for field in fields.iter().filter(|field| field.structure == *structure) {
+            if struct_member_access_end(tokens, index, &field.field).is_none() { continue; }
+            if let Some(name) = bindings.get(&format!("{object}.{}", field.field)) {
                 if !names.contains(name) { names.push(name.clone()); }
             }
         }
@@ -1802,10 +1911,12 @@ fn resource_field_bindings(tokens: &[String]) -> Result<Vec<String>, String> {
 fn lower_resource_struct_fields(tokens: &mut Vec<String>) -> Result<(), String> {
     let (fields, bindings, instances) = resource_struct_fields(tokens)?;
     if fields.is_empty() { return Ok(()); }
-    let resource_struct_names: Vec<String> = fields.iter().map(|field| field.structure.clone()).collect();
+    let mut resource_struct_names: Vec<String> = fields.iter().map(|field| field.structure.clone()).collect();
+    resource_struct_names.sort();
+    resource_struct_names.dedup();
     let mut removed = vec![false; tokens.len()];
-    for field in fields {
-        for index in field.declaration { removed[index] = true; }
+    for field in &fields {
+        for index in field.declaration.clone() { removed[index] = true; }
     }
     let mut empty_structs = Vec::new();
     let mut struct_ranges = Vec::new();
@@ -1850,8 +1961,12 @@ fn lower_resource_struct_fields(tokens: &mut Vec<String>) -> Result<(), String> 
                 continue;
             }
             if tokens[index] == *object {
-                if tokens.get(index + 1).map(String::as_str) != Some(".")
-                    || tokens.get(index + 2).map_or(true, |field| !bindings.contains_key(&format!("{object}.{field}"))) {
+                let structure_fields = fields.iter().filter(|field| field.structure == *structure);
+                let valid = structure_fields.into_iter().any(|field| {
+                    struct_member_access_end(tokens, index, &field.field).is_some()
+                        && bindings.contains_key(&format!("{object}.{}", field.field))
+                });
+                if !valid {
                     return Err("Resource-only struct instances must be accessed through declared sampler fields".into());
                 }
             }
@@ -1865,9 +1980,21 @@ fn lower_resource_struct_fields(tokens: &mut Vec<String>) -> Result<(), String> 
     let mut rewritten = Vec::with_capacity(tokens.len());
     let mut index = 0;
     while index < tokens.len() {
-        if index + 2 < tokens.len() && tokens[index + 1] == "." {
-            if let Some(name) = bindings.get(&format!("{}.{}", tokens[index], tokens[index + 2])) {
-                rewritten.push(name.clone()); index += 3; continue;
+        if let Some(structure) = instances.get(&tokens[index]) {
+            let mut matched = None::<(usize, String)>;
+            for field in fields.iter().filter(|field| field.structure == *structure) {
+                if let Some(end) = struct_member_access_end(tokens, index, &field.field) {
+                    if let Some(name) = bindings.get(&format!("{}.{}", tokens[index], field.field)) {
+                        if matched.as_ref().map_or(true, |(previous_end, _)| end > *previous_end) {
+                            matched = Some((end, name.clone()));
+                        }
+                    }
+                }
+            }
+            if let Some((end, name)) = matched {
+                rewritten.push(name);
+                index = end;
+                continue;
             }
         }
         if !removed[index] { rewritten.push(tokens[index].clone()); }
@@ -2458,6 +2585,41 @@ mod tests {
         "#;
         assert!(compile(local, false).is_err(), "local resource-bearing structs must fail closed");
     }
+    #[test]
+    fn nested_resource_struct_fields_and_helpers_resolve_global_bindings() {
+        let source = r#"
+            struct ImageSurface { Texture2D<float4> image; };
+            struct Surface { ImageSurface inner; };
+            Surface primary;
+            SamplerState linear { Filter=MIN_MAG_MIP_LINEAR; AddressU=Clamp; };
+            float4 sample_surface(Surface input, float2 point) {
+                return input.inner.image.Sample(linear, point);
+            }
+            shader_body { ret=sample_surface(primary, uv).rgb; }
+        "#;
+        let names = sampler_names(source).unwrap();
+        assert!(names.iter().any(|name| name.contains("primary_inner_image")), "{names:?}");
+        compile(source, false).expect("nested resource fields should specialize to their global binding");
+
+        let direct = r#"
+            struct ImageSurface { Texture2D<float4> image; };
+            struct Surface { ImageSurface inner; };
+            Surface primary;
+            SamplerState linear { Filter=MIN_MAG_MIP_LINEAR; AddressU=Clamp; };
+            shader_body { ret=primary.inner.image.Sample(linear, uv).rgb; }
+        "#;
+        compile(direct, false).expect("nested resource fields should lower without helper parameters");
+
+        let initialized = r#"
+            Texture2D<float4> sampler_image;
+            struct ImageSurface { Texture2D<float4> image; };
+            struct Surface { ImageSurface inner; };
+            Surface primary = { { sampler_image } };
+            shader_body { ret=primary.inner.image.Load(int3(0, 0, 0)).rgb; }
+        "#;
+        assert!(sampler_names(initialized).is_err(), "nested aggregate resource initializers must fail closed");
+    }
+
     #[test]
     fn static_sampler_state_aliases_preserve_profiles_and_reject_unresolved_targets() {
         let ordinary = "Texture2D<float4> sampler_art; SamplerState point{Filter=MIN_MAG_MIP_POINT;AddressU=Clamp;}; SamplerState alias=point; shader_body{ret=sampler_art.Sample(alias,uv).rgb;}";

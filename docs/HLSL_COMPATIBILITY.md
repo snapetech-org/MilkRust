@@ -496,8 +496,7 @@ ordinary/resource overload sets and overloads that change opaque types/positions
 still fail explicitly. Recursive helpers, output/array/default opaque parameters,
 local/dynamic opaque arguments, resource-bearing struct arguments that are not
 global instances, and substitutions that capture existing body or value-parameter
-names fail explicitly. Nested resource-bearing structs, state assignment/arithmetic
-and dynamically selected state still require a separate binding model. This is a bounded pixel-shader profile, not every HLSL
+names fail explicitly. Nested scalar texture-resource fields now flatten through plain struct members when they resolve to an unambiguous global struct instance, including helper parameters specialized to that instance. Nested resource arrays, nested aggregate initializers, nested sampler-state propagation, state assignment/arithmetic and dynamically selected state still require a separate binding model. This is a bounded pixel-shader profile, not every HLSL
 resource feature.
 
 Native regression sources cover binding reflection, nested forwarding, legacy
@@ -557,3 +556,8 @@ ordinary texture methods passed a comparison state, and comparison calls without
 a static comparison state. Dynamic comparison state, Texture3D/cube comparison
 methods, and broader resource forms remain unsupported. This is a bounded source path, not a reference-pixel
 claim; no build, compiler test, render, or device check was run for this update.
+
+
+## 2026-10-30 nested scalar texture fields
+
+Texture1D/2D/3D fields can now be nested through plain structs. Dotted access is flattened to one reflected global binding, with the leaf's original texture dimension and element width retained for typed method lowering. Helper parameters specialize through a global instance. Nested resource arrays and nested aggregate initializers remain outside the profile; local or dynamic resource-bearing struct arguments still fail closed. Native regression cases were added for direct use, helper use, binding reflection and rejected initializers. No compiler or GPU execution was performed.

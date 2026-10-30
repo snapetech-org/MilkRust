@@ -83,7 +83,7 @@ fn declarations(tokens: &[String]) -> Result<Vec<Function>, String> {
 }
 
 fn resource_struct_types(tokens: &[String]) -> BTreeSet<String> {
-    let mut structures = BTreeSet::new();
+    let mut definitions = Vec::<(String, usize, usize)>::new();
     let mut index = 0usize;
     let mut brace_depth = 0i32;
     while index + 2 < tokens.len() {
@@ -105,30 +105,51 @@ fn resource_struct_types(tokens: &[String]) -> BTreeSet<String> {
                 close += 1;
             }
             if nested == 0 {
-                let mut field_depth = 0i32;
-                let has_direct_resource = tokens[open + 1..close - 1].iter().any(|token| {
-                    if field_depth == 0 && matches!(token.as_str(),
-                        "Texture1D" | "Texture2D" | "Texture3D" | "SamplerState"
-                        | "SamplerComparisonState" | "sampler" | "sampler2D" | "sampler3D") {
-                        return true;
-                    }
-                    match token.as_str() {
-                        "{" => field_depth += 1,
-                        "}" => field_depth -= 1,
-                        _ => {}
-                    }
-                    false
-                });
-                if has_direct_resource { structures.insert(name); }
+                definitions.push((name, open, close));
                 index = close;
                 continue;
             }
         }
         index += 1;
     }
+
+    let opaque_types = ["Texture1D", "Texture2D", "Texture3D", "SamplerState",
+        "SamplerComparisonState", "sampler", "sampler2D", "sampler3D"];
+    let mut structures = BTreeSet::new();
+    for (name, open, close) in &definitions {
+        if tokens[*open + 1..*close - 1].iter().any(|token| opaque_types.contains(&token.as_str())) {
+            structures.insert(name.clone());
+        }
+    }
+    for _ in 0..=definitions.len() {
+        let mut additions = Vec::new();
+        for (parent, open, close) in &definitions {
+            if structures.contains(parent) { continue; }
+            let mut statement_start = open + 1;
+            while statement_start < close - 1 {
+                let Some(end_offset) = tokens[statement_start..*close - 1].iter().position(|token| token == ";") else {
+                    break;
+                };
+                let statement_end = statement_start + end_offset;
+                let type_index = if tokens.get(statement_start).map(String::as_str) == Some("uniform") {
+                    statement_start + 1
+                } else {
+                    statement_start
+                };
+                if tokens.get(type_index).is_some_and(|ty| structures.contains(ty))
+                    && type_index + 2 == statement_end
+                    && tokens.get(type_index + 1).is_some_and(|name| is_identifier(name)) {
+                    additions.push(parent.clone());
+                    break;
+                }
+                statement_start = statement_end + 1;
+            }
+        }
+        if additions.is_empty() { break; }
+        structures.extend(additions);
+    }
     structures
 }
-
 fn opaque_name(parameter: &[String], resource_structs: &BTreeSet<String>) -> Result<Option<String>, String> {
     let first = parameter.iter().position(|t| !matches!(t.as_str(), "in" | "const" | "uniform" | "out" | "inout"));
     let Some(first) = first else { return Ok(None); };

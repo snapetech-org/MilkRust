@@ -199,12 +199,14 @@ render frames, resolve external texture packs, or establish fidelity.
   by GLSL ES 3.00, offset `Load` with defined out-of-range zero results, and
   base/mip-level `GetDimensions` with full mip-chain level counts. `Texture1D`
   maps to the center row of a 2D image and needs a one-row asset for 1D parity.
-  It still rejects texture types outside those three dimensions, integer/non-color texture
-  element types, resource arrays in function scopes or nested resource-bearing
-  structs, aggregate resource-struct initializers outside the bounded global alias
-  form, and resource-bearing struct parameters with local/dynamic arguments.
-  Direct resource-bearing struct helper parameters specialize only when their
-  argument is an unambiguous global struct instance. Comparison methods outside the bounded Texture2D
+  Scalar texture resource fields nested through plain structs now flatten
+  when accessed through an unambiguous global struct instance, including
+  resource-bearing helper parameters specialized to that instance. The compiler
+  still rejects texture types outside those three dimensions, integer/non-color
+  texture element types, resource arrays in function scopes or nested
+  resource-bearing structs, nested resource-struct aggregate initializers,
+  aggregate resource-struct initializers outside the bounded global alias form,
+  and resource-bearing struct parameters with local/dynamic arguments. Comparison methods outside the bounded Texture2D
   `GatherCmp`/`GatherCmpRed`/`GatherCmpGreen`/`GatherCmpBlue`/`GatherCmpAlpha` and Texture1D/Texture2D
   `SampleCmp`/`SampleCmpLevelZero` paths remain unsupported. Static `SamplerComparisonState` declarations lower supported
   comparison filters, all eight comparison functions and U/V/W
@@ -567,3 +569,8 @@ paths. Pack inventory and hashing are also bounded and retain scan/read errors.
 Regression sources cover these boundaries; no CLI, compiler, report-generation or
 private-runner execution has been performed. The checked-in generated summary
 remains a historical snapshot until the full private-runner report is regenerated.
+
+
+## 2026-10-30 nested resource-struct source support
+
+The typed compiler now flattens scalar Texture1D/Texture2D/Texture3D resource fields through plain nested structs, records the original leaf shape, and lowers dotted access through an unambiguous global struct instance. Resource-bearing helper parameters specialize through the same global binding. Native regression sources cover direct nested access, helper specialization, binding reflection and rejection of nested aggregate initializers. Nested resource arrays, nested sampler-state forwarding, local/dynamic struct arguments and nested aggregate initializers remain explicit failures. Compiler and render execution have not been run.
