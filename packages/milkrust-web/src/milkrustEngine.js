@@ -604,6 +604,7 @@ export const createMilkRustEngine = async ({
     mouse_x: 0.5,
     mouse_y: 0.5,
   };
+  let mouseClickPending = false;
   let pluginHooks = createPluginHooks();
   let installedPlugins = [];
   let pluginState = {
@@ -938,12 +939,13 @@ export const createMilkRustEngine = async ({
         frame.bands.treble,
         toCsv(frame.samples),
         toCsv(frame.spectrum.map((value) => value / 255)),
-        mouseState.mouse_down,
+        mouseState.mouse_down || mouseClickPending ? 1 : 0,
         mouseState.mouse_x,
         mouseState.mouse_y,
         mouseState.mouse_dx,
         mouseState.mouse_dy,
       );
+      mouseClickPending = false;
       mouseState.mouse_dx = 0;
       mouseState.mouse_dy = 0;
       const renderStatus = typeof rustEngine.renderStatusJson === 'function'
@@ -968,9 +970,35 @@ export const createMilkRustEngine = async ({
       rustEngine.resize(width, height);
     },
     setMouseState: (nextMouseState = {}) => {
+      if (!nextMouseState || typeof nextMouseState !== 'object' || Array.isArray(nextMouseState)) {
+        throw new TypeError('Mouse state must be an object');
+      }
+      const has = (key) => Object.prototype.hasOwnProperty.call(nextMouseState, key);
+      const finite = (key, current, minimum, maximum) => {
+        if (!has(key)) return current;
+        const value = nextMouseState[key];
+        if (typeof value !== 'number' || !Number.isFinite(value)) {
+          throw new TypeError(`Mouse ${key} must be finite`);
+        }
+        return Math.min(maximum, Math.max(minimum, value));
+      };
+      let mouseDown = mouseState.mouse_down;
+      if (has('mouse_down')) {
+        const value = nextMouseState.mouse_down;
+        if (value !== 0 && value !== 1) throw new TypeError('Mouse button state must be 0 or 1');
+        if (mouseDown === 0 && value === 1) mouseClickPending = true;
+        mouseDown = value;
+      }
+      const mouseDx = finite('mouse_dx', 0, -1, 1);
+      const mouseDy = finite('mouse_dy', 0, -1, 1);
       mouseState = {
         ...mouseState,
         ...nextMouseState,
+        mouse_down: mouseDown,
+        mouse_x: finite('mouse_x', mouseState.mouse_x, 0, 1),
+        mouse_y: finite('mouse_y', mouseState.mouse_y, 0, 1),
+        mouse_dx: Math.min(1, Math.max(-1, mouseState.mouse_dx + mouseDx)),
+        mouse_dy: Math.min(1, Math.max(-1, mouseState.mouse_dy + mouseDy)),
       };
       runPluginHooks('onInput', {
         state: mouseState,
