@@ -837,12 +837,15 @@ mod tests {
 
         let enabled_source = format!("{}{}", wrapper("sprite=0\nsprite=1", "sprite=0"), block(""));
         assert!(enabled(&enabled_source));
+        assert_eq!(extract(&enabled_source, enabled(&enabled_source)).unwrap().definitions.len(), 1);
 
         let disabled_source = format!("{}{}", wrapper("sprite=1\nsprite=0", "sprite=1"), block(""));
         assert!(!enabled(&disabled_source));
+        assert!(extract(&disabled_source, enabled(&disabled_source)).unwrap().definitions.is_empty());
 
         let body_only = format!("{}{}", wrapper("", "sprite=1"), block(""));
         assert!(!enabled(&body_only));
+        assert!(extract(&body_only, enabled(&body_only)).unwrap().definitions.is_empty());
     }
 
     #[test]
