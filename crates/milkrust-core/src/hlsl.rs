@@ -1072,7 +1072,7 @@ fn lower_modern_resource_syntax(tokens: &mut Vec<String>) -> Result<(), String> 
             ("SampleGrad", 4 | 5, 1 | 2) => ("tex2Dgrad", args[1].clone()),
             ("SampleGrad", 4 | 5, 3) => ("tex3Dgrad", args[1].clone()),
             ("Gather" | "GatherRed" | "GatherGreen" | "GatherBlue" | "GatherAlpha", 2 | 3, 2) =>
-                ("milkrust_gather2D", args[1].clone()),
+                ("milkRustInternalGather2D", args[1].clone()),
             ("Load", 1 | 2, 1 | 2) => ("tex2Dfetch", args[0].clone()),
             ("Load", 1 | 2, 3) => ("tex3Dfetch", args[0].clone()),
             _ => return Err(format!("Invalid argument count for HLSL texture method {method}")),
@@ -1595,6 +1595,9 @@ pub(crate) fn compile(source: &str, legacy_feedback: bool) -> Result<String, Str
     // Rename any user entry before the emitter adds its GLSL main.
     aliases.insert("main".into(), "milkrust_user_entry".into());
     let mut tokens = milkrust_hlsl::tokenize(&source)?;
+    if tokens.iter().any(|token| token == "milkRustInternalGather2D") {
+        return Err("Shader uses a reserved compiler identifier".into());
+    }
     lower_modern_resource_syntax(&mut tokens)?;
     lower_resource_struct_fields(&mut tokens)?;
     let mut index = 0;
@@ -1650,8 +1653,8 @@ pub(crate) fn compile(source: &str, legacy_feedback: bool) -> Result<String, Str
         let kind = if crate::resources::texture_kind(name).is_volume() { "sampler3D" } else { "sampler2D" };
         preamble.push_str(&format!("{kind} shaderTexture{index};\n"));
     }
-    if tokens.iter().any(|token| token == "milkrust_gather2D") {
-        preamble.push_str("float4 milkrust_gather2D(sampler2D source, float2 location, int2 offset, int component);\n");
+    if tokens.iter().any(|token| token == "milkRustInternalGather2D") {
+        preamble.push_str("float4 milkRustInternalGather2D(sampler2D source, float2 location, int2 offset, int component);\n");
     }
     for name in crate::resources::SCALAR_UNIFORMS { preamble.push_str(&format!("float {name};\n")); }
     for name in crate::resources::VECTOR_UNIFORMS { preamble.push_str(&format!("float4 {name};\n")); }
@@ -1759,7 +1762,7 @@ fn adapt_output(glsl: &str, feedback: bool) -> Result<String, String> {
     if !has_output || !has_main { return Err("Shader entry must write COLOR0".into()); }
     if !has_uv { output.push_str("in vec2 uv;\n"); }
     output.insert_str(output.find('\n').map_or(0, |i| i+1), "in highp vec2 originalUv;\n");
-    if glsl.contains("milkrust_gather2D") {
+    if glsl.contains("milkRustInternalGather2D") {
         let mut cursor = 0usize;
         let mut insertion = output.find('\n').map_or(0, |index| index + 1);
         for line in output.split_inclusive('\n') {
@@ -1773,7 +1776,7 @@ fn adapt_output(glsl: &str, feedback: bool) -> Result<String, String> {
             cursor = end;
         }
         output.insert_str(insertion, r#"
-vec4 milkrust_gather2D(sampler2D source, vec2 location, ivec2 offset, int component) {
+vec4 milkRustInternalGather2D(sampler2D source, vec2 location, ivec2 offset, int component) {
     vec2 size = vec2(textureSize(source, 0));
     vec2 low = floor(location * size - vec2(0.5)) + vec2(offset);
     vec2 inv = vec2(1.0) / size;
