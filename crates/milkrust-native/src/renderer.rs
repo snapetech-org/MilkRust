@@ -495,7 +495,7 @@ impl Renderer {
         program.vector4("classicEcho", echo[0], echo[1], echo[2], echo[3]);
         program.vector4("classicFilters", filters[0], filters[1], filters[2], filters[3]);
         program.float("classicWrap", wrap);
-        unsafe { (self.gl.bind_sampler)(0, self.samplers.ids[2]); }
+        unsafe { (self.gl.bind_sampler)(0, self.samplers.ids[14]); }
         program.float("feedback", feedback); program.float("outputAlpha", alpha);
         program.integer("u_transitionPattern", transition.pattern);
         program.float("u_transitionProgress", transition.progress);
