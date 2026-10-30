@@ -100,18 +100,34 @@ impl ShaderResources {
             gl.enable_vertex_attrib_array(position as u32);
             gl.vertex_attrib_pointer_with_i32(position as u32, 2, Gl::FLOAT, false, 0, 0);
         }
+        let mut source_size = self.size;
         for (index, level) in self.blur.iter().enumerate() {
             gl.viewport(0, 0, level.width, level.height);
             for (pass, target) in level.targets.iter().enumerate() {
                 gl.bind_texture(Gl::TEXTURE_2D, Some(&source));
                 gl.bind_framebuffer(Gl::FRAMEBUFFER, Some(&target.framebuffer));
                 let [scale, bias] = resources::blur_transform(frame, index, pass);
+                let (weights, offsets, normalization) = resources::blur_kernel(pass);
+                let edge = resources::blur_edge(frame, index, pass);
                 gl.uniform2f(gl.get_uniform_location(&self.program, "blurTransform").as_ref(), scale, bias);
+                gl.uniform2f(gl.get_uniform_location(&self.program, "sourceTexel").as_ref(),
+                    1.0/source_size.0 as f32, 1.0/source_size.1 as f32);
                 gl.uniform2f(gl.get_uniform_location(&self.program, "blurStep").as_ref(),
-                    if pass == 0 { 1.0/level.width as f32 } else { 0.0 },
-                    if pass == 1 { 1.0/level.height as f32 } else { 0.0 });
+                    if pass == 0 { 1.0/source_size.0 as f32 } else { 0.0 },
+                    if pass == 1 { 1.0/source_size.1 as f32 } else { 0.0 });
+                gl.uniform4f(gl.get_uniform_location(&self.program, "blurWeights").as_ref(),
+                    weights[0], weights[1], weights[2], weights[3]);
+                gl.uniform4f(gl.get_uniform_location(&self.program, "blurOffsets").as_ref(),
+                    offsets[0], offsets[1], offsets[2], offsets[3]);
+                gl.uniform1f(gl.get_uniform_location(&self.program, "blurWeightScale").as_ref(), normalization);
+                gl.uniform4f(gl.get_uniform_location(&self.program, "blurEdge").as_ref(),
+                    edge[0], edge[1], edge[2], edge[3]);
+                gl.uniform1f(gl.get_uniform_location(&self.program, "blurHorizontal").as_ref(),
+                    if pass == 0 { 1.0 } else { 0.0 });
+                gl.bind_sampler(0, self.samplers.get(2));
                 gl.draw_arrays(Gl::TRIANGLE_STRIP, 0, 4);
                 source = target.texture.clone();
+                source_size = (level.width, level.height);
             }
             gl.bind_texture(Gl::TEXTURE_2D, Some(&source)); gl.generate_mipmap(Gl::TEXTURE_2D);
         }
