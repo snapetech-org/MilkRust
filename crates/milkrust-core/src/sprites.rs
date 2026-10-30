@@ -244,8 +244,6 @@ fn definition(index: u32, preset_index: usize, records: &BTreeMap<String, String
     values.insert("burn".into(), MilkRustValue::Number(1.0));
     values.insert("blendmode".into(), MilkRustValue::Number(f64::from(blend_mode)));
     values.insert("layer".into(), MilkRustValue::Number(f64::from(saved_layer)));
-    values.insert("repeatx".into(), MilkRustValue::Number(repeat_multiplier[0]));
-    values.insert("repeaty".into(), MilkRustValue::Number(repeat_multiplier[1]));
     let join = |lines: BTreeMap<u32, &str>| {
         let mut contiguous = Vec::new();
         for number in 1..=255 {
@@ -444,16 +442,21 @@ impl Runtime {
             } else {
                 value("burn") != 0.0
             };
-            // Saved offsets join EEL coordinates before the final clip-space clamp.
-            let x = ((value("x") * 2.0 - 1.0 + definition.offset[0]).clamp(-1000.0, 1000.0) + 1.0) * 0.5;
-            let y = ((value("y") * 2.0 - 1.0 + definition.offset[1]).clamp(-1000.0, 1000.0) + 1.0) * 0.5;
+            // MilkDrop clamps the EEL coordinate before adding its saved offset.
+            let x = ((value("x") * 2.0 - 1.0).clamp(-1000.0, 1000.0) + definition.offset[0] + 1.0) * 0.5;
+            let y = ((value("y") * 2.0 - 1.0).clamp(-1000.0, 1000.0) + definition.offset[1] + 1.0) * 0.5;
             // Layer and blend selectors are saved preset fields in MD3;
             // assigning similarly named EEL variables does not change them.
             let layer = definition.layer as usize;
             let alpha = value("a").clamp(0.0, 1.0);
-            let repeat = [value("repeatx").clamp(0.01, 100.0), value("repeaty").clamp(0.01, 100.0)];
-            let scale = [(value("sx") + definition.size_offset[0]).clamp(-1000.0, 1000.0),
-                (value("sy") + definition.size_offset[1]).clamp(-1000.0, 1000.0)];
+            let repeat = [
+                value("repeatx").clamp(0.01, 100.0) * definition.repeat_multiplier[0],
+                value("repeaty").clamp(0.01, 100.0) * definition.repeat_multiplier[1],
+            ];
+            let scale = [
+                value("sx").clamp(-1000.0, 1000.0) + definition.size_offset[0],
+                value("sy").clamp(-1000.0, 1000.0) + definition.size_offset[1],
+            ];
             frames.push(Frame {
                 preset_index: definition.preset_index, milk2: definition.milk2,
                 texture: definition.texture.clone(), time: elapsed, color_key: definition.color_key,
@@ -785,7 +788,7 @@ mod tests {
         assert!(!frame.burn);
         assert_eq!(frame.blend_mode, 3);
         assert_eq!(frame.layer, 2);
-        assert_eq!(frame.repeat, [2.0, 3.0]);
+        assert_eq!(frame.repeat, [8.0, 15.0]);
 
         let untouched = extract(&block("SpriteAlpha=0.25\nSpriteBurn=0\nSpriteBlend=3\nSpriteLayer=2\nSpriteRepeatX=4\n"), true).unwrap();
         let frame = Runtime::default().render(&untouched.definitions, &BTreeMap::new(), 0.0, 0.0).unwrap().remove(0);
