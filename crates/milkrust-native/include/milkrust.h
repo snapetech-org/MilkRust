@@ -43,7 +43,8 @@ int milkrust_set_clock(milkrust_handle handle, int32_t year, uint32_t month,
                        uint32_t day, uint32_t weekday, uint32_t hour,
                        uint32_t minute, uint32_t second, uint32_t milliseconds);
 /* Supply per-frame mouse state on the render thread. Coordinates are normalized
- * to [0,1]; deltas are normalized by the host viewport. */
+ * to [0,1]; deltas are normalized by the host viewport. Rising button edges are
+ * latched through one successful render, including down/up pairs between frames. */
 int milkrust_set_mouse(milkrust_handle handle, int32_t mouse_down, double mouse_x,
                        double mouse_y, double mouse_dx, double mouse_dy);
 /* Interleaved float stereo at 44100 Hz. At most 4096 frames/call. A new generation
