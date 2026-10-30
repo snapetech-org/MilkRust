@@ -74,20 +74,26 @@ implementation is incorporated.
 
 The WebGL and native GL/GLES renderers consume the saved pattern name, progress,
 direction and five saved random values. The 30 MD3 `(a,c)` blend-mask formulas
-are implemented on the documented 64x48 vertex grid with aspect correction,
-saved progress and the random block. These formulas are a clean-room port of the
-behavioral implementation/specification in M0Rf30/lactea; its MIT attribution
-is retained in `crates/milkrust-core/THIRD_PARTY_NOTICES.md`. Hosts upload the
-32-bit fixed-point vertex alpha values as packed RGBA8UI and interpolate the
-original triangles in the native and browser shaders. The
-Canvas fallback rejects spatial patterns instead of silently showing a uniform
+are implemented on the documented 64x48-cell mesh (65x49 vertices), with aspect
+correction, saved progress and the random block. These formulas are a clean-room
+port of the behavioral implementation/specification in M0Rf30/lactea; its MIT
+attribution is retained in `crates/milkrust-core/THIRD_PARTY_NOTICES.md`. Hosts
+upload the 32-bit fixed-point vertex alpha values as packed RGBA8UI and
+interpolate the original triangles in the native and browser shaders. The
+`all_saved_pattern_meshes_match_reference_vertices` unit control checks sampled
+values for all 30 patterns against Lactea's published 4x2 reference table,
+including the direction-sensitive variants. It exercises the production
+generator on a small grid, not an official MilkDrop3 image capture. The Canvas
+fallback rejects spatial patterns instead of silently showing a uniform
 cross-fade. Saved sprite blocks execute on native GL/GLES and WebGL; see
 [EMBEDDED_SPRITES.md](EMBEDDED_SPRITES.md).
 
 Bounded `NAME=` metadata and well-formed trailing sprite blocks are preserved.
 A trailing sprite block executes only when the wrapper header explicitly
-contains `sprite=1`; an absent flag or `sprite=0` preserves the block without
-execution. Unknown flag values, unmatched/nested blocks and unrelated trailer
+contains `sprite=1`; duplicate `sprite` records use the last header value, and
+records inside either preset body do not change that gate. An absent flag or
+`sprite=0` preserves the block without execution. Unknown flag values,
+unmatched/nested blocks and unrelated trailer
 records remain gated. The wrapper enforces the same 2 MiB source budget when
 called independently of the preset importer.
 
