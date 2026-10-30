@@ -37,6 +37,10 @@ int milkrust_texture(milkrust_handle handle, const uint8_t* name, size_t name_le
  * sprites use sprite-local time. */
 int milkrust_texture_gif(milkrust_handle handle, const uint8_t* name, size_t name_length,
                          const uint8_t* encoded, size_t length);
+/* Upload a bounded encoded PNG, including APNG. Animated frames and timing
+ * are decoded and composited by the bounded shared Rust decoder. */
+int milkrust_texture_png(milkrust_handle handle, const uint8_t* name, size_t name_length,
+                         const uint8_t* encoded, size_t length);
 /* Supply validated local wall-clock fields for the next render. Refresh on the
  * render thread; weekday is Sunday=0 and milliseconds is 0..999. */
 int milkrust_set_clock(milkrust_handle handle, int32_t year, uint32_t month,
