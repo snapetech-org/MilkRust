@@ -150,6 +150,278 @@ fn resource_struct_types(tokens: &[String]) -> BTreeSet<String> {
     }
     structures
 }
+
+fn resource_only_struct_types(tokens: &[String]) -> BTreeSet<String> {
+    let mut definitions = Vec::<(String, usize, usize)>::new();
+    let mut index = 0usize;
+    let mut brace_depth = 0i32;
+    while index + 2 < tokens.len() {
+        if tokens[index] == "{" { brace_depth += 1; index += 1; continue; }
+        if tokens[index] == "}" { brace_depth -= 1; index += 1; continue; }
+        if brace_depth == 0 && tokens[index] == "struct"
+            && tokens.get(index + 1).is_some_and(|name| is_identifier(name)) {
+            let name = tokens[index + 1].clone();
+            let Some(open_offset) = tokens[index + 2..].iter().position(|token| token == "{") else {
+                index += 2;
+                continue;
+            };
+            let open = index + 2 + open_offset;
+            let mut nested = 1i32;
+            let mut close = open + 1;
+            while close < tokens.len() && nested > 0 {
+                if tokens[close] == "{" { nested += 1; }
+                if tokens[close] == "}" { nested -= 1; }
+                close += 1;
+            }
+            if nested == 0 {
+                definitions.push((name, open, close));
+                index = close;
+                continue;
+            }
+        }
+        index += 1;
+    }
+
+    let opaque_types = ["Texture1D", "Texture2D", "Texture3D", "SamplerState",
+        "SamplerComparisonState", "sampler", "sampler2D", "sampler3D"];
+    let mut resource_only = BTreeSet::new();
+    for _ in 0..=definitions.len() {
+        let mut additions = Vec::new();
+        for (name, open, close) in &definitions {
+            if resource_only.contains(name) { continue; }
+            let body = &tokens[*open + 1..*close - 1];
+            let mut statement_start = 0usize;
+            let mut valid = true;
+            let mut has_field = false;
+            while statement_start < body.len() {
+                let Some(end_offset) = body[statement_start..].iter().position(|token| token == ";") else {
+                    valid = false;
+                    break;
+                };
+                let statement = &body[statement_start..statement_start + end_offset];
+                statement_start += end_offset + 1;
+                let mut cursor = if statement.first().map(String::as_str) == Some("uniform") { 1 } else { 0 };
+                if cursor >= statement.len() { valid = false; break; }
+                let ty = statement[cursor].as_str();
+                let mut type_end = cursor + 1;
+                if statement.get(type_end).map(String::as_str) == Some("<") {
+                    let mut angle_depth = 0i32;
+                    while type_end < statement.len() {
+                        if statement[type_end] == "<" { angle_depth += 1; }
+                        if statement[type_end] == ">" { angle_depth -= 1; }
+                        if statement[type_end] == ">>" { angle_depth -= 2; }
+                        type_end += 1;
+                        if angle_depth <= 0 { break; }
+                    }
+                    if angle_depth > 0 { valid = false; break; }
+                }
+                let allowed_type = opaque_types.contains(&ty) || resource_only.contains(ty);
+                if !allowed_type { valid = false; break; }
+                cursor = type_end;
+                let mut declarators = 0usize;
+                loop {
+                    if !statement.get(cursor).is_some_and(|field| is_identifier(field)) {
+                        valid = false;
+                        break;
+                    }
+                    cursor += 1;
+                    while statement.get(cursor).map(String::as_str) == Some("[") {
+                        cursor += 1;
+                        let mut depth = 1i32;
+                        while cursor < statement.len() && depth > 0 {
+                            if statement[cursor] == "[" { depth += 1; }
+                            if statement[cursor] == "]" { depth -= 1; }
+                            cursor += 1;
+                        }
+                        if depth != 0 { valid = false; break; }
+                    }
+                    if !valid { break; }
+                    declarators += 1;
+                    if cursor == statement.len() { break; }
+                    if statement[cursor] != "," { valid = false; break; }
+                    cursor += 1;
+                }
+                if !valid || declarators == 0 { valid = false; break; }
+                has_field = true;
+            }
+            if valid && has_field && statement_start == body.len() {
+                additions.push(name.clone());
+            }
+        }
+        if additions.is_empty() { break; }
+        resource_only.extend(additions);
+    }
+    resource_only
+}
+
+fn global_resource_struct_instances(
+    tokens: &[String],
+    functions: &[Function],
+    resource_structs: &BTreeSet<String>,
+) -> BTreeMap<String, String> {
+    let mut instances = BTreeMap::new();
+    let mut index = 0usize;
+    while index < tokens.len() {
+        if let Some(function) = functions.iter().find(|function| function.span.start == index) {
+            index = function.span.end;
+            continue;
+        }
+        if tokens[index] == "{" {
+            if let Ok(end) = close_brace(tokens, index) { index = end; continue; }
+        }
+        if resource_structs.contains(&tokens[index])
+            && tokens.get(index + 1).is_some_and(|name| is_identifier(name))
+            && matches!(tokens.get(index + 2).map(String::as_str), Some(";") | Some("=")) {
+            instances.insert(tokens[index + 1].clone(), tokens[index].clone());
+        }
+        index += 1;
+    }
+    instances
+}
+
+fn declaration_of_name(tokens: &[String], index: usize, name: &str) -> bool {
+    if tokens.get(index).map(String::as_str) != Some(name)
+        || index == 0 || !is_identifier(&tokens[index - 1])
+        || matches!(tokens[index - 1].as_str(), "return" | "if" | "while" | "for" | "switch" | "case" | "discard")
+        || tokens[index - 1] == "."
+    {
+        return false;
+    }
+    matches!(tokens.get(index + 1).map(String::as_str), Some(";") | Some("=") | Some("[") | Some(","))
+}
+
+fn access_chain_end(tokens: &[String], start: usize) -> usize {
+    let mut index = start + 1;
+    loop {
+        if tokens.get(index).map(String::as_str) == Some(".")
+            && tokens.get(index + 1).is_some_and(|field| is_identifier(field)) {
+            index += 2;
+            continue;
+        }
+        if tokens.get(index).map(String::as_str) == Some("[") {
+            index += 1;
+            let mut depth = 1i32;
+            while index < tokens.len() && depth > 0 {
+                if tokens[index] == "[" { depth += 1; }
+                if tokens[index] == "]" { depth -= 1; }
+                index += 1;
+            }
+            if depth == 0 { continue; }
+        }
+        return index;
+    }
+}
+
+fn normalize_static_local_resource_aliases(tokens: &mut Vec<String>) -> Result<(), String> {
+    let functions = declarations(tokens)?;
+    let resource_only = resource_only_struct_types(tokens);
+    if resource_only.is_empty() { return Ok(()); }
+    let globals = global_resource_struct_instances(tokens, &functions, &resource_only);
+    if globals.is_empty() { return Ok(()); }
+
+    let mut scopes = Vec::<(Range<usize>, Option<usize>)>::new();
+    for (function_index, function) in functions.iter().enumerate() {
+        let Some(body) = &function.body else { continue; };
+        let body_start = function.span.end.checked_sub(body.len()).ok_or("Invalid HLSL function body range")?;
+        scopes.push((body_start..function.span.end, Some(function_index)));
+    }
+    let mut index = 0usize;
+    while index + 1 < tokens.len() {
+        if tokens[index] == "shader_body" && tokens[index + 1] == "{" {
+            let end = close_brace(tokens, index + 1)?;
+            scopes.push((index + 1..end, None));
+            index = end;
+        } else {
+            index += 1;
+        }
+    }
+
+    let mut edits = Vec::<(Range<usize>, Vec<String>)>::new();
+    for (scope, function_index) in scopes {
+        let mut depth = 0i32;
+        let mut candidates = Vec::<(usize, usize, String, String, String)>::new();
+        let mut index = scope.start;
+        while index < scope.end {
+            if tokens[index] == "{" { depth += 1; index += 1; continue; }
+            if tokens[index] == "}" { depth -= 1; index += 1; continue; }
+            if depth == 1 && resource_only.contains(&tokens[index])
+                && tokens.get(index + 1).is_some_and(|name| is_identifier(name))
+                && tokens.get(index + 2).map(String::as_str) == Some("=")
+                && tokens.get(index + 3).is_some_and(|global| globals.contains_key(global))
+                && tokens.get(index + 4).map(String::as_str) == Some(";") {
+                let ty = tokens[index].clone();
+                let name = tokens[index + 1].clone();
+                let target = tokens[index + 3].clone();
+                candidates.push((index, index + 5, ty, name, target));
+                index += 5;
+                continue;
+            }
+            index += 1;
+        }
+        if candidates.is_empty() { continue; }
+        let mut counts = BTreeMap::<String, usize>::new();
+        for (_, _, _, name, _) in &candidates { *counts.entry(name.clone()).or_default() += 1; }
+
+        let parameter_names: BTreeSet<String> = function_index
+            .and_then(|function_index| functions.get(function_index))
+            .into_iter()
+            .flat_map(|function| function.parameters.iter())
+            .filter_map(|parameter| {
+                let end = parameter.iter().position(|token| matches!(token.as_str(), ":" | "=" | "["))
+                    .unwrap_or(parameter.len());
+                parameter[..end].last().filter(|name| is_identifier(name)).cloned()
+            })
+            .collect();
+
+        for (declaration_start, declaration_end, ty, name, target) in candidates {
+            if counts.get(&name).copied() != Some(1)
+                || globals.get(&target) != Some(&ty)
+                || parameter_names.contains(&name)
+                || parameter_names.contains(&target) {
+                continue;
+            }
+            let has_shadow = (scope.start..scope.end).any(|index| {
+                (index < declaration_start || index >= declaration_end)
+                    && declaration_of_name(tokens, index, &name)
+            });
+            let target_shadowed = (scope.start..scope.end).any(|index| {
+                declaration_of_name(tokens, index, &target)
+            });
+            let mut mutated = false;
+            for index in scope.clone() {
+                if (declaration_start..declaration_end).contains(&index)
+                    || tokens[index] != name || (index > 0 && tokens[index - 1] == ".") {
+                    continue;
+                }
+                let end = access_chain_end(tokens, index);
+                if matches!(tokens.get(end).map(String::as_str), Some("=") | Some("+=") | Some("-=")
+                    | Some("*=") | Some("/=") | Some("%=") | Some("&=") | Some("|=")
+                    | Some("^=") | Some("<<=") | Some(">>=") | Some("++") | Some("--"))
+                    || index > scope.start && matches!(tokens[index - 1].as_str(), "++" | "--") {
+                    mutated = true;
+                    break;
+                }
+            }
+            if has_shadow || target_shadowed || mutated { continue; }
+
+            edits.push((declaration_start..declaration_end, Vec::new()));
+            for index in scope.clone() {
+                if (declaration_start..declaration_end).contains(&index)
+                    || tokens[index] != name || (index > 0 && tokens[index - 1] == ".") {
+                    continue;
+                }
+                edits.push((index..index + 1, vec![target.clone()]));
+            }
+        }
+    }
+
+    edits.sort_by(|left, right| right.0.start.cmp(&left.0.start));
+    for (range, replacement) in edits {
+        tokens.splice(range, replacement);
+    }
+    Ok(())
+}
+
 fn opaque_name(parameter: &[String], resource_structs: &BTreeSet<String>) -> Result<Option<String>, String> {
     let first = parameter.iter().position(|t| !matches!(t.as_str(), "in" | "const" | "uniform" | "out" | "inout"));
     let Some(first) = first else { return Ok(None); };
@@ -314,7 +586,7 @@ pub(super) fn specialize(tokens: &mut Vec<String>) -> Result<(), String> {
     // Preserve the existing typed opaque-parameter path (including overloads)
     // when no initialized state needs forwarding through a global alias.
     let resource_structs = resource_struct_types(tokens);
-    let functions = declarations(tokens)?;
+    let mut functions = declarations(tokens)?;
     let has_resource_struct_parameter = functions.iter().flat_map(|function| &function.parameters).any(|parameter| {
         let first = parameter.iter().position(|token| !matches!(token.as_str(), "in" | "const" | "uniform" | "out" | "inout"));
         first.and_then(|index| parameter.get(index)).is_some_and(|ty| resource_structs.contains(ty))
@@ -323,6 +595,8 @@ pub(super) fn specialize(tokens: &mut Vec<String>) -> Result<(), String> {
         || matches!(token.as_str(), "SamplerState" | "SamplerComparisonState")
             && matches!(tokens.get(index + 2).map(String::as_str), Some("{") | Some("=")));
     if !has_static_state { return Ok(()); }
+    normalize_static_local_resource_aliases(tokens)?;
+    functions = declarations(tokens)?;
     let mut templates = BTreeMap::<String, Vec<Template>>::new();
     for function in functions.iter().filter(|f| f.body.is_some()) {
         let opaque = function.parameters.iter().map(|p| opaque_name(p, &resource_structs)).collect::<Result<Vec<_>, _>>()?;

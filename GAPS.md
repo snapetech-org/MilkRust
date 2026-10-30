@@ -205,7 +205,7 @@ render frames, resolve external texture packs, or establish fidelity.
   still rejects texture types outside those three dimensions, integer/non-color
   texture element types, resource arrays in function scopes, nested resource-struct aggregate initializers,
   aggregate resource-struct initializers outside the bounded global alias form,
-  and resource-bearing struct parameters with local/dynamic arguments. Comparison methods outside the bounded Texture2D
+  and resource-bearing struct arguments outside the simple immutable local-copy of a global resource-only struct case; uninitialized, computed, mutated, shadowed and nested-scope locals remain explicit failures. Comparison methods outside the bounded Texture2D
   `GatherCmp`/`GatherCmpRed`/`GatherCmpGreen`/`GatherCmpBlue`/`GatherCmpAlpha` and Texture1D/Texture2D
   `SampleCmp`/`SampleCmpLevelZero` paths remain unsupported. Static `SamplerComparisonState` declarations lower supported
   comparison filters, all eight comparison functions and U/V/W
@@ -572,4 +572,9 @@ remains a historical snapshot until the full private-runner report is regenerate
 
 ## 2026-10-30 nested resource-struct source support
 
-The typed compiler now flattens scalar Texture1D/Texture2D/Texture3D resource fields through plain nested structs, records the original leaf shape, and lowers dotted access through an unambiguous global struct instance. Resource-bearing helper parameters specialize through the same global binding. Global resource arrays nested through plain structs now support literal and side-effect-free dynamic indices, with each layer bound through its flattened global field path. Native regression sources cover direct nested access, helper specialization, literal/dynamic array selection, binding reflection and rejection of nested aggregate initializers. Function-local resource arrays, nested sampler-state forwarding, local/dynamic struct arguments and nested aggregate initializers remain explicit failures. Compiler and render execution have not been run.
+The typed compiler now flattens scalar Texture1D/Texture2D/Texture3D resource fields through plain nested structs, records the original leaf shape, and lowers dotted access through an unambiguous global struct instance. Resource-bearing helper parameters specialize through the same global binding. Global resource arrays nested through plain structs now support literal and side-effect-free dynamic indices, with each layer bound through its flattened global field path. Native regression sources cover direct nested access, helper specialization, literal/dynamic array selection, binding reflection and rejection of nested aggregate initializers. Function-local resource arrays, nested sampler-state forwarding, uninitialized/computed/mutated/shadowed struct locals and nested aggregate initializers remain explicit failures. Simple immutable local copies of global resource-only structs are normalized before specialization. Compiler and render execution have not been run.
+
+
+## 2026-10-30 immutable local resource-struct aliases
+
+The HLSL helper pass now recognizes a simple local declaration that copies a global resource-only struct instance. When the type matches the global declaration and the local is not shadowed or mutated, it removes the opaque local value and substitutes the original global binding through the current function or shader body. Mixed numeric/resource structs, dynamic or aggregate initializers, local copies inside nested scopes, mutation, shadowing and uninitialized locals remain explicit failures. This source change has not been built or executed; compilation and rendering qualification remain open.
