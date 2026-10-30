@@ -272,10 +272,12 @@ signed overflow, invalid shifts, cyclic definitions and nonconstant bounds
 fail within the compiler's existing budgets. GLSL array extents are emitted as
 validated integers, independent of whether a readonly local is a GLSL constant.
 The `declarations.hlsl` pixel control and malformed-input cases are authored
-but unrun. Fixed arrays have one dimension; array aliases preserve their extent,
-and arrays inside structure fields remain supported. A second dimension,
-including one appended to an array typedef, is rejected because [ESSL 3.00
-forbids arrays of arrays](https://registry.khronos.org/OpenGL/specs/es/3.0/GLSL_ES_Specification_3.00.pdf).
+but unrun. Numeric/aggregate arrays support up to 16 dimensions and 4096 total
+array elements. Inner dimensions lower to canonical structs containing one
+array, preserving row slices, indexed writes, typedefs, grouped declarations,
+aggregate casts, defaults and function parameter/return types without emitting
+an ESSL array-of-arrays. Only the outer extent can be inferred. Array element
+resources use the separate bounded binding profile below.
 Common `Texture1D<T>`, `Texture2D<T>` and `Texture3D<T>` declarations with `float`, `half`,
 `min16float`, `min10float`, or their 1–4 component vector forms lower to the
 renderer's legacy RGBA sampler bindings. Sampling and `Load` results keep the
@@ -367,7 +369,7 @@ array/struct flattening and truncation, and per-component scalar conversion.
 Same-type struct/array copies preserve their type instead of generating an
 invalid GLSL scalar constructor. Aggregate expansion is limited to 4096 scalar
 components, in addition to the existing depth, operation, temporary and output
-budgets. Single-dimensional numeric arrays, direct global sampler
+budgets. Multidimensional numeric arrays, direct global sampler
 fields, and constant-index texture/sampler array fields on global struct
 instances are supported within the compiler budgets. Direct
 `Texture2D`/`Texture3D` float/half scalar and vector declarations and
@@ -402,3 +404,20 @@ the destination is a writable variable or selection. Readonly struct fields,
 array/vector/matrix selections and `const` parameters remain protected even
 when their GLSL declarations need runtime initialization. Dedicated invalid
 write cases are included in the unrun native suite.
+
+## Multidimensional array layout — 2026-10-30
+
+The typed AST retains HLSL rank and extents; the GLSL emitter uses one array
+per generated row struct. Index expressions are emitted once, including an
+`inout` row slice. Canonical names match complete inner shapes, so copies and
+function boundaries agree. Types are emitted in dependency order before
+helpers, and grouped declarations/loop initializers retain their own row type
+and lexical scope. Constant bounds and total storage are checked before GPU
+compilation. The `arrays.hlsl` control covers rows, three dimensions, arrays of
+structs/matrices, inferred/typedef dimensions, casts, returns, defaults and
+side-effecting indices. It is registered in native and browser compiler checks,
+but remains unrun under the source-only restriction.
+
+Representation follows ESSL 3.00 sections 4.1.8–4.1.9 and 6.1: arrays and structs
+can contain one another, and explicitly sized arrays can cross function
+boundaries. It does not enable opaque resource arrays through numeric layout.

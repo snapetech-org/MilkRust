@@ -151,6 +151,16 @@ initialization now constructs these emulated matrices from typed zero rows.
 The aggregate control covers signed/unsigned/Boolean matrices, trailing fields,
 flattening, casts and global defaults. These controls are authored and unrun.
 
+## Multidimensional numeric arrays — 2026-10-30
+
+HLSL arrays now retain up to 16 dimensions under a 4096-element storage budget.
+The ES300 emitter represents inner rows with structs, including row slices,
+indexed writes, typedefs, function parameters/returns, initialization/casts,
+and arrays of structs/matrices. Generated type definitions precede helpers;
+grouped variables and loop initializers keep independent row types. Native
+and browser numerical controls are authored but unrun. Opaque resources still
+follow the separate binding limits listed below.
+
 ## Public corpus source inventory — 2026-10-29
 
 A filesystem inventory of `content/community-unlicensed` found 14,576 preset
@@ -188,7 +198,7 @@ render frames, resolve external texture packs, or establish fidelity.
   It still rejects texture types outside those three dimensions, integer/non-color texture
   element types, dynamically indexed/grouped texture or sampler arrays,
   `Texture3D`/`sampler3D` arrays, resource arrays in function scopes or nested
-  resource-bearing structs, numeric arrays-of-arrays, initialized resource
+  resource-bearing structs, initialized resource
   instances, resource-bearing struct parameters, custom sampler-state
   definitions, comparison methods and gather methods. Declared direct
   `SamplerState` fields are accepted as method arguments; custom per-object

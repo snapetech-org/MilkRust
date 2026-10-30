@@ -93,6 +93,12 @@ mod tests {
     }
 
     #[test]
+    fn multidimensional_arrays_preserve_rows_and_function_contracts() {
+        compile(include_str!("../tests/fixtures/arrays.hlsl"), "main")
+            .expect("array row control must reach GLSL generation");
+    }
+
+    #[test]
     fn user_identifiers_do_not_collide_with_glsl_keywords_or_intrinsics() {
         compile(include_str!("../tests/fixtures/identifiers.hlsl"), "main")
             .expect("identifier control must reach GLSL generation");
@@ -113,6 +119,10 @@ mod tests {
             "float2 values[]={1,2,3};",
             "float3 values={1};",
             "float values[4096]={float4(1,2,3,4)};",
+            "float values[65][65];",
+            "float values[2][];",
+            "float values[2][0];",
+            "typedef float Row[3]; Row values[2048];",
             "const int2 n=int2(2,3); float values[n[2]];",
             "const int n[2]={2,3}; float values[n[-1]];",
             "const int2 n=int2(2147483647,1)+int2(1,0); float values[n.x];",

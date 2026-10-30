@@ -14,6 +14,7 @@
 #include "HLSLTree.h"
 #include <vector>
 #include <map>
+#include <set>
 #include <string>
 
 namespace M4
@@ -98,6 +99,9 @@ private:
     void OutputEntryCaller(HLSLFunction* entryFunction);
     void OutputDeclaration(HLSLDeclaration* declaration, bool skipInitializer = false);
     void OutputDefaultValue(const HLSLType& type);
+    void OutputTypeDefinition(const HLSLType& type);
+    std::set<std::string> m_typeDefinitions;
+    std::set<std::string> m_pendingTypeDefinitions;
 	void OutputDeclarationType( const HLSLType& type );
 	void OutputDeclarationBody( const HLSLType& type, const char* name );
     void OutputDeclaration(const HLSLType& type, const char* name);

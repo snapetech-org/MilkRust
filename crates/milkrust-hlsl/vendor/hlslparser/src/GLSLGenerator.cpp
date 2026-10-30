@@ -42,6 +42,10 @@ const char* GLSLGenerator::s_reservedWord[] =
 
 static const char* GetTypeName(const HLSLType& type)
 {
+    if (type.arrayRank > 1) {
+        if (!type.arrayElementNames[0]) throw std::invalid_argument("Missing HLSL array row layout");
+        return type.arrayElementNames[0];
+    }
     if (IsMatrixType(type.baseType)) {
         const auto scalar = ScalarBaseType[type.baseType];
         const int rows = MatrixRows(type.baseType), columns = NumericWidth(type.baseType);
@@ -476,6 +480,27 @@ bool GLSLGenerator::Generate(HLSLTree* tree, Target target, Version version, con
             m_writer.WriteLine(0, "out vec4 rast_FragData[%d];", m_outputTargets);
     }
 
+    // Structs (including array row wrappers) must precede helpers and globals
+    // that use them. Keep type dependencies in order instead of placing helpers
+    // before their parameter/return struct definitions.
+    class Types : public HLSLTreeVisitor {
+    public:
+        std::vector<HLSLType> values;
+        void VisitType(HLSLType& type) override {
+            CheckBudget();
+            if (type.arrayRank > 1 || type.baseType == HLSLBaseType_UserDefined) values.push_back(type);
+        }
+        void VisitStruct(HLSLStruct* node) override {
+            HLSLType type(HLSLBaseType_UserDefined); type.typeName = node->name;
+            VisitType(type); HLSLTreeVisitor::VisitStruct(node);
+        }
+        void VisitConstructorExpression(HLSLConstructorExpression* node) override {
+            VisitType(node->type); HLSLTreeVisitor::VisitConstructorExpression(node);
+        }
+    } types;
+    types.VisitRoot(root);
+    m_typeDefinitions.clear(); m_pendingTypeDefinitions.clear();
+    for (const auto& type : types.values) OutputTypeDefinition(type);
     const size_t helperOffset = strlen(m_writer.GetResult());
     OutputStatements(0, statement);
     OutputEntryCaller(entryFunction);
@@ -984,6 +1009,7 @@ void GLSLGenerator::OutputExpression(HLSLExpression* expression, const HLSLType*
 
         OutputExpression(arrayAccess->array);
         m_writer.Write("["); OutputExpression(arrayAccess->index, &kIntType); m_writer.Write("]");
+        if (arrayAccess->array->expressionType.arrayRank > 1) m_writer.Write(".elements");
 
     }
     else if (expression->nodeType == HLSLNodeType_FunctionCall)
@@ -1209,38 +1235,31 @@ void GLSLGenerator::OutputStatements(int indent, HLSLStatement* statement, const
                 statement = statement->nextStatement;
                 continue;
             }
-            const bool deferred = indent == 0 && !IsSamplerType(declaration->type.baseType) &&
-                (m_milkdropGlobals || declaration->assignment != NULL) && !DirectConstantDeclaration(declaration);
-
             // GLSL doesn't seem have texture uniforms, so just ignore them.
-            if (declaration->type.baseType != HLSLBaseType_Texture)
+            for (auto* item = declaration; item; item = item->nextDeclaration)
             {
-                m_writer.BeginLine(indent, declaration->fileName, declaration->line);
+                if (item->type.baseType == HLSLBaseType_Texture) continue;
+                const bool deferred = indent == 0 && !IsSamplerType(item->type.baseType) &&
+                    (m_milkdropGlobals || item->assignment != NULL) && !DirectConstantDeclaration(item);
+                // Grouped HLSL declarators can have different array row types.
+                // Keep a separate declaration/initializer record for each one.
+                auto* single = m_tree->AddNode<HLSLDeclaration>(item->fileName, item->line);
+                *single = *item; single->nextDeclaration = NULL; single->nextStatement = NULL;
+                m_writer.BeginLine(indent, item->fileName, item->line);
                 if (indent == 0)
                 {
                     // At the top level, we need the "uniform" keyword.
-                    if (!deferred && (declaration->type.flags & (HLSLTypeFlag_Static | HLSLTypeFlag_Const)) == 0)
+                    if (!deferred && (item->type.flags & (HLSLTypeFlag_Static | HLSLTypeFlag_Const)) == 0)
                         m_writer.Write("uniform ");
                 }
-                OutputDeclaration(declaration, deferred);
+                OutputDeclaration(single, deferred);
                 m_writer.EndLine(";");
-                if (deferred) m_globalInitializers.push_back(declaration);
+                if (deferred) m_globalInitializers.push_back(single);
             }
         }
         else if (statement->nodeType == HLSLNodeType_Struct)
         {
-            HLSLStruct* structure = static_cast<HLSLStruct*>(statement);
-            m_writer.WriteLine(indent, "struct %s {", structure->name);
-            HLSLStructField* field = structure->field;
-            while (field != NULL)
-            {
-                m_writer.BeginLine(indent + 1, field->fileName, field->line);
-                OutputDeclaration(field->type, field->name);
-                m_writer.Write(";");
-                m_writer.EndLine();
-                field = field->nextField;
-            }
-            m_writer.WriteLine(indent, "};");
+            // Emitted with its dependencies before helper functions.
         }
         else if (statement->nodeType == HLSLNodeType_Buffer)
         {
@@ -1257,7 +1276,10 @@ void GLSLGenerator::OutputStatements(int indent, HLSLStatement* statement, const
             const char* returnTypeName = GetTypeName(function->returnType);
 
             m_writer.BeginLine(indent, function->fileName, function->line);
-            m_writer.Write("%s %s(", returnTypeName, functionName);
+            m_writer.Write("%s", returnTypeName);
+            if (function->returnType.array)
+                m_writer.Write("[%d]", AggregateArrayExtent(*m_tree, function->returnType));
+            m_writer.Write(" %s(", functionName);
 
             OutputArguments(function->argument);
 
@@ -1345,12 +1367,21 @@ void GLSLGenerator::OutputStatements(int indent, HLSLStatement* statement, const
         else if (statement->nodeType == HLSLNodeType_ForStatement)
         {
             HLSLForStatement* loop = static_cast<HLSLForStatement*>(statement);
+            if (loop->initialization) {
+                // GLSL cannot mix distinct row-wrapper types in one for
+                // declarator. Preserve the loop's scope around separate locals.
+                m_writer.WriteLine(indent, "{");
+                for (auto* item = loop->initialization; item; item = item->nextDeclaration) {
+                    HLSLDeclaration single = *item; single.nextDeclaration = NULL;
+                    m_writer.BeginLine(indent + 1); OutputDeclaration(&single); m_writer.EndLine(";");
+                }
+                ++indent;
+            }
             m_writer.BeginLine(indent, loop->fileName, loop->line);
             if (loop->postTest) m_writer.Write("do {");
             else {
                 m_writer.Write("for (");
-                if (loop->initialization) OutputDeclaration(loop->initialization);
-                else if (loop->initializationExpression) OutputExpression(loop->initializationExpression);
+                if (loop->initializationExpression) OutputExpression(loop->initializationExpression);
                 m_writer.Write("; ");
                 if (loop->condition) OutputExpression(loop->condition, &kBoolType);
                 m_writer.Write("; ");
@@ -1364,6 +1395,7 @@ void GLSLGenerator::OutputStatements(int indent, HLSLStatement* statement, const
                 m_writer.BeginLine(indent); m_writer.Write("} while (");
                 OutputExpression(loop->condition, &kBoolType); m_writer.EndLine(");");
             } else m_writer.WriteLine(indent, "}");
+            if (loop->initialization) m_writer.WriteLine(--indent, "}");
         }
         else if (statement->nodeType == HLSLNodeType_SwitchStatement) {
             HLSLSwitchStatement* node = static_cast<HLSLSwitchStatement*>(statement);
@@ -2077,15 +2109,51 @@ void GLSLGenerator::OutputDeclaration(HLSLDeclaration* declaration, bool skipIni
 	}
 }
 
+void GLSLGenerator::OutputTypeDefinition(const HLSLType& type)
+{
+    DepthGuard depth;
+    if (type.arrayRank > 1) {
+        const std::string name = GetTypeName(type);
+        const std::string key = "array:" + name;
+        if (m_typeDefinitions.count(key)) return;
+        HLSLType element = type; element.DropArrayDimension();
+        element.flags = 0;
+        OutputTypeDefinition(element);
+        m_writer.WriteLine(0, "struct %s {", name.c_str());
+        m_writer.BeginLine(1); OutputDeclaration(element, "elements"); m_writer.EndLine(";");
+        m_writer.WriteLine(0, "};");
+        m_typeDefinitions.insert(key);
+    } else if (type.baseType == HLSLBaseType_UserDefined) {
+        const std::string key = std::string("struct:") + type.typeName;
+        if (m_typeDefinitions.count(key)) return;
+        if (!m_pendingTypeDefinitions.insert(key).second)
+            throw std::invalid_argument("Recursive HLSL structure layout");
+        auto* structure = m_tree->FindGlobalStruct(type.typeName);
+        if (!structure) throw std::invalid_argument("Unknown HLSL structure layout");
+        for (auto* field = structure->field; field; field = field->nextField)
+            OutputTypeDefinition(field->type);
+        m_writer.WriteLine(0, "struct %s {", structure->name);
+        for (auto* field = structure->field; field; field = field->nextField) {
+            m_writer.BeginLine(1); OutputDeclaration(field->type, field->name); m_writer.EndLine(";");
+        }
+        m_writer.WriteLine(0, "};");
+        m_pendingTypeDefinitions.erase(key);
+        m_typeDefinitions.insert(key);
+    }
+}
+
 void GLSLGenerator::OutputDefaultValue(const HLSLType& type)
 {
     DepthGuard milkrustDepth;
     if (type.array) {
         const int count = AggregateArrayExtent(*m_tree, type);
         HLSLType element = type; element.DropArrayDimension();
-        m_writer.Write("%s[](", GetTypeName(element));
+        m_writer.Write("%s[](", GetTypeName(type));
         for (int i=0; i<count; ++i) {
-            CheckBudget(); if (i) m_writer.Write(", "); OutputDefaultValue(element);
+            CheckBudget(); if (i) m_writer.Write(", ");
+            if (type.arrayRank > 1) m_writer.Write("%s(", GetTypeName(type));
+            OutputDefaultValue(element);
+            if (type.arrayRank > 1) m_writer.Write(")");
         }
         m_writer.Write(")");
     } else if (type.baseType == HLSLBaseType_UserDefined) {
@@ -2136,7 +2204,7 @@ void GLSLGenerator::OutputDeclarationBody( const HLSLType& type, const char* nam
 	else
 	{
 		m_writer.Write( "%s", GetSafeIdentifierName( name ) );
-		for (int i = 0; i < type.arrayRank; ++i) {
+        for (int i = 0; i < std::min(type.arrayRank, 1); ++i) {
 			m_writer.Write("[");
 			if (type.arraySizes[i] != NULL) {
 				int extent = 0;

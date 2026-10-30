@@ -8,7 +8,8 @@ static void AggregateValues(HLSLTree& tree, const HLSLType& type,
         const int count = AggregateArrayExtent(tree, type);
         HLSLType element = type; element.DropArrayDimension();
         for (int i = 0; i < count; ++i)
-            AggregateValues(tree, element, value + "[" + std::to_string(i) + "]", out);
+            AggregateValues(tree, element, value + "[" + std::to_string(i) + "]" +
+                (type.arrayRank > 1 ? ".elements" : ""), out);
     } else if (type.baseType == HLSLBaseType_UserDefined) {
         auto* structure = tree.FindGlobalStruct(type.typeName);
         if (!structure || !structure->field) throw std::invalid_argument("Invalid HLSL aggregate structure");
@@ -34,7 +35,11 @@ static std::string AggregateValue(HLSLTree& tree, const HLSLType& type,
         const int count = AggregateArrayExtent(tree, type);
         result += "[" + std::to_string(count) + "]";
         HLSLType element = type; element.DropArrayDimension();
-        for (int i = 0; i < count; ++i) elements.push_back(AggregateValue(tree, element, values, index));
+        for (int i = 0; i < count; ++i) {
+            auto value = AggregateValue(tree, element, values, index);
+            if (type.arrayRank > 1) value = std::string(GetTypeName(type)) + "(" + value + ")";
+            elements.push_back(value);
+        }
     } else if (type.baseType == HLSLBaseType_UserDefined) {
         auto* structure = tree.FindGlobalStruct(type.typeName);
         if (!structure || !structure->field) throw std::invalid_argument("Invalid HLSL aggregate structure");

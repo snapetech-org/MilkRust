@@ -413,7 +413,10 @@ struct HLSLType
         array       = false;
         arraySize   = NULL;
         arrayRank   = 0;
-        for (int i = 0; i < MaxArrayRank; ++i) arraySizes[i] = NULL;
+        for (int i = 0; i < MaxArrayRank; ++i) {
+            arraySizes[i] = NULL;
+            arrayElementNames[i] = NULL;
+        }
         flags       = 0;
         addressSpace = HLSLAddressSpace_Undefined;
     }
@@ -424,6 +427,8 @@ struct HLSLType
     HLSLExpression*     arraySize;
     int                 arrayRank;
     HLSLExpression*     arraySizes[MaxArrayRank];
+    // Generated ES300 row-wrapper names; HLSL type/rank stay unchanged.
+    const char*         arrayElementNames[MaxArrayRank];
     int                 flags;
     HLSLAddressSpace    addressSpace;
 
@@ -431,8 +436,12 @@ struct HLSLType
     {
         if (arrayRank >= MaxArrayRank) throw std::length_error("HLSL array rank limit exceeded");
         if (position < 0 || position > arrayRank) throw std::out_of_range("Invalid HLSL array dimension");
-        for (int i = arrayRank; i > position; --i) arraySizes[i] = arraySizes[i - 1];
+        for (int i = arrayRank; i > position; --i) {
+            arraySizes[i] = arraySizes[i - 1];
+            arrayElementNames[i] = arrayElementNames[i - 1];
+        }
         arraySizes[position] = size;
+        arrayElementNames[position] = NULL;
         ++arrayRank;
         array = true;
         arraySize = arraySizes[0];
@@ -440,14 +449,21 @@ struct HLSLType
     void DropArrayDimension()
     {
         if (arrayRank <= 0) return;
-        for (int i = 1; i < arrayRank; ++i) arraySizes[i - 1] = arraySizes[i];
+        for (int i = 1; i < arrayRank; ++i) {
+            arraySizes[i - 1] = arraySizes[i];
+            arrayElementNames[i - 1] = arrayElementNames[i];
+        }
         arraySizes[--arrayRank] = NULL;
+        arrayElementNames[arrayRank] = NULL;
         array = arrayRank != 0;
         arraySize = array ? arraySizes[0] : NULL;
     }
     void ClearArrayDimensions()
     {
-        for (int i = 0; i < arrayRank; ++i) arraySizes[i] = NULL;
+        for (int i = 0; i < arrayRank; ++i) {
+            arraySizes[i] = NULL;
+            arrayElementNames[i] = NULL;
+        }
         arrayRank = 0;
         array = false;
         arraySize = NULL;

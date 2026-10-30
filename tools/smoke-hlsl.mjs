@@ -7,6 +7,7 @@ import { chromium } from '@playwright/test';
 
 const root = resolve('pkg');
 const cases = [
+  { id: 'multidimensional-array-contract', shader: await readFile('crates/milkrust-hlsl/tests/fixtures/arrays.hlsl', 'utf8'), expected: [64,191,128] },
   { id: 'identifier-contract', shader: await readFile('crates/milkrust-hlsl/tests/fixtures/identifiers.hlsl', 'utf8'), expected: [64,191,128] },
   { id: 'declaration-contract', shader: await readFile('crates/milkrust-hlsl/tests/fixtures/declarations.hlsl', 'utf8'), expected: [128,191,64] },
   { id: 'aggregate-contract', shader: await readFile('crates/milkrust-hlsl/tests/fixtures/aggregates.hlsl', 'utf8'), expected: [191,128,64] },

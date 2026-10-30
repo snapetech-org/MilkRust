@@ -1709,15 +1709,11 @@ bool HLSLParser::ParseArraySuffix(HLSLType& type, bool allowUnsized)
 {
     int insertPosition = 0;
     while (Accept('[')) {
-        // GLSL ES 3.00 supports one-dimensional arrays but not arrays of
-        // arrays. Reject another declarator dimension, including dimensions
-        // inherited from a typedef, instead of emitting invalid ESSL.
-        if (insertPosition != 0 || type.arrayRank != 0) {
-            m_tokenizer.Error("Arrays of arrays are outside the ES300 profile"); return false;
-        }
+        // Preserve HLSL dimensions; the emitter represents each inner array
+        // as an ES300 struct containing one array, including typedef suffixes.
         HLSLExpression* size = NULL;
         if (Accept(']')) {
-            if (!allowUnsized || type.arrayRank != 0 || insertPosition != 0) {
+            if (!allowUnsized || insertPosition != 0) {
                 m_tokenizer.Error("An explicit array bound is required"); return false;
             }
         } else {
