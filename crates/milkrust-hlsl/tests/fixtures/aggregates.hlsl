@@ -1,6 +1,8 @@
 // Authored legacy aggregate control; expected RGB is (.75,.5,.25).
 struct Lane { float2 xy; int n; };
 struct Block { Lane lanes[2]; float2x2 basis; bool enabled; };
+struct Discrete { int2x2 signedValues; uint2x3 unsignedValues; bool2x2 flags; float tail; };
+Discrete discreteDefault;
 typedef float Pair[2];
 Block globalBlock = {float3(1,2,3), {4, {5,6}}, float2x2(7,8,9,10), 1};
 float2 pairOnce(inout int calls) { calls++; return float2(.25,.5); }
@@ -36,5 +38,14 @@ float4 main(float2 coord:TEXCOORD0):COLOR0 {
     const int matrixCount = (int)rows[1][1] - (int)rows._13;
     float matrixSelected[matrixCount] = {7,8};
     ok = ok && n==3 && selected[2]==3 && matrixSelected[1]==8;
+    Discrete discrete = {{{1,2},{3,4}}, {{5,6,7},{8,9,10}}, {{true,false},{false,true}}, 11};
+    float discreteFlat[15] = {discrete};
+    Discrete discreteCopy = (Discrete)discreteFlat;
+    Discrete discreteZero = (Discrete)0;
+    ok = ok && discreteCopy.signedValues._21==3 && discreteCopy.unsignedValues._23==10u;
+    ok = ok && discreteCopy.flags._11 && !discreteCopy.flags._21 && discreteCopy.tail==11;
+    ok = ok && discreteFlat[10]==1 && discreteFlat[14]==11;
+    ok = ok && discreteZero.signedValues._22==0 && !discreteZero.flags._22 && discreteZero.tail==0;
+    ok = ok && discreteDefault.unsignedValues._22==0u && !discreteDefault.flags._11;
     return ok ? float4(.75,.5,.25,1) : float4(1,0,0,1);
 }
