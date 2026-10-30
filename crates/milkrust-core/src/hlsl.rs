@@ -18,7 +18,7 @@ struct SamplerStateProfile {
     min_point: bool,
     mag_point: bool,
     mip: crate::resources::MipFilter,
-    wrap: [bool; 3],
+    wrap: [crate::resources::AddressMode; 3],
 }
 
 const LEGACY_SAMPLER_INTRINSICS: &[&str] = &[
@@ -42,7 +42,11 @@ impl SamplerStateProfile {
         } else {
             char::from(b'a' + (filter_code - 10) as u8)
         };
-        let address = self.wrap.iter().map(|wrap| if *wrap { 'w' } else { 'c' }).collect::<String>();
+        let address = self.wrap.iter().map(|mode| match mode {
+            crate::resources::AddressMode::Wrap => 'w',
+            crate::resources::AddressMode::Clamp => 'c',
+            crate::resources::AddressMode::Mirror => 'm',
+        }).collect::<String>();
         Ok(format!("sampler_hlsl_{filter}{address}_{resource}"))
     }
 }
@@ -52,14 +56,15 @@ fn parse_sampler_state_profile(tokens: &[String], open: usize) -> Result<(Sample
         return Err("Malformed HLSL SamplerState initializer".into());
     }
     let mut profile = SamplerStateProfile {
-        min_point: false, mag_point: false, mip: crate::resources::MipFilter::Linear, wrap: [true; 3],
+        min_point: false, mag_point: false, mip: crate::resources::MipFilter::Linear,
+        wrap: [crate::resources::AddressMode::Wrap; 3],
     };
     let mut seen = std::collections::BTreeSet::new();
     let mut cursor = open + 1;
     while cursor < tokens.len() && tokens[cursor] != "}" {
         let property = tokens[cursor].as_str();
         if !matches!(property, "Filter" | "AddressU" | "AddressV" | "AddressW") {
-            return Err(format!("HLSL SamplerState property {property} is outside the point/linear wrap/clamp profile"));
+            return Err(format!("HLSL SamplerState property {property} is outside the point/linear wrap/clamp/mirror profile"));
         }
         if !seen.insert(property.to_string()) {
             return Err(format!("Duplicate HLSL SamplerState property {property}"));
@@ -116,9 +121,10 @@ fn parse_sampler_state_profile(tokens: &[String], open: usize) -> Result<(Sample
             },
             "AddressU" | "AddressV" | "AddressW" => {
                 let wrap = match value.as_str() {
-                    "WRAP" => true,
-                    "CLAMP" => false,
-                    _ => return Err(format!("HLSL SamplerState address mode {value} is unsupported; use Wrap or Clamp")),
+                    "WRAP" => crate::resources::AddressMode::Wrap,
+                    "CLAMP" => crate::resources::AddressMode::Clamp,
+                    "MIRROR" => crate::resources::AddressMode::Mirror,
+                    _ => return Err(format!("HLSL SamplerState address mode {value} is unsupported; use Wrap, Clamp or Mirror")),
                 };
                 let axis = match property { "AddressU" => 0, "AddressV" => 1, _ => 2 };
                 profile.wrap[axis] = wrap;
@@ -145,7 +151,8 @@ fn parse_legacy_sampler_state(
         return Err("Malformed legacy HLSL sampler_state initializer".into());
     }
     let mut profile = SamplerStateProfile {
-        min_point: false, mag_point: false, mip: crate::resources::MipFilter::Linear, wrap: [true; 3],
+        min_point: false, mag_point: false, mip: crate::resources::MipFilter::Linear,
+        wrap: [crate::resources::AddressMode::Wrap; 3],
     };
     let mut seen = std::collections::BTreeSet::new();
     let mut resource = None;
@@ -204,9 +211,10 @@ fn parse_legacy_sampler_state(
             }
             "AddressU" | "AddressV" | "AddressW" => {
                 let wrap = match value.as_str() {
-                    "WRAP" => true,
-                    "CLAMP" => false,
-                    _ => return Err(format!("Legacy HLSL sampler_state address mode {value} is unsupported; use Wrap or Clamp")),
+                    "WRAP" => crate::resources::AddressMode::Wrap,
+                    "CLAMP" => crate::resources::AddressMode::Clamp,
+                    "MIRROR" => crate::resources::AddressMode::Mirror,
+                    _ => return Err(format!("Legacy HLSL sampler_state address mode {value} is unsupported; use Wrap, Clamp or Mirror")),
                 };
                 let axis = match property { "AddressU" => 0, "AddressV" => 1, _ => 2 };
                 profile.wrap[axis] = wrap;
