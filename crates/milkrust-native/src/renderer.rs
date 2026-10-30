@@ -566,6 +566,7 @@ impl Renderer {
         self.bind_texture(0, history);
         unsafe { (self.gl.generate_mipmap)(TEXTURE_2D); (self.gl.disable)(BLEND); }
         let mut source = history;
+        let mut source_size = (self.width, self.height);
         for (level, targets) in layer.blur.iter().enumerate() {
             let scale = 1u32 << (level + 1);
             let (width, height) = ((self.width / scale).max(1), (self.height / scale).max(1));
@@ -574,10 +575,20 @@ impl Renderer {
                 unsafe { (self.gl.bind_framebuffer)(FRAMEBUFFER, target.id); (self.gl.viewport)(0, 0, width as i32, height as i32); }
                 self.blur_program.bind(); self.blur_program.integer("previousFrame", 0);
                 let [scale, bias] = resources::blur_transform(frame, level, pass);
+                let (weights, offsets, normalization) = resources::blur_kernel(pass);
+                let edge = resources::blur_edge(frame, level, pass);
                 self.blur_program.vector2("blurTransform", scale, bias);
-                self.blur_program.vector2("blurStep", if pass == 0 { 1.0/width as f32 } else { 0.0 }, if pass == 1 { 1.0/height as f32 } else { 0.0 });
+                self.blur_program.vector2("sourceTexel", 1.0/source_size.0 as f32, 1.0/source_size.1 as f32);
+                self.blur_program.vector2("blurStep", if pass == 0 { 1.0/source_size.0 as f32 } else { 0.0 }, if pass == 1 { 1.0/source_size.1 as f32 } else { 0.0 });
+                self.blur_program.vector4("blurWeights", weights[0], weights[1], weights[2], weights[3]);
+                self.blur_program.vector4("blurOffsets", offsets[0], offsets[1], offsets[2], offsets[3]);
+                self.blur_program.float("blurWeightScale", normalization);
+                self.blur_program.vector4("blurEdge", edge[0], edge[1], edge[2], edge[3]);
+                self.blur_program.float("blurHorizontal", if pass == 0 { 1.0 } else { 0.0 });
+                unsafe { (self.gl.bind_sampler)(0, self.samplers.ids[2]); }
                 self.draw(0x0004, &quad())?;
                 source = target.texture.id;
+                source_size = (width, height);
             }
             self.bind_texture(0, source);
             unsafe { (self.gl.generate_mipmap)(TEXTURE_2D); }
