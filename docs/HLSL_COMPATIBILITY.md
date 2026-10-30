@@ -301,9 +301,17 @@ initializers accept `Filter = MIN_MAG_MIP_POINT` or
 `MIN_MAG_MIP_LINEAR`, plus `AddressU/V/W = Wrap` or `Clamp`. They lower to generated per-resource sampler bindings, with independent
 U/V/W Wrap or Clamp modes and point or linear min/mag/mip filtering. Declared
 state names and direct declared `SamplerState` fields remain valid method
-arguments; fields use the resource's default prefix. Dynamic state expressions,
-local or struct state initializers, anisotropic/mirror/border modes, and
-separate min/mag/mip filters remain unsupported. `Texture1D` sampling lowers to a 2D lookup at
+arguments; fields use the resource's default prefix. Legacy effect-file `sampler`,
+`sampler2D`, and `sampler3D` globals may initialize with `= sampler_state {}`.
+That subset accepts `Texture = <identifier>` (or a `sampler_*` variable as a
+fallback), matching effective `Point`/`Linear` min/mag/mip filters, and
+independent `AddressU/V/W = Wrap` or `Clamp` modes. An explicitly supplied
+filter applies to unspecified filter fields; if all are omitted, filtering
+defaults to linear. Unspecified address fields default to wrap. These legacy
+states lower to generated aliases when used as the first argument to a supported
+`tex*` intrinsic. Grouped declarations, dynamic state, helper/assignment escapes,
+local or struct initializers, anisotropic/mirror/border modes, and differing
+min/mag/mip filters remain unsupported. `Texture1D` sampling lowers to a 2D lookup at
 the center of the bound image row; use a one-row asset when the original shader
 expects true 1D storage. Global `Texture1D`/`Texture2D`/`Texture3D`
 and legacy `sampler`/`sampler2D`/`sampler3D` arrays with literal bounds
