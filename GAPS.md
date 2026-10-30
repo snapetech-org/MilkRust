@@ -1,6 +1,6 @@
 # MilkRust implementation and qualification ledger
 
-Updated 2026-10-29. This is the current ledger for PR #20. Older snapshots remain
+Updated 2026-10-30. This is the current ledger for PR #20. Older snapshots remain
 in git history. Source implementation, successful builds, visual conformance and
 release delivery are separate states. The user has now requested build work; the
 repository policy requires private ephemeral JIT runners, and this workspace has
@@ -58,6 +58,11 @@ run is recorded for this checkpoint.
   rectangular linear algebra, writable selections, converting function outputs,
   vector logic and legacy intrinsics. Bounded numeric/identifier parsing and
   round-trip float output have authored numerical controls; execution is unrun.
+- Global `Texture1D`/`Texture2D` resource arrays with literal bounds from 1
+  through 15 expand into separately named image bindings. Supported resource
+  methods with constant decimal indices use the existing sampler path and bind
+  assets as `<resource>_<index>`; dynamic/grouped arrays, `Texture3D` arrays
+  and arrays in structs or function scopes still fail closed.
 - The bounded WGSL expression path lowers floating scalar/vector HLSL `fmod` to
   signed WGSL remainder; its integer/boolean, advanced sampling and broader
   shader-language limits remain explicit.
@@ -170,9 +175,11 @@ render frames, resolve external texture packs, or establish fidelity.
   base/mip-level `GetDimensions` with full mip-chain level counts. `Texture1D`
   maps to the center row of a 2D image and needs a one-row asset for 1D parity.
   It still rejects texture types outside those three dimensions, integer/non-color texture
-  element types, resource arrays or arrays of arrays, initialized/nested
-  resource structs, resource-bearing struct parameters, custom sampler-state
-  definitions, comparison methods and gather methods. Declared direct
+  element types, dynamically indexed/grouped resource arrays, `Texture3D`
+  arrays, resource arrays inside structs or function scopes, numeric
+  arrays-of-arrays, initialized/nested resource structs, resource-bearing
+  struct parameters, custom sampler-state definitions, comparison methods and
+  gather methods. Declared direct
   `SamplerState` fields are accepted as method arguments; custom per-object
   filtering/addressing remains outside the binding model. The compiler remains a
   bounded pixel-shader profile, not all HLSL shader models. The separate WGSL
