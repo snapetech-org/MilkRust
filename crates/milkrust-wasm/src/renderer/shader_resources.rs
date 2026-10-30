@@ -6,12 +6,24 @@ use std::collections::BTreeMap;
 use wasm_bindgen::JsValue;
 use web_sys::{WebGl2RenderingContext as Gl, WebGlTexture, WebGlSampler, WebGlProgram, WebGlBuffer};
 
+fn renderer_noise_seed() -> u32 {
+    let ticks = js_sys::Date::now().max(0.0) as u64;
+    let entropy = (js_sys::Math::random() * 4_294_967_296.0) as u32;
+    let mut seed = ticks as u32 ^ (ticks >> 32) as u32 ^ entropy;
+    seed ^= seed >> 16;
+    seed = seed.wrapping_mul(0x7feb_352d);
+    seed ^= seed >> 15;
+    seed = seed.wrapping_mul(0x846c_a68b);
+    (seed ^ (seed >> 16)).max(1)
+}
+
 pub(super) struct ShaderResources {
     gl: Gl,
     program: WebGlProgram,
     buffer: WebGlBuffer,
     samplers: Vec<WebGlSampler>,
     noise: BTreeMap<String, (WebGlTexture, u32)>,
+    noise_runtime_seed: u32,
     blur: Vec<MilkRustFeedbackTargets>,
     history: Option<WebGlTexture>,
     size: (i32, i32),
@@ -27,7 +39,7 @@ impl ShaderResources {
             gl.delete_program(Some(&program)); return Err(JsValue::from_str("Blur buffer allocation failed"));
         }};
         let mut result = Self { gl: gl.clone(), program, buffer, samplers: Vec::new(),
-            noise: BTreeMap::new(), blur: Vec::new(), history: None, size: (0, 0) };
+            noise: BTreeMap::new(), noise_runtime_seed: renderer_noise_seed(), blur: Vec::new(), history: None, size: (0, 0) };
         for index in 0..resources::SAMPLER_VARIANTS {
             let sampler = gl.create_sampler().ok_or_else(|| JsValue::from_str("Sampler allocation failed"))?;
             let settings = resources::sampler_parameters(index)
@@ -73,7 +85,7 @@ impl ShaderResources {
                     let key = resources::base_name(name).to_string();
                     if self.noise.contains_key(&key) { continue; }
                     let volume = resources::texture_kind(name).is_volume();
-                    let (w, h, d, data) = resources::noise_texture(seed, volume);
+                    let (w, h, d, data) = resources::noise_texture_with_runtime_seed(seed, volume, self.noise_runtime_seed);
                     let texture = self.gl.create_texture().ok_or_else(|| JsValue::from_str("Noise texture allocation failed"))?;
                     let target = if volume { Gl::TEXTURE_3D } else { Gl::TEXTURE_2D };
                     self.gl.active_texture(Gl::TEXTURE0);

@@ -1,10 +1,33 @@
 //! Native GL/GLES execution of MilkRust's frame graph. Feedback and final
 //! composite are distinct passes; each double-preset layer owns two targets.
-use std::{collections::{BTreeMap, BTreeSet}, ffi::{c_void, CString}, ptr};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    ffi::{c_void, CString},
+    ptr,
+    sync::atomic::{AtomicU32, Ordering},
+    time::{SystemTime, UNIX_EPOCH},
+};
 use milkrust_core::{milk2, get_milkrust_texture_name_aliases, MilkRustCompositeFrame, MilkRustFrame, MilkRustFrameSet,
     MilkRustPrimitive, MilkRustPrimitiveMode, MilkRustDrawCommand, MilkRustShaderStage, MilkRustTexturedPrimitive, MilkRustTexturedPrimitiveMode};
 use crate::gl::*;
 use milkrust_core::resources::{self, TextureKind};
+
+fn renderer_noise_seed() -> u32 {
+    static SERIAL: AtomicU32 = AtomicU32::new(0);
+    let ticks = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos() as u64)
+        .unwrap_or_default();
+    let mut seed = ticks as u32
+        ^ (ticks >> 32) as u32
+        ^ std::process::id()
+        ^ SERIAL.fetch_add(1, Ordering::Relaxed);
+    seed ^= seed >> 16;
+    seed = seed.wrapping_mul(0x7feb_352d);
+    seed ^= seed >> 15;
+    seed = seed.wrapping_mul(0x846c_a68b);
+    (seed ^ (seed >> 16)).max(1)
+}
 
 const VERTEX: &str = "#version 300 es\nin vec2 position; in vec2 sourceUv; in vec4 vertexColor; out vec2 uv; out highp vec2 originalUv; out vec4 tint; void main(){ originalUv=position*0.5+0.5; uv=sourceUv; tint=vertexColor; gl_Position=vec4(position,0,1); gl_PointSize=1.0; }";
 const COPY_BODY: &str = "uniform sampler2D previousFrame; uniform float feedback; uniform float outputAlpha; uniform float classicDisplay; in vec2 uv; out vec4 outColor; void main(){vec2 sampleUv=classicWrap>0.5?fract(uv):clamp(uv,0.0,1.0); vec3 color=classicDisplay>0.5?milkrust_classic_display(previousFrame,uv):texture(previousFrame,sampleUv).rgb*feedback;outColor=vec4(color,outputAlpha*milkrust_transition_mask(uv));}";
@@ -185,7 +208,7 @@ impl Target {
 
 pub struct Renderer {
     sprite_program: Program, sprite_key_program: Program, sprite_keyed: BTreeMap<(String, u32), Target>, sprite_snapshot: Option<Texture>,
-    gl: Gl, gles: bool, copy: Program, color: Program, textured: Program, blur_program: Program, samplers: Samplers, noise: BTreeMap<String, (Texture, u32)>,
+    gl: Gl, gles: bool, copy: Program, color: Program, textured: Program, blur_program: Program, samplers: Samplers, noise: BTreeMap<String, (Texture, u32)>, noise_runtime_seed: u32,
     buffer: u32, vao: u32, max_texture: i32, texture_units: usize,
     width: u32, height: u32, capture: Option<(u32, u32, Target)>, layers: Vec<Layer>, textures: BTreeMap<String, TextureAsset>,
     transition_mask: Option<TransitionMask>,
@@ -242,7 +265,7 @@ impl Renderer {
             (gl.get_integer)(0x0D33, &mut max_texture); (gl.get_integer)(0x8872, &mut units);
             (gl.gen_buffers)(1, &mut buffer); (gl.gen_vertex_arrays)(1, &mut vao);
         }
-        let result = Self { sprite_program, sprite_key_program, sprite_keyed: BTreeMap::new(), sprite_snapshot: None, gl, gles, copy, color, textured, blur_program, samplers, noise: BTreeMap::new(), buffer, vao, max_texture, texture_units: units.max(0) as usize,
+        let result = Self { sprite_program, sprite_key_program, sprite_keyed: BTreeMap::new(), sprite_snapshot: None, gl, gles, copy, color, textured, blur_program, samplers, noise: BTreeMap::new(), noise_runtime_seed: renderer_noise_seed(), buffer, vao, max_texture, texture_units: units.max(0) as usize,
             width: 0, height: 0, capture: None, layers: Vec::new(), textures: BTreeMap::new(), transition_mask: None };
         if buffer == 0 || vao == 0 || max_texture < milk2::TRANSITION_GRID_WIDTH as i32 || units < 4 {
             return Err("Insufficient OpenGL context resources".into());
@@ -420,7 +443,7 @@ impl Renderer {
                             let key = resources::base_name(name).to_string();
                             if !self.noise.contains_key(&key) {
                                 let volume = resources::texture_kind(name).is_volume();
-                                let (w, h, d, data) = resources::noise_texture(seed, volume);
+                                let (w, h, d, data) = resources::noise_texture_with_runtime_seed(seed, volume, self.noise_runtime_seed);
                                 let target = if volume { TEXTURE_3D } else { TEXTURE_2D };
                                 let texture = if volume {
                                     let mut id = 0;

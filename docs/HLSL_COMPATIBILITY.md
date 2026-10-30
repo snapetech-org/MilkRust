@@ -92,10 +92,12 @@ and vertical weights, source-texel offsets, nested range transforms and first-
 level edge darkening. Nested/reversed ranges are made finite and nondegenerate;
 this deliberately avoids the divide-by-zero typo in historical min/max repair.
 Built-in 2D/3D noise now uses MilkDrop's physical dimensions, quality-specific
-cubic expansion and one-level texture setup in native GL and WebGL. The generator
-retains stable fixed seeds rather than the reference's runtime-clock reseeding,
-so generated noise still requires reference-image comparison. Blur and full
-shader pixel parity remain open; source implementation is not visual evidence.
+cubic expansion and one-level texture setup in native GL and WebGL. Each renderer now supplies runtime-clock entropy, and the generator reseeds and
+shuffles each row/slice while preserving a deterministic entry point for offline
+tools. Its portable xorshift stream is not the reference process's CRT rand and
+performance-counter sequence, so generated noise still requires reference-image
+comparison. Blur and full shader pixel parity remain open; source implementation
+is not visual evidence.
 New regression sources are unrun under the source-only restriction.
 
 Algorithm/reference: `jecassis/foo_vis_milk2`, `vis_milk2/milkdropfs.cpp`

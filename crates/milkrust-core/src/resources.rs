@@ -162,17 +162,21 @@ fn noise_texel_offset(width: u32, height: u32, x: u32, y: u32, z: u32) -> usize 
     (((z * height + y) * width + x) * 4) as usize
 }
 
+fn next_noise_random(state: &mut u32) -> u32 {
+    *state ^= *state << 13;
+    *state ^= *state >> 17;
+    *state ^= *state << 5;
+    *state
+}
+
 fn noise_random_texel(state: &mut u32, smooth: bool) -> [u8; 4] {
     let range = if smooth { 216 } else { 256 };
     let bias = range / 2;
     let mut packed = 0u32;
     for shift in [24, 16, 8, 0] {
-        *state ^= *state << 13;
-        *state ^= *state >> 17;
-        *state ^= *state << 5;
-        let value = (*state % range) + bias;
-        // Match the reference's packed D3DCOLOR construction, including its
-        // byte overflow for smoothed seeds, while keeping the seed reproducible.
+        let value = (next_noise_random(state) % range) + bias;
+        // Match the reference's packed D3DCOLOR channel construction,
+        // including the byte overflow for smoothed seeds.
         packed |= value.wrapping_shl(shift);
     }
     packed.to_le_bytes()
@@ -194,7 +198,19 @@ fn interpolate_noise_texel(bytes: &mut [u8], destination: usize, samples: [usize
     }
 }
 
+/// Deterministic built-in noise for offline tooling and authored fixtures.
 pub fn noise_texture(seed: u32, volume: bool) -> (u32, u32, u32, Vec<u8>) {
+    noise_texture_with_runtime_seed(seed, volume, seed)
+}
+
+/// Runtime noise uses a renderer-local clock seed and independently reseeded,
+/// shuffled rows/slices. Renderers call this once per generated resource; the
+/// deterministic wrapper remains available to offline callers.
+pub fn noise_texture_with_runtime_seed(
+    seed: u32,
+    volume: bool,
+    runtime_seed: u32,
+) -> (u32, u32, u32, Vec<u8>) {
     let width = if volume || seed == 4 { 32 } else { 256 };
     let height = width;
     let depth = if volume { 32 } else { 1 };
@@ -205,13 +221,30 @@ pub fn noise_texture(seed: u32, volume: bool) -> (u32, u32, u32, Vec<u8>) {
         _ => 1,
     };
     let mut bytes = vec![0u8; (width * height * depth * 4) as usize];
-    let mut state = seed.wrapping_mul(0x9e37_79b9).max(1);
+    let mut stream = runtime_seed ^ seed.wrapping_mul(0x9e37_79b9);
+    if stream == 0 { stream = 0x6d2b_79f5; }
 
     for z in 0..depth {
         for y in 0..height {
+            // MilkDrop reseeds its random stream for each row from a
+            // high-resolution clock sample. Mix renderer entropy with a fresh
+            // stream value to retain that per-row variation portably.
+            let q_low = next_noise_random(&mut stream);
+            let q_high = next_noise_random(&mut stream);
+            let mut row_state = (q_low ^ q_high ^ next_noise_random(&mut stream)).max(1);
             for x in 0..width {
                 let offset = noise_texel_offset(width, height, x, y, z);
-                bytes[offset..offset + 4].copy_from_slice(&noise_random_texel(&mut state, zoom > 1));
+                bytes[offset..offset + 4].copy_from_slice(&noise_random_texel(&mut row_state, zoom > 1));
+            }
+            // The reference shuffles each filled row before interpolation.
+            for _ in 0..width {
+                let x1 = (next_noise_random(&mut row_state) ^ q_low) % width;
+                let x2 = (next_noise_random(&mut row_state) ^ q_high) % width;
+                let a = noise_texel_offset(width, height, x1, y, z);
+                let b = noise_texel_offset(width, height, x2, y, z);
+                for channel in 0..4 {
+                    bytes.swap(a + channel, b + channel);
+                }
             }
         }
     }

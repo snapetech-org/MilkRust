@@ -96,11 +96,15 @@ run is recorded for this checkpoint.
 - Three blur levels use MilkDrop's paired-tap horizontal/vertical weights,
   source-texel offsets, nested range transforms and first-level edge darkening in
   native/WebGL; safe nondegenerate bounds avoid the historical zero-span typo.
-  Deterministic 2D/3D noise uses the reference texture dimensions and
-  quality-specific X/Y/Z cubic expansion order. Built-in noise remains
-  single-level as in MilkDrop; per-binding filtering/wrapping is also present. q registers, frame uniforms, texture sizes
-  and random/roam vectors are bound. Blur pixel parity and generated-noise pixel
-  comparison remain open because the reference seeds from its runtime clock;
+  2D/3D noise uses the reference texture dimensions and quality-specific X/Y/Z
+  cubic expansion order. Built-in noise remains single-level as in MilkDrop;
+  each renderer supplies clock entropy, and the shared generator reseeds and
+  shuffles rows/slices. A deterministic entry point remains available to offline
+  callers; per-binding filtering/wrapping is also present. q registers, frame uniforms, texture sizes
+  and random/roam vectors are bound. Blur pixel parity and generated-noise pixel comparison remain open: the
+  reference uses its process CRT random stream and performance-counter samples,
+  while MilkRust now uses portable renderer-local clock entropy and per-row
+  reseed/shuffle;
   missing resources and compiler/driver errors do not become a placeholder.
 - A bounded `.milk2` wrapper parser, round-trip metadata preservation, two
   independent states, all 30 saved-pattern formulas with per-fragment 64x48
@@ -414,9 +418,11 @@ separate limits. This is not a claim of tested recovery or universal completion.
 Built-in noise textures now use the compatible physical dimensions, random-value ranges,
 packed color layout, and separable cubic interpolation order from MilkDrop's
 `AddNoiseTex` and `AddNoiseVol` paths. Medium/high 2D noise expands in X then Y;
-high 3D noise expands in X, Y, then Z. The generator uses stable fixed seeds per texture quality
-instead of the reference's performance-counter reseeding, so quality semantics are
-implemented but generated pixels are not claimed bit-identical. Builds and GPU
+high 3D noise expands in X, Y, then Z. Renderers now provide runtime-clock entropy, and the shared generator reseeds
+and shuffles each row/slice before the existing quality-specific interpolation.
+The deterministic wrapper remains available to offline callers. MilkRust uses a
+portable xorshift stream rather than the reference process's CRT rand and
+performance-counter sequence, so generated pixels are not claimed bit-identical. Builds and GPU
 reference captures remain pending.
 
 
