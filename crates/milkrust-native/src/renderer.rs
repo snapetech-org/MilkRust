@@ -222,8 +222,13 @@ impl Renderer {
                 };
                 (gl.sampler_parameter)(*id, 0x2801, min_filter);
                 (gl.sampler_parameter)(*id, 0x2800, if settings.mag_point { 0x2600 } else { 0x2601 });
-                for (axis, wrap) in [0x2802, 0x2803, 0x8072].iter().copied().zip(settings.wrap.iter().copied()) {
-                    (gl.sampler_parameter)(*id, axis, if wrap { 0x2901 } else { 0x812F });
+                for (axis, mode) in [0x2802, 0x2803, 0x8072].iter().copied().zip(settings.wrap.iter().copied()) {
+                    let address = match mode {
+                        resources::AddressMode::Wrap => 0x2901,
+                        resources::AddressMode::Clamp => 0x812F,
+                        resources::AddressMode::Mirror => 0x8370,
+                    };
+                    (gl.sampler_parameter)(*id, axis, address);
                 }
             }
             let animated = samplers.ids[resources::ANIMATED_SPRITE_SAMPLER];
