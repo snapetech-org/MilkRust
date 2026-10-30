@@ -309,3 +309,19 @@ numeric prefix. The app loader recognizes a `.milk2` wrapper only when all four
 envelope markers exist; incomplete wrappers fall back to ordinary preset
 parsing. Direct wrapper parsing remains strict. No build, test or reference
 capture has run.
+
+
+## 2026-10-30 saved-mask reference controls and sprite-header consistency
+
+The saved-mask generator now accepts its grid dimensions so the 64x48-cell
+production field and a small reference fixture execute the same formula code.
+A committed unit control checks sampled (a,c) values for all 30 patterns against
+the published Lactea 4x2 reference table, including the four direction-sensitive
+patterns and the non-square horizontal case. This checks the mask formulas; it
+is not an official MilkDrop3 renderer capture or pixel-parity result.
+
+The .milk2 sprite gate now uses the last duplicate sprite value in the
+wrapper header, consistent with the saved-header parser, and ignores sprite
+records inside either preset body. Classic .milk keeps its first-value,
+default-on behavior. Regression sources cover both branches; the private build
+and test workflow has not produced a run for these commits.
