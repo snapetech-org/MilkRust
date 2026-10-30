@@ -207,13 +207,13 @@ render frames, resolve external texture packs, or establish fidelity.
   element types, resource arrays in function scopes or nested resource-bearing
   structs, initialized resource instances, resource-bearing struct parameters,
   comparison methods and gather methods. Global static `SamplerState` definitions
-  support point/linear min-mag-mip filtering with independent U/V/W Wrap or
-  Clamp addressing. Separate min/mag/mip filters, anisotropic filtering,
-  mirror/border modes, dynamic state expressions, and custom local/struct state
-  initialization remain outside the profile. Global legacy effect-file
-  `sampler_state` blocks now bind one `Texture = <identifier>` and lower matching
-  point/linear filters plus independent Wrap/Clamp axes through host aliases;
-  only direct `tex*` first arguments are supported. Grouped declarations and
+  support all eight standard point/linear min/mag/mip `Filter` combinations and
+  independent U/V/W Wrap or Clamp addressing. Anisotropic filtering, mirror/border
+  modes, dynamic state expressions, and custom local/struct state initialization
+  remain outside the profile. Global legacy effect-file `sampler_state` blocks
+  bind one `Texture = <identifier>` and support independent Point/Linear min and
+  mag filters plus None/Point/Linear mip filtering and per-axis Wrap/Clamp.
+  Only direct `tex*` first arguments are supported. Grouped declarations and
   state escape through helpers or assignments remain explicit failures.
   Dynamic array dispatch is limited to side-effect-free indices, supported
   sampling/load methods, standalone `GetDimensions`, and legacy `tex*` calls
@@ -266,4 +266,4 @@ Global bounded texture/sampler arrays now support grouped declarations, 1D/2D/3D
 
 ## 2026-10-30 legacy sampler-state lowering
 
-Static global legacy effect-file `sampler_state` blocks now lower bound texture identifiers and matching point/linear min-mag-mip filtering with independent Wrap/Clamp axes into the same per-resource host aliases used by modern `SamplerState`. Unspecified filters inherit the selected mode, or default to linear when all are absent; unspecified axes default to wrap. The compiler removes the effect initializer and rewrites only direct first arguments to supported `tex*` calls. Grouped declarations, unsupported sampler properties, differing filter modes, dynamic state, and sampler-state variables used outside direct sampling remain explicit failures. This code change is recorded in the HLSL compatibility profile; platform qualification remains pending.
+Static global legacy effect-file `sampler_state` blocks now lower bound texture identifiers and independent Point/Linear min and mag filters, None/Point/Linear mip filtering, and per-axis Wrap/Clamp addressing into the same per-resource host aliases used by modern `SamplerState`. Each omitted filter field defaults to linear; omitted axes default to wrap. The compiler removes the effect initializer and rewrites only direct first arguments to supported `tex*` calls. Grouped declarations, unsupported sampler properties, dynamic state, and sampler-state variables used outside direct sampling remain explicit failures. This code change is recorded in the HLSL compatibility profile; platform qualification remains pending.
