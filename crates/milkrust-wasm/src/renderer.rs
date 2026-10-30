@@ -687,7 +687,7 @@ impl MilkRustWebGlRenderer {
             return Ok(());
         };
         let key = milk2::TransitionMaskKey::new(pattern, entry.blend_alpha as f32, entry.blend_direction,
-            entry.blend_random.map(|value| value as f32), entry.blend_has_randoms, &entry.blend_pattern, width, height);
+            entry.blend_random.map(|value| value as f32), width, height);
         if self.transition_mask.borrow().as_ref().is_some_and(|(cached, _)| *cached == key) { return Ok(()); }
         let vertices = milk2::generate_transition_vertex_field(key).map_err(|error| JsValue::from_str(&error))?;
         let (mask_width, mask_height) = (milk2::TRANSITION_GRID_WIDTH, milk2::TRANSITION_GRID_HEIGHT);
