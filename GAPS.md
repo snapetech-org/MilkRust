@@ -267,3 +267,12 @@ Global bounded texture/sampler arrays now support grouped declarations, 1D/2D/3D
 ## 2026-10-30 legacy sampler-state lowering
 
 Static global legacy effect-file `sampler_state` blocks now lower bound texture identifiers and independent Point/Linear min and mag filters, None/Point/Linear mip filtering, and per-axis Wrap/Clamp/Mirror addressing into the same per-resource host aliases used by modern `SamplerState`. Each omitted filter field defaults to linear; omitted axes default to wrap. The compiler removes the effect initializer and rewrites only direct first arguments to supported `tex*` calls. Grouped declarations, unsupported sampler properties, dynamic state, and sampler-state variables used outside direct sampling remain explicit failures. This code change is recorded in the HLSL compatibility profile; platform qualification remains pending.
+
+
+## 2026-10-30 WebGL saved-sprite sampling profiles
+
+The WebGL saved-sprite pass now applies the same per-texture minification,
+magnification, mip, and U/V/W address profile as native GL, including
+Wrap/Clamp/Mirror. Animated sprites retain their dedicated linear, no-mipmap,
+repeat profile. This closes a source-path mismatch; sprite filtering and
+addressing still require reference captures. The change is unbuilt and unrun.
