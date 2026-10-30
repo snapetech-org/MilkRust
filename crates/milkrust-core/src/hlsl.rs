@@ -21,20 +21,12 @@ struct SamplerStateProfile {
 
 impl SamplerStateProfile {
     fn binding_name(self, resource: &str, dimension: u8) -> Result<String, String> {
-        let active_axes = &self.wrap[..usize::from(dimension)];
-        let Some(&repeat) = active_axes.first() else {
+        if !(1..=3).contains(&dimension) {
             return Err("HLSL sampler state has an invalid texture dimension".into());
-        };
-        if active_axes.iter().any(|axis| *axis != repeat) {
-            return Err("HLSL sampler states with mixed active-axis addressing are unsupported".into());
         }
-        let prefix = match (self.point, repeat) {
-            (true, true) => "pw",
-            (true, false) => "pc",
-            (false, true) => "fw",
-            (false, false) => "fc",
-        };
-        Ok(format!("sampler_{prefix}_{resource}"))
+        let filter = if self.point { 'p' } else { 'l' };
+        let address = self.wrap.iter().map(|wrap| if *wrap { 'w' } else { 'c' }).collect::<String>();
+        Ok(format!("sampler_hlsl_{filter}{address}_{resource}"))
     }
 }
 
@@ -877,7 +869,11 @@ fn lower_modern_resource_syntax(tokens: &mut Vec<String>) -> Result<(), String> 
                 base_name.clone()
             };
             let resource_name = crate::resources::base_name(&binding_name);
-            rewritten.push(profile.binding_name(resource_name, dimension)?);
+            let alias = profile.binding_name(resource_name, dimension)?;
+            if tokens.iter().any(|token| token == &alias) {
+                return Err(format!("Generated HLSL sampler binding {alias} collides with a user identifier"));
+            }
+            rewritten.push(alias);
         } else {
             rewritten.extend_from_slice(&tokens[base_start..index]);
         }
