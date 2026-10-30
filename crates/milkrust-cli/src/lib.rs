@@ -352,6 +352,11 @@ fn pack_inspect_command(path: Option<&String>) -> MilkRustCliResult {
             serde_json::json!({
                 "manifestPath": manifest_path.display().to_string(),
                 "schemaVersion": manifest.schema_version,
+                "kind": manifest.kind,
+                "dependencies": manifest.dependencies.iter().map(|dependency| serde_json::json!({
+                    "id": dependency.id, "version": dependency.version,
+                    "integritySha256": dependency.integrity_sha256,
+                })).collect::<Vec<_>>(),
                 "id": manifest.id,
                 "name": manifest.name,
                 "version": manifest.version,

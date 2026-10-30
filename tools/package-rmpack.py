@@ -16,6 +16,8 @@ import sys
 import zipfile
 from pathlib import Path, PurePosixPath
 from urllib.parse import urlsplit
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from validate_pack_dependencies import validate_pack_dependencies
 
 
 EPOCH = (1980, 1, 1, 0, 0, 0)
@@ -53,6 +55,7 @@ def main() -> int:
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     if not isinstance(manifest, dict):
         raise ValueError("pack manifest must be a JSON object")
+    validate_pack_dependencies(manifest)
     if manifest.get("schemaVersion") != 1:
         raise ValueError("only manifest schema version 1 can be packaged")
     if not isinstance(manifest.get("id"), str) or not manifest["id"].strip():

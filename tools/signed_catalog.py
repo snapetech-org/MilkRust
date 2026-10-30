@@ -20,6 +20,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import zipfile
+from validate_pack_dependencies import validate_pack_dependencies
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -101,8 +102,12 @@ def validate_payload(payload, now, allow_expired=False):
         require(source.scheme == "https" and source.hostname and not source.username and not source.password, "invalid source URL")
         require(ARCHIVE_URL.fullmatch(entry.get("archiveUrl", "")), "archives must be immutable MilkRust content")
         require(re.fullmatch(r"[a-f0-9]{64}", entry.get("sha256", "")), "invalid archive digest")
+        kind = entry.get("kind", "presets")
+        require(kind in ("presets", "textures"), "invalid pack kind")
         for key, limit in {"archiveBytes": MAX_ARCHIVE, "expandedBytes": MAX_EXPANDED, "presetCount": 2500}.items():
-            require(type(entry.get(key)) is int and 0 < entry[key] <= limit, "invalid entry size")
+            minimum = 0 if key == "presetCount" and kind == "textures" else 1
+            require(type(entry.get(key)) is int and minimum <= entry[key] <= limit, "invalid entry size")
+        require(kind != "textures" or entry["presetCount"] == 0, "texture pack cannot contain presets")
         qualification = entry.get("qualification")
         require(isinstance(qualification, dict) and isinstance(qualification.get("targets"), list), "missing qualification metadata")
         if qualification.get("status") == "sample-fixture-only":
@@ -254,7 +259,11 @@ def archive_metadata(data):
             attributed.add(asset["path"])
         require(attributed == names - {"manifest.json", "integrity.json", *licenses}, "asset attribution does not cover the archive")
         presets = manifest.get("presets", [])
-        require(isinstance(presets, list) and 0 < len(presets) <= 2500 and all(p.get("file") in names for p in presets), "invalid preset inventory")
+        kind = validate_pack_dependencies(manifest)
+        require(isinstance(presets, list) and (kind == "textures" or len(presets) > 0)
+                and len(presets) <= 2500 and all(isinstance(p, dict) and p.get("file") in names for p in presets), "invalid preset inventory")
+        if kind == "textures":
+            require(all(isinstance(t, dict) and t.get("file") in attributed for t in manifest["textures"]), "invalid texture inventory")
         return manifest, expanded
 
 
@@ -271,13 +280,15 @@ def prepare(config, sequence, days, now):
         digest = hashlib.sha256(data).hexdigest()
         require(item.get("sha256") == digest and item.get("archiveBytes") == len(data) and item.get("expandedBytes") == expanded
                 and item.get("presetCount") == len(manifest["presets"]), "reviewed catalog metadata differs from immutable archive")
+        require(item.get("kind", "presets") == manifest.get("kind", "presets"), "reviewed pack kind differs from archive")
         qualification = qualify(item, manifest, data, git_bytes, decode)
         entries.append({"id": manifest["id"], "version": manifest["version"], "name": manifest["name"],
             "license": manifest["license"], "distributionStatus": "redistributable", "contentNotice": manifest["contentNotice"],
             "description": item.get("description", item.get("notes", manifest["name"])),
             "sourceUrl": item["sourceUrls"][0], "searchText": item.get("searchText", ""),
             "archiveUrl": item["archiveUrl"], "sha256": digest, "archiveBytes": len(data), "expandedBytes": expanded,
-            "presetCount": len(manifest["presets"]), "qualification": qualification})
+            "presetCount": len(manifest["presets"]), "qualification": qualification,
+            **({"kind": "textures"} if manifest.get("kind") == "textures" else {})})
     payload = encode({"schemaVersion": 1, "sequence": sequence,
         "issuedAt": now.isoformat(timespec="seconds").replace("+00:00", "Z"),
         "expiresAt": (now + timedelta(days=days)).isoformat(timespec="seconds").replace("+00:00", "Z"),

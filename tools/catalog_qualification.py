@@ -83,10 +83,12 @@ def qualify(item, manifest, archive, git_bytes, decode):
     legal = evidence_record(rights.get("evidence"), revision, git_bytes, decode)
     require(legal.get("packSha256") == archive_digest and legal.get("status") == "approved",
             "rights evidence does not cover this pack")
+    family = "textures" if manifest.get("kind") == "textures" else "presets"
+    inventory = manifest[family]
+    require(isinstance(inventory, list) and inventory, "empty qualification inventory")
     with zipfile.ZipFile(io.BytesIO(archive)) as zipped:
-        expected = {p["file"]: hashlib.sha256(zipped.read(p["file"])).hexdigest()
-                    for p in manifest["presets"]}
-    require(len(expected) == len(manifest["presets"]), "duplicate preset in qualification inventory")
+        expected = {p["file"]: hashlib.sha256(zipped.read(p["file"])).hexdigest() for p in inventory}
+    require(len(expected) == len(inventory), "duplicate asset in qualification inventory")
     targets = report.get("targets")
     require(isinstance(targets, list) and len(targets) == len(TARGETS), "incomplete native host matrix")
     covered = set()
@@ -104,7 +106,7 @@ def qualify(item, manifest, archive, git_bytes, decode):
             r"https://github\.com/snapetech-org/(MilkRust|PlezyNG)/actions/runs/[1-9][0-9]*",
             target["runUrl"]), "qualification must identify a private JIT run")
         require(target.get("runnerPolicy") == "private-ephemeral-jit", "unapproved qualification runner")
-        results = target.get("presets")
+        results = target.get(family)
         require(isinstance(results, list) and len(results) == len(expected), "qualification omitted presets")
         seen = set()
         for result in results:
@@ -116,7 +118,7 @@ def qualify(item, manifest, archive, git_bytes, decode):
             require(result.get("sha256") == expected[name] and result.get("status") == "pass",
                     "preset differs or did not pass")
             evidence = evidence_record(result.get("evidence"), revision, git_bytes, decode)
-            require(evidence.get("packSha256") == archive_digest and evidence.get("presetSha256") == expected[name]
+            require(evidence.get("packSha256") == archive_digest and evidence.get("textureSha256" if family == "textures" else "presetSha256") == expected[name]
                     and evidence.get("target") == target["id"]
                     and evidence.get("engineRevision") == target["engineRevision"]
                     and evidence.get("hostRevision") == target["hostRevision"]

@@ -141,3 +141,37 @@ See [`docs/PLUGIN_API.md`](PLUGIN_API.md) for the current hook surface.
 - The standalone player accepts local served pack folders and builds a selectable library from generated pack indexes.
 - Studio should export this structure from authored presets, fragments, textures, and thumbnails.
 - Release workflows may publish `.rmpack` archives only after provenance, per-asset rights and compatibility reports are reviewed.
+
+## Immutable texture dependencies
+
+Schema 1 also accepts `kind: "textures"` with an empty `presets` array and a
+nonempty `textures` inventory. A texture pack is self-contained. Preset packs
+may declare up to 16 dependencies:
+
+```json
+{
+  "dependencies": [{
+    "id": "example-textures",
+    "version": "1.0.0",
+    "integritySha256": "<sha256 of the dependency integrity.json>"
+  }]
+}
+```
+
+The application installs an authorized exact catalog version or requests local
+import of the named dependency. Every mounted texture is checked against its
+pinned integrity record. Texture IDs, filenames and explicit aliases resolve
+inside a bounded private render view shared by the native backend interface;
+conflicting case-insensitive aliases fail. Original packs remain immutable and
+shared across consumers. Views are disposable copies charged to the 512 MiB
+library budget, with a 64 MiB/2,500-file/32-megapixel limit per resolved pack.
+Removal and same-version replacement reconstruct references from installed
+manifests; a required version cannot be deleted or replaced with different
+integrity bytes. No download occurs from browsing or playback.
+
+Texture-only signed entries carry `kind: "textures"` and `presetCount: 0`.
+They do not receive an empty-inventory qualification exemption. Qualification
+reports use a nonempty `textures` list per target and `textureSha256` in each
+evidence record. All existing rights, 13-target, render/reference, resource,
+audio-fixture and lifecycle requirements still apply using a texture exercise
+preset. Existing preset report fields and fixture exceptions are unchanged.

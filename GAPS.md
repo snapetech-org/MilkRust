@@ -538,3 +538,13 @@ dimension and scalar/vector component width before binding aliases. This rejects
 Texture1D-to-Texture2D aliases even though both use the same legacy GLSL sampler
 type, and rejects mismatched element widths. Regression sources cover both cases;
 the private compiler run remains pending.
+
+## 2026-10-30 immutable texture-pack delivery
+
+Pack tooling and signed catalogs now recognize self-contained texture-only
+packs and bounded exact-version dependencies pinned to integrity.json. Cycles,
+duplicate/unsafe identities and unpinned references fail. Texture-only delivery
+requires real per-texture qualification rows on all existing targets; an empty
+preset list never bypasses release evidence. PlezyNG resolves aliases into
+bounded private views and protects referenced versions from deletion/replacement.
+Source regression cases are authored; no build or test was run.

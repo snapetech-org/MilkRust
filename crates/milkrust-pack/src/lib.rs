@@ -1,5 +1,6 @@
 use std::{
     fs,
+    io::Read,
     path::{Component, Path, PathBuf},
 };
 
@@ -8,6 +9,8 @@ use serde_json::Value;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct MilkRustPackManifest {
+    pub kind: String,
+    pub dependencies: Vec<MilkRustPackDependency>,
     pub schema_version: u32,
     pub id: String,
     pub name: String,
@@ -33,6 +36,13 @@ pub struct MilkRustPackPreset {
     pub source_format: String,
     pub tags: Vec<String>,
     pub thumbnail: String,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct MilkRustPackDependency {
+    pub id: String,
+    pub version: String,
+    pub integrity_sha256: String,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -116,6 +126,9 @@ impl MilkRustPackValidationReport {
 }
 
 pub fn parse_milkrust_pack_manifest(source: &str) -> Result<MilkRustPackManifest, Vec<String>> {
+    if source.len() > 16 * 1024 * 1024 {
+        return Err(vec!["manifest exceeds 16 MiB".to_string()]);
+    }
     let value = serde_json::from_str::<Value>(source)
         .map_err(|error| vec![format!("manifest is not valid JSON: {error}")])?;
     let Some(object) = value.as_object() else {
@@ -138,6 +151,28 @@ pub fn parse_milkrust_pack_manifest(source: &str) -> Result<MilkRustPackManifest
     let source_urls = string_array(object.get("sourceUrls"))
         .or_else(|| string_array(object.get("source_urls")))
         .unwrap_or_default();
+
+    let kind = if object.contains_key("kind") {
+        required_string(object.get("kind"), "kind", &mut errors)
+    } else { "presets".to_string() };
+    if kind != "presets" && kind != "textures" {
+        errors.push("unknown pack kind".to_string());
+    }
+    if object.get("dependencies").and_then(Value::as_array).is_some_and(|items| items.len() > 16) {
+        return Err(vec!["at most 16 texture dependencies are allowed".to_string()]);
+    }
+    let dependencies = pack_array(object.get("dependencies"), "dependencies",
+        &mut errors, parse_pack_dependency);
+    if dependencies.len() > 16 { errors.push("at most 16 texture dependencies are allowed".to_string()); }
+    let mut dependency_ids = std::collections::BTreeSet::new();
+    for dependency in &dependencies {
+        if !dependency_ids.insert((dependency.id.clone(), dependency.version.clone())) {
+            errors.push("duplicate texture dependency".to_string());
+        }
+        if dependency.id == id && dependency.version == version {
+            errors.push("a pack cannot depend on itself".to_string());
+        }
+    }
 
     let presets = pack_array(
         object.get("presets"),
@@ -170,8 +205,13 @@ pub fn parse_milkrust_pack_manifest(source: &str) -> Result<MilkRustPackManifest
         .cloned()
         .unwrap_or(Value::Null);
 
+    if kind == "textures" && (!presets.is_empty() || textures.is_empty() || !dependencies.is_empty()) {
+        errors.push("texture packs need textures, no presets and no dependencies".to_string());
+    }
     if errors.is_empty() {
         Ok(MilkRustPackManifest {
+            kind,
+            dependencies,
             schema_version,
             id,
             name,
@@ -197,7 +237,9 @@ pub fn load_milkrust_pack_manifest(
     pack_path: impl AsRef<Path>,
 ) -> Result<(PathBuf, MilkRustPackManifest), String> {
     let manifest_path = milkrust_pack_manifest_path(pack_path.as_ref());
-    let source = fs::read_to_string(&manifest_path)
+    let mut source = String::new();
+    fs::File::open(&manifest_path)
+        .and_then(|file| file.take(16 * 1024 * 1024 + 1).read_to_string(&mut source))
         .map_err(|error| format!("failed to read {}: {error}", manifest_path.display()))?;
     parse_milkrust_pack_manifest(&source)
         .map(|manifest| (manifest_path, manifest))
@@ -265,10 +307,14 @@ pub fn validate_milkrust_pack_source(
             manifest.schema_version
         ));
     }
-    if manifest.presets.is_empty() {
+    if manifest.presets.is_empty() && manifest.kind != "textures" {
         warnings.push("pack contains no presets".to_string());
     }
 
+    for dependency in &manifest.dependencies {
+        warnings.push(format!("host must resolve texture dependency {}@{} with integrity SHA-256 {}",
+            dependency.id, dependency.version, dependency.integrity_sha256));
+    }
     let mut preset_reports = Vec::new();
     for preset in &manifest.presets {
         validate_id(
@@ -500,6 +546,28 @@ fn parse_pack_preset(
         tags: string_array(value.get("tags")).unwrap_or_default(),
         thumbnail: optional_string(value.get("thumbnail")).unwrap_or_default(),
     }
+}
+
+fn parse_pack_dependency(value: &Value, index: usize, field: &str, errors: &mut Vec<String>) -> MilkRustPackDependency {
+    let id = required_string(value.get("id"), &format!("{field}[{index}].id"), errors);
+    let version = required_string(value.get("version"), &format!("{field}[{index}].version"), errors);
+    let integrity_sha256 = required_string(value.get("integritySha256"), &format!("{field}[{index}].integritySha256"), errors);
+    for component in [&id, &version] {
+        let lower = component.to_ascii_lowercase();
+        let stem = lower.split('.').next().unwrap_or("");
+        let reserved = matches!(stem, "con" | "prn" | "aux" | "nul") ||
+            ((stem.starts_with("com") || stem.starts_with("lpt")) && stem.len() == 4 &&
+                stem.as_bytes()[3].is_ascii_digit());
+        if component.len() > 80 || !component.as_bytes().first().is_some_and(u8::is_ascii_alphanumeric) ||
+            !component.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-')) ||
+            component.ends_with('.') || component.ends_with(".previous") || component.ends_with(".partial") || reserved {
+            errors.push(format!("{field}[{index}] has an unsafe dependency identity"));
+        }
+    }
+    if integrity_sha256.len() != 64 || !integrity_sha256.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)) {
+        errors.push(format!("{field}[{index}] needs a lowercase integrity SHA-256"));
+    }
+    MilkRustPackDependency { id, version, integrity_sha256 }
 }
 
 fn parse_pack_texture(
@@ -924,5 +992,32 @@ mod tests {
         assert_eq!(j.get("textureCount").unwrap().as_u64().unwrap(), 1);
         assert_eq!(j.get("fragmentCount").unwrap().as_u64().unwrap(), 0);
         assert_eq!(j.get("pluginCount").unwrap().as_u64().unwrap(), 0);
+    }
+}
+
+#[cfg(test)]
+mod dependency_schema_tests {
+    use super::*;
+
+    #[test]
+    fn texture_pack_is_explicit_and_dependencies_survive_parsing() {
+        let textures = serde_json::json!({
+            "id": "textures", "version": "1", "name": "Textures", "kind": "textures",
+            "presets": [], "textures": [{"id": "cloud", "file": "textures/cloud.png"}]
+        });
+        let parsed = parse_milkrust_pack_manifest(&textures.to_string()).unwrap();
+        assert_eq!(parsed.kind, "textures");
+        assert!(parsed.presets.is_empty());
+        let mut owner = serde_json::json!({
+            "id": "owner", "name": "Owner", "version": "1",
+            "dependencies": [{"id": "textures", "version": "1", "integritySha256": "a".repeat(64)}]
+        });
+        let parsed = parse_milkrust_pack_manifest(&owner.to_string()).unwrap();
+        assert_eq!(parsed.dependencies[0].integrity_sha256, "a".repeat(64));
+        owner["dependencies"][0]["id"] = Value::String("../escape".to_string());
+        assert!(parse_milkrust_pack_manifest(&owner.to_string()).is_err());
+        let mut cycle = textures;
+        cycle["dependencies"] = serde_json::json!([{"id": "textures", "version": "1", "integritySha256": "a".repeat(64)}]);
+        assert!(parse_milkrust_pack_manifest(&cycle.to_string()).is_err());
     }
 }
