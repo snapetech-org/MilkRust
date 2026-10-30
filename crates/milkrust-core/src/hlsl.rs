@@ -85,11 +85,110 @@ fn split_hlsl_call(tokens: &[String], open: usize) -> Result<(Vec<Vec<String>>, 
     Err("Unterminated HLSL resource method call".into())
 }
 
-/// Lower the common HLSL resource-object surface into the legacy sampler
-/// intrinsics already represented in the typed AST. Constant-index 1D/2D
-/// texture and legacy sampler arrays are expanded into separately bound names.
-/// Resource-bearing structs, dynamically indexed arrays and custom sampler-state
-/// objects need different host binding models and fail explicitly.
+fn matching_hlsl_bracket(tokens: &[String], open: usize) -> Result<usize, String> {
+    if tokens.get(open).map(String::as_str) != Some("[") {
+        return Err("Malformed HLSL resource-array access".into());
+    }
+    let mut depth = 0i32;
+    for (index, token) in tokens.iter().enumerate().skip(open) {
+        match token.as_str() {
+            "[" => depth += 1,
+            "]" => {
+                depth -= 1;
+                if depth == 0 { return Ok(index); }
+            }
+            _ => {}
+        }
+    }
+    Err("Unterminated HLSL resource-array access".into())
+}
+
+fn repeatable_resource_index(tokens: &[String]) -> bool {
+    !tokens.is_empty()
+        && !tokens.windows(2).any(|pair| is_identifier(&pair[0]) && pair[1] == "(")
+        && tokens.iter().all(|token| {
+            is_identifier(token)
+                || token.as_bytes().first().is_some_and(|byte| byte.is_ascii_digit())
+                || matches!(token.as_str(), "(" | ")" | "+" | "-" | "*" | "/" | "%" | "<<" | ">>"
+                    | "&" | "|" | "^" | "~" | "!" | "<" | ">" | "<=" | ">=" | "==" | "!=" | "&&" | "||")
+        })
+}
+
+fn grouped_resource_declarators(tokens: &[String], first: usize) -> Result<(Vec<(String, Option<usize>)>, usize), String> {
+    let mut declarators = Vec::new();
+    let mut cursor = first;
+    loop {
+        let Some(name) = tokens.get(cursor).filter(|name| is_identifier(name)) else {
+            return Err("Malformed HLSL resource declaration".into());
+        };
+        let name = name.clone();
+        cursor += 1;
+        let size = if tokens.get(cursor).map(String::as_str) == Some("[") {
+            let size = tokens.get(cursor + 1).and_then(|token| token.parse::<usize>().ok())
+                .filter(|size| (1..=15).contains(size))
+                .ok_or_else(|| "HLSL resource arrays require a decimal literal bound from 1 through 15".to_string())?;
+            if tokens.get(cursor + 2).map(String::as_str) != Some("]") {
+                return Err("HLSL resource array bounds must be a single decimal literal".into());
+            }
+            cursor += 3;
+            Some(size)
+        } else {
+            None
+        };
+        if tokens.get(cursor).map(String::as_str) == Some("=") {
+            return Err("Initialized HLSL texture objects are unsupported".into());
+        }
+        declarators.push((name, size));
+        if tokens.get(cursor).map(String::as_str) != Some(",") { break; }
+        let next = cursor + 1;
+        if !tokens.get(next).is_some_and(|name| is_identifier(name)) { break; }
+        let following = tokens.get(next + 1).map(String::as_str);
+        if !matches!(following, Some("[") | Some("=") | Some(",") | Some(";") ) {
+            // A typed function parameter follows the comma. It is not a
+            // grouped declarator in the current resource declaration.
+            break;
+        }
+        cursor = next;
+    }
+    Ok((declarators, cursor))
+}
+
+fn resource_declaration_has_array(tokens: &[String], first: usize) -> bool {
+    let mut cursor = first;
+    loop {
+        if !tokens.get(cursor).is_some_and(|name| is_identifier(name)) { return false; }
+        cursor += 1;
+        if tokens.get(cursor).map(String::as_str) == Some("[") { return true; }
+        if tokens.get(cursor).map(String::as_str) != Some(",") { return false; }
+        cursor += 1;
+        if !tokens.get(cursor).is_some_and(|name| is_identifier(name)) { return false; }
+        if tokens.get(cursor + 1).map(String::as_str) == Some("[") { return true; }
+        if !matches!(tokens.get(cursor + 1).map(String::as_str), Some(",") | Some(";")) { return false; }
+    }
+}
+
+fn splice_bounded_resource_expansion(
+    tokens: &mut Vec<String>,
+    range: std::ops::Range<usize>,
+    replacement: Vec<String>,
+    expanded_bytes: &mut usize,
+) -> Result<(), String> {
+    let original_bytes = tokens[range.clone()].iter().map(String::len).sum::<usize>();
+    let replacement_bytes = replacement.iter().map(String::len).sum::<usize>();
+    *expanded_bytes = (*expanded_bytes).saturating_add(replacement_bytes.saturating_sub(original_bytes));
+    if *expanded_bytes > 512 * 1024 {
+        return Err("HLSL resource-array dispatch exceeds its 512 KiB expansion budget".into());
+    }
+    tokens.splice(range, replacement);
+    Ok(())
+}
+
+/// Lower HLSL resource objects into the legacy sampler intrinsics already
+/// represented in the typed AST. Bounded global 1D/2D/3D texture and legacy
+/// sampler arrays expand into named bindings; constant and side-effect-free
+/// dynamic indices dispatch over those names. Function-local arrays, nested
+/// resource structs and custom sampler-state objects need different host
+/// binding models and fail explicitly.
 fn lower_modern_resource_syntax(tokens: &mut Vec<String>) -> Result<(), String> {
     let struct_ranges = hlsl_struct_ranges(tokens)?;
     let mut resource_shapes = BTreeMap::<String, Option<ResourceShape>>::new();
@@ -145,10 +244,7 @@ fn lower_modern_resource_syntax(tokens: &mut Vec<String>) -> Result<(), String> 
             }
             let structure = struct_ranges.iter().find(|(_, range)| range.contains(&type_index)).map(|(name, _)| name.as_str());
             let shape = ResourceShape { dimension, width };
-            if tokens.get(name_index + 1).map(String::as_str) == Some("[") {
-                if dimension == 3 {
-                    return Err("Texture3D arrays cannot be represented by named MilkDrop image bindings".into());
-                }
+            if resource_declaration_has_array(tokens, name_index) {
                 if structure.is_some() {
                     if struct_ranges.iter().filter(|(_, range)| range.contains(&type_index)).count() != 1 {
                         return Err("Nested HLSL resource-array structs are unsupported".into());
@@ -166,30 +262,37 @@ fn lower_modern_resource_syntax(tokens: &mut Vec<String>) -> Result<(), String> 
                         return Err("Texture resource arrays are supported only as global declarations".into());
                     }
                 }
-                let size_token = tokens.get(name_index + 2).map(String::as_str).unwrap_or("");
-                let size = size_token.parse::<usize>().ok().filter(|size| (1..=15).contains(size))
-                    .ok_or_else(|| "HLSL texture arrays require a decimal literal bound from 1 through 15".to_string())?;
-                if tokens.get(name_index + 3).map(String::as_str) != Some("]") {
-                    return Err("HLSL texture array bounds must be a single decimal literal".into());
-                }
-                if tokens.get(name_index + 4).map(String::as_str) == Some(",") {
-                    return Err("Grouped HLSL texture-array declarations are unsupported".into());
+                let (declarators, declaration_end) = grouped_resource_declarators(tokens, name_index)?;
+                if !declarators.iter().any(|(_, size)| size.is_some()) {
+                    return Err("Malformed HLSL texture-array declaration".into());
                 }
                 let mut declaration = vec![if dimension <= 2 { "sampler2D" } else { "sampler3D" }.to_string()];
-                for element in 0..size {
-                    let element_name = format!("{}_{}", name, element);
-                    if tokens.iter().any(|token| token == &element_name) {
-                        return Err(format!("Generated HLSL texture-array binding {element_name} collides with a user identifier"));
+                let mut emitted = 0usize;
+                for (declarator, size) in declarators {
+                    if let Some(size) = size {
+                        let array_name = structure.map_or_else(|| declarator.clone(), |structure| format!("{structure}.{declarator}"));
+                        resource_arrays.insert(array_name, size);
+                        for element in 0..size {
+                            let element_name = format!("{}_{}", declarator, element);
+                            if tokens.iter().any(|token| token == &element_name) {
+                                return Err(format!("Generated HLSL texture-array binding {element_name} collides with a user identifier"));
+                            }
+                            if emitted != 0 { declaration.push(",".into()); }
+                            declaration.push(element_name.clone());
+                            emitted += 1;
+                            let shape_name = structure.map_or_else(|| element_name.clone(), |structure| format!("{structure}.{element_name}"));
+                            resource_shapes.insert(shape_name, Some(shape));
+                        }
+                    } else {
+                        if emitted != 0 { declaration.push(",".into()); }
+                        declaration.push(declarator.clone());
+                        emitted += 1;
+                        let shape_name = structure.map_or_else(|| declarator.clone(), |structure| format!("{structure}.{declarator}"));
+                        resource_shapes.insert(shape_name, Some(shape));
                     }
-                    if element != 0 { declaration.push(",".into()); }
-                    declaration.push(element_name.clone());
-                    let shape_name = structure.map_or_else(|| element_name.clone(), |structure| format!("{structure}.{element_name}"));
-                    resource_shapes.insert(shape_name, Some(shape));
                 }
-                let array_name = structure.map_or_else(|| name.clone(), |structure| format!("{structure}.{name}"));
-                resource_arrays.insert(array_name, size);
-                resource_array_edits.push((type_index..name_index + 4, declaration));
-                index = name_index + 4;
+                resource_array_edits.push((type_index..declaration_end, declaration));
+                index = declaration_end;
                 continue;
             }
             if let Some(range) = generic_range { generic_ranges.push(range); }
@@ -221,12 +324,9 @@ fn lower_modern_resource_syntax(tokens: &mut Vec<String>) -> Result<(), String> 
         }
         if matches!(tokens[index].as_str(), "sampler" | "sampler2D" | "sampler3D")
             && tokens.get(index + 1).is_some_and(|name| is_identifier(name))
-            && tokens.get(index + 2).map(String::as_str) == Some("[") {
+            && resource_declaration_has_array(tokens, index + 1) {
             let type_index = index;
             let name_index = index + 1;
-            if tokens[index] == "sampler3D" {
-                return Err("Sampler3D arrays cannot be represented by named MilkDrop image bindings".into());
-            }
             let structure = struct_ranges.iter().find(|(_, range)| range.contains(&type_index)).map(|(name, _)| name.as_str());
             if structure.is_some() {
                 if struct_ranges.iter().filter(|(_, range)| range.contains(&type_index)).count() != 1 {
@@ -245,29 +345,33 @@ fn lower_modern_resource_syntax(tokens: &mut Vec<String>) -> Result<(), String> 
                     return Err("Sampler arrays are supported only as global declarations".into());
                 }
             }
-            let name = tokens[name_index].clone();
-            let size_token = tokens.get(name_index + 2).map(String::as_str).unwrap_or("");
-            let size = size_token.parse::<usize>().ok().filter(|size| (1..=15).contains(size))
-                .ok_or_else(|| "HLSL sampler arrays require a decimal literal bound from 1 through 15".to_string())?;
-            if tokens.get(name_index + 3).map(String::as_str) != Some("]") {
-                return Err("HLSL sampler array bounds must be a single decimal literal".into());
-            }
-            if tokens.get(name_index + 4).map(String::as_str) == Some(",") {
-                return Err("Grouped HLSL sampler-array declarations are unsupported".into());
+            let (declarators, declaration_end) = grouped_resource_declarators(tokens, name_index)?;
+            if !declarators.iter().any(|(_, size)| size.is_some()) {
+                return Err("Malformed HLSL sampler-array declaration".into());
             }
             let mut declaration = vec![tokens[type_index].clone()];
-            for element in 0..size {
-                let element_name = format!("{}_{}", name, element);
-                if tokens.iter().any(|token| token == &element_name) {
-                    return Err(format!("Generated HLSL sampler-array binding {element_name} collides with a user identifier"));
+            let mut emitted = 0usize;
+            for (name, size) in declarators {
+                if let Some(size) = size {
+                    let array_name = structure.map_or_else(|| name.clone(), |structure| format!("{structure}.{name}"));
+                    resource_arrays.insert(array_name, size);
+                    for element in 0..size {
+                        let element_name = format!("{}_{}", name, element);
+                        if tokens.iter().any(|token| token == &element_name) {
+                            return Err(format!("Generated HLSL sampler-array binding {element_name} collides with a user identifier"));
+                        }
+                        if emitted != 0 { declaration.push(",".into()); }
+                        declaration.push(element_name);
+                        emitted += 1;
+                    }
+                } else {
+                    if emitted != 0 { declaration.push(",".into()); }
+                    declaration.push(name);
+                    emitted += 1;
                 }
-                if element != 0 { declaration.push(",".into()); }
-                declaration.push(element_name);
             }
-            let array_name = structure.map_or_else(|| name.clone(), |structure| format!("{structure}.{name}"));
-            resource_arrays.insert(array_name, size);
-            resource_array_edits.push((type_index..name_index + 4, declaration));
-            index = name_index + 4;
+            resource_array_edits.push((type_index..declaration_end, declaration));
+            index = declaration_end;
             continue;
         }
         if tokens[index] == "SamplerState" {
@@ -363,11 +467,11 @@ fn lower_modern_resource_syntax(tokens: &mut Vec<String>) -> Result<(), String> 
     for (range, replacement) in edits { tokens.splice(range, replacement); }
     let (_, _, resource_instances) = resource_struct_fields(tokens)?;
 
-    // ESSL 3.00 restricts indexing of opaque sampler arrays. Expand constant
-    // element references before type checking so each asset receives its own
-    // ordinary MilkDrop texture binding. Dynamic indices cannot be represented
-    // by this host's per-name texture model.
+    // ESSL 3.00 restricts indexing of opaque sampler arrays. Expand resource
+    // array references to separately named bindings. Dynamic accesses dispatch
+    // over those bindings so the emitted shader never indexes an opaque value.
     let mut index = 0;
+    let mut expanded_resource_array_bytes = 0usize;
     while index < tokens.len() {
         let scoped = if tokens.get(index + 1).map(String::as_str) == Some(".")
             && tokens.get(index + 3).map(String::as_str) == Some("[") {
@@ -382,24 +486,151 @@ fn lower_modern_resource_syntax(tokens: &mut Vec<String>) -> Result<(), String> 
             (tokens[index].clone(), index + 1, index, None)
         } else { index += 1; continue; };
         let size = resource_arrays.get(&array_name).copied().unwrap_or(0);
-        let element = tokens.get(bracket_index + 1).and_then(|token| token.parse::<usize>().ok())
-            .ok_or_else(|| "HLSL texture resource arrays require constant decimal element indices".to_string())?;
-        let close_index = bracket_index + 2;
-        if tokens.get(close_index).map(String::as_str) != Some("]") {
-            return Err("HLSL texture resource arrays require a single constant element index".into());
-        }
-        if element >= size { return Err("HLSL texture resource array index is out of bounds".into()); }
-        let element_name = format!("{}_{}", tokens[replacement_start], element);
-        let shape_name = scoped_structure.as_ref().map_or_else(|| element_name.clone(), |structure| format!("{structure}.{element_name}"));
-        if resource_shapes.contains_key(&shape_name) {
-            let method = tokens.get(close_index + 2).map(String::as_str).unwrap_or("");
-            if tokens.get(close_index + 1).map(String::as_str) != Some(".")
-                || !matches!(method, "Sample" | "SampleLevel" | "SampleBias" | "SampleGrad" | "Load" | "GetDimensions") {
-                return Err("HLSL texture array elements must use a supported resource method".into());
+        let close_index = matching_hlsl_bracket(tokens, bracket_index)?;
+        let array_index = tokens[bracket_index + 1..close_index].to_vec();
+        let element = (array_index.len() == 1).then(|| array_index[0].parse::<usize>().ok()).flatten();
+        if let Some(element) = element {
+            if element >= size { return Err("HLSL texture resource array index is out of bounds".into()); }
+            let element_name = format!("{}_{}", tokens[replacement_start], element);
+            let shape_name = scoped_structure.as_ref().map_or_else(|| element_name.clone(), |structure| format!("{structure}.{element_name}"));
+            if resource_shapes.contains_key(&shape_name) {
+                let method = tokens.get(close_index + 2).map(String::as_str).unwrap_or("");
+                if tokens.get(close_index + 1).map(String::as_str) != Some(".")
+                    || !matches!(method, "Sample" | "SampleLevel" | "SampleBias" | "SampleGrad" | "Load" | "GetDimensions") {
+                    return Err("HLSL texture array elements must use a supported resource method".into());
+                }
             }
+            tokens.splice(replacement_start..close_index + 1, [element_name]);
+            index = replacement_start + 1;
+            continue;
         }
-        tokens.splice(replacement_start..close_index + 1, [element_name]);
-        index += 1;
+        if !repeatable_resource_index(&array_index) {
+            return Err("HLSL resource-array indices must be side-effect-free integer expressions".into());
+        }
+
+        let first_element = format!("{}_0", tokens[replacement_start]);
+        let first_shape = scoped_structure.as_ref().map_or_else(|| first_element.clone(), |structure| format!("{structure}.{first_element}"));
+        if resource_shapes.contains_key(&first_shape) {
+            let shape = resource_shapes.get(&first_shape).copied().flatten()
+                .ok_or_else(|| "Ambiguous HLSL resource-array element type".to_string())?;
+            let method_index = close_index + 2;
+            let method = tokens.get(method_index).map(String::as_str).unwrap_or("");
+            if tokens.get(close_index + 1).map(String::as_str) != Some(".")
+                || !matches!(method, "Sample" | "SampleLevel" | "SampleBias" | "SampleGrad" | "Load" | "GetDimensions")
+                || tokens.get(method_index + 1).map(String::as_str) != Some("(") {
+                return Err("Dynamically indexed HLSL texture arrays must immediately call a supported texture method".into());
+            }
+            let (args, call_end) = split_hlsl_call(tokens, method_index + 1)?;
+            if args.iter().any(Vec::is_empty) {
+                return Err(format!("Empty argument to HLSL texture method {method}"));
+            }
+            let receiver_prefix = tokens[index..replacement_start].to_vec();
+            let array_base = tokens[replacement_start].clone();
+            let receiver_name = |element: usize| {
+                let mut receiver = receiver_prefix.clone();
+                receiver.push(format!("{array_base}_{element}"));
+                receiver
+            };
+            if method == "GetDimensions" {
+                let dimensions = usize::from(shape.dimension);
+                let has_mip = args.len() == dimensions + 2;
+                if (args.len() != dimensions && !has_mip) || tokens.get(call_end).map(String::as_str) != Some(";") {
+                    return Err("Dynamically indexed GetDimensions must be a standalone statement with valid output arguments".into());
+                }
+                let mut suffix = 0usize;
+                let temporary = loop {
+                    let candidate = format!("milkRustResourceArrayIndex{suffix}");
+                    if !tokens.iter().any(|token| token == &candidate) { break candidate; }
+                    suffix = suffix.saturating_add(1);
+                };
+                let outputs = if has_mip { args.iter().skip(1).collect::<Vec<_>>() } else { args.iter().collect::<Vec<_>>() };
+                let mut replacement = vec!["{".into(), "int".into(), temporary.clone(), "=".into(), "int".into(), "(".into()];
+                replacement.extend(array_index.clone());
+                replacement.extend([")".into(), ";".into()]);
+                for element in 0..size {
+                    if element == 0 { replacement.push("if".into()); }
+                    else { replacement.extend(["else".into(), "if".into()]); }
+                    replacement.extend(["(".into(), temporary.clone(), "==".into(), element.to_string(), ")".into(), "{".into()]);
+                    replacement.extend(receiver_name(element));
+                    replacement.extend([".".into(), method.into(), "(".into()]);
+                    for (argument_index, argument) in args.iter().enumerate() {
+                        if argument_index != 0 { replacement.push(",".into()); }
+                        replacement.extend(argument.iter().cloned());
+                    }
+                    replacement.extend([")".into(), ";".into(), "}".into()]);
+                }
+                replacement.extend(["else".into(), "{".into()]);
+                for output in outputs {
+                    replacement.extend_from_slice(output.as_slice());
+                    replacement.extend(["=".into(), "0".into(), ";".into()]);
+                }
+                replacement.extend(["}".into(), "}".into()]);
+                splice_bounded_resource_expansion(tokens, index..call_end + 1, replacement, &mut expanded_resource_array_bytes)?;
+                index += 1;
+                continue;
+            }
+
+            let width = shape.width;
+            let mut replacement = vec!["(".into()];
+            for element in 0..size {
+                replacement.extend(["int".into(), "(".into()]);
+                replacement.extend(array_index.clone());
+                replacement.extend([")".into(), "==".into(), element.to_string(), "?".into()]);
+                replacement.extend(receiver_name(element));
+                replacement.extend([".".into(), method.into(), "(".into()]);
+                for (argument_index, argument) in args.iter().enumerate() {
+                    if argument_index != 0 { replacement.push(",".into()); }
+                    replacement.extend(argument.iter().cloned());
+                }
+                replacement.extend([")".into(), ":".into()]);
+                if element + 1 < size { replacement.push("(".into()); }
+            }
+            if width == 1 {
+                replacement.push("0.0".into());
+            } else {
+                replacement.extend([format!("float{width}"), "(".into(), "0.0".into(), ")".into()]);
+            }
+            replacement.extend(std::iter::repeat(")".to_string()).take(size));
+            splice_bounded_resource_expansion(tokens, index..call_end, replacement, &mut expanded_resource_array_bytes)?;
+            index += 1;
+            continue;
+        }
+
+        // Legacy sampler arrays are commonly indexed in the first parameter
+        // of a tex* intrinsic. Duplicate the complete call per element rather
+        // than attempting to select an opaque sampler with a GLSL expression.
+        let open = index.checked_sub(1).filter(|open| tokens.get(*open).map(String::as_str) == Some("("));
+        let Some(open) = open else {
+            return Err("Dynamically indexed legacy sampler arrays must be the first argument to a supported tex* intrinsic".into());
+        };
+        let Some(intrinsic_index) = open.checked_sub(1) else {
+            return Err("Malformed dynamically indexed legacy sampler call".into());
+        };
+        let intrinsic = tokens[intrinsic_index].as_str();
+        if !matches!(intrinsic, "tex" | "tex2d" | "tex3d" | "tex2D" | "tex2Dlod" | "tex2Dbias" | "tex2Dgrad" | "tex2Dproj" | "tex2Doffset" | "tex3D" | "tex3Dlod" | "tex3Dbias" | "tex3Dgrad" | "tex3Dproj" | "tex3Doffset" | "tex2Dfetch") {
+            return Err("Dynamically indexed legacy sampler arrays must be the first argument to a supported tex* intrinsic".into());
+        }
+        let (args, call_end) = split_hlsl_call(tokens, open)?;
+        if args.is_empty() || args[0] != tokens[index..close_index + 1] || args.iter().any(Vec::is_empty) {
+            return Err("Dynamically indexed legacy sampler-array access must occupy the complete first tex* argument".into());
+        }
+        let mut replacement = vec!["(".into()];
+        for element in 0..size {
+            replacement.extend(["int".into(), "(".into()]);
+            replacement.extend(array_index.clone());
+            replacement.extend([")".into(), "==".into(), element.to_string(), "?".into(), intrinsic.into(), "(".into()]);
+            replacement.extend(receiver_name(element));
+            for argument in args.iter().skip(1) {
+                replacement.push(",".into());
+                replacement.extend(argument.iter().cloned());
+            }
+            replacement.extend([")".into(), ":".into()]);
+            if element + 1 < size { replacement.push("(".into()); }
+        }
+        replacement.extend(["float4".into(), "(".into(), "0.0".into(), ")".into()]);
+        replacement.extend(std::iter::repeat(")".to_string()).take(size));
+        splice_bounded_resource_expansion(tokens, intrinsic_index..call_end, replacement, &mut expanded_resource_array_bytes)?;
+        index = intrinsic_index + 1;
     }
     let (resource_fields, _, resource_instances) = resource_struct_fields(tokens)?;
 
