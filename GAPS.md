@@ -202,12 +202,17 @@ render frames, resolve external texture packs, or establish fidelity.
   It still rejects texture types outside those three dimensions, integer/non-color texture
   element types, resource arrays in function scopes or nested resource-bearing
   structs, initialized resource instances, resource-bearing struct parameters,
-  custom sampler-state definitions, comparison methods and gather methods.
+  comparison methods and gather methods. Global static `SamplerState` definitions
+  support point/linear min-mag-mip filtering and wrap/clamp addressing when all
+  active texture axes agree. Separate min/mag/mip filters, anisotropic filtering,
+  mirror/border modes, dynamic state expressions, and custom local/struct state
+  initialization remain outside the profile.
   Dynamic array dispatch is limited to side-effect-free indices, supported
   sampling/load methods, standalone `GetDimensions`, and legacy `tex*` calls
   with the array element as their first argument. Declared direct
-  `SamplerState` fields are accepted as method arguments; custom per-object
-  filtering/addressing remains outside the binding model. The compiler remains a
+  Direct `SamplerState` fields are accepted as method arguments but use the
+  resource prefix. Global initialized states lower through per-resource aliases;
+  parameter and struct-field state propagation is not implemented. The compiler remains a
   bounded pixel-shader profile, not all HLSL shader models. The separate WGSL
   path remains limited.
 - Complete format/EEL/texture behavior for every corpus file, including other legacy
@@ -240,4 +245,4 @@ hosted fallback. Keep untrusted PR work isolated and secret-free.
 
 ## 2026-10-30 dynamic resource-array lowering
 
-Global bounded texture/sampler arrays now support grouped declarations, 1D/2D/3D texture bindings, literal indices, and side-effect-free dynamic selection without indexing opaque GLSL values. Dynamic texture method calls are expanded across each named binding; legacy sampler arrays expand supported `tex*` calls with the array element as the first argument. Standalone dynamic `GetDimensions` uses a bounded branch, and out-of-range dynamic access produces zero. A 512 KiB generated-dispatch budget limits nested expansion. Function-local arrays, nested resource-bearing structs, custom sampler states and unsupported HLSL resource forms remain explicit compiler failures. The source lock and handoff are synchronized in PlezyNG PR #82. No build or test was run under the source-only restriction.
+Global bounded texture/sampler arrays now support grouped declarations, 1D/2D/3D texture bindings, literal indices, and side-effect-free dynamic selection without indexing opaque GLSL values. Dynamic texture method calls are expanded across each named binding; legacy sampler arrays expand supported `tex*` calls with the array element as the first argument. Standalone dynamic `GetDimensions` uses a bounded branch, and out-of-range dynamic access produces zero. A 512 KiB generated-dispatch budget limits nested expansion. Function-local arrays, nested resource-bearing structs, advanced sampler states and unsupported HLSL resource forms remain explicit compiler failures. The source lock and handoff are synchronized in PlezyNG PR #82. No build or test was run under the source-only restriction.
