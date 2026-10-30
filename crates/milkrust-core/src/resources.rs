@@ -46,7 +46,7 @@ pub fn noise_texture(seed: u32, volume: bool) -> (u32, u32, u32, Vec<u8>) {
     (side, side, depth, bytes)
 }
 
-pub const BLUR_FRAGMENT: &str = "#version 300 es\nprecision highp float; uniform sampler2D previousFrame; uniform vec2 blurStep; uniform vec2 blurTransform; in vec2 uv; out vec4 outColor; void main(){ vec3 c=texture(previousFrame,uv).rgb*0.2270270270; c+=(texture(previousFrame,uv+blurStep*1.3846153846).rgb+texture(previousFrame,uv-blurStep*1.3846153846).rgb)*0.3162162162; c+=(texture(previousFrame,uv+blurStep*3.2307692308).rgb+texture(previousFrame,uv-blurStep*3.2307692308).rgb)*0.0702702703; outColor=vec4(c*blurTransform.x+blurTransform.y,1.0); }";
+pub const BLUR_FRAGMENT: &str = "#version 300 es\nprecision highp float; uniform sampler2D previousFrame; uniform vec2 blurStep; uniform vec2 sourceTexel; uniform vec2 blurTransform; uniform vec4 blurWeights; uniform vec4 blurOffsets; uniform float blurWeightScale; uniform vec4 blurEdge; uniform float blurHorizontal; in vec2 uv; out vec4 outColor; void main(){bool horizontal=blurHorizontal>0.5;vec2 base=uv+sourceTexel*(horizontal?vec2(1.0,1.0):vec2(1.0,0.0));vec3 c;if(horizontal){c=((texture(previousFrame,base+blurStep*blurOffsets.x).rgb+texture(previousFrame,base-blurStep*blurOffsets.x).rgb)*blurWeights.x)+((texture(previousFrame,base+blurStep*blurOffsets.y).rgb+texture(previousFrame,base-blurStep*blurOffsets.y).rgb)*blurWeights.y)+((texture(previousFrame,base+blurStep*blurOffsets.z).rgb+texture(previousFrame,base-blurStep*blurOffsets.z).rgb)*blurWeights.z)+((texture(previousFrame,base+blurStep*blurOffsets.w).rgb+texture(previousFrame,base-blurStep*blurOffsets.w).rgb)*blurWeights.w);c*=blurWeightScale;c=c*blurTransform.x+blurTransform.y;}else{c=((texture(previousFrame,base+blurStep*blurOffsets.x).rgb+texture(previousFrame,base-blurStep*blurOffsets.x).rgb)*blurWeights.x)+((texture(previousFrame,base+blurStep*blurOffsets.y).rgb+texture(previousFrame,base-blurStep*blurOffsets.y).rgb)*blurWeights.y);c*=blurWeightScale;float edge=min(min(uv.x,uv.y),1.0-max(uv.x,uv.y));edge=sqrt(max(edge,0.0));edge=blurEdge.x+blurEdge.y*clamp(edge*blurEdge.z,0.0,1.0);c*=edge;}outColor=vec4(c,1.0); }";
 
 pub const SCALAR_UNIFORMS: &[&str] = &["frame", "fps", "progress", "decay", "vol", "vol_att", "blur1_edge_darken",
     "blur1_min", "blur1_max", "blur2_min", "blur2_max", "blur3_min", "blur3_max"];
@@ -198,6 +198,44 @@ pub fn blur_transform(frame: &crate::MilkRustFrame, level: usize, pass: usize) -
     let [low, high] = ranges[level];
     let [previous_low, previous_high] = if level == 0 { [0.0, 1.0] } else { ranges[level-1] };
     [(previous_high-previous_low)/(high-low), (previous_low-low)/(high-low)]
+}
+
+
+/// Return the optimized separable blur kernel used by MilkDrop's two passes.
+/// The values preserve its eight source weights and paired-tap offsets.
+pub fn blur_kernel(pass: usize) -> ([f32; 4], [f32; 4], f32) {
+    let source = [4.0f32, 3.8, 3.5, 2.9, 1.9, 1.2, 0.7, 0.3];
+    if pass == 0 {
+        let weights = [source[0] + source[1], source[2] + source[3],
+            source[4] + source[5], source[6] + source[7]];
+        let offsets = [
+            2.0 * source[1] / weights[0],
+            2.0 + 2.0 * source[3] / weights[1],
+            4.0 + 2.0 * source[5] / weights[2],
+            6.0 + 2.0 * source[7] / weights[3],
+        ];
+        let normalization = 0.5 / weights.iter().sum::<f32>();
+        (weights, offsets, normalization)
+    } else {
+        let first = source[..4].iter().sum::<f32>();
+        let second = source[4..].iter().sum::<f32>();
+        let offsets = [
+            2.0 * (source[2] + source[3]) / first,
+            2.0 + 2.0 * (source[6] + source[7]) / second,
+            0.0,
+            0.0,
+        ];
+        let normalization = 1.0 / ((first + second) * 2.0);
+        ([first, second, 0.0, 0.0], offsets, normalization)
+    }
+}
+
+/// MilkDrop darkens the first vertical blur pass only.
+pub fn blur_edge(frame: &crate::MilkRustFrame, level: usize, pass: usize) -> [f32; 4] {
+    if level != 0 || pass != 1 { return [1.0, 0.0, 5.0, 0.0]; }
+    let edge = frame.shader_values.get("blur1_edge_darken").copied()
+        .filter(|value| value.is_finite()).unwrap_or(0.0).clamp(-1.0e4, 1.0e4) as f32;
+    [1.0 - edge, edge, 5.0, 0.0]
 }
 
 #[cfg(test)]
