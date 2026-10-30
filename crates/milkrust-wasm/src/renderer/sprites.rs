@@ -162,8 +162,42 @@ impl SpritePass {
         gl.copy_tex_sub_image_2d(Gl::TEXTURE_2D, 0, 0, 0, 0, 0, size.0, size.1);
         gl.disable(Gl::BLEND);
         gl.active_texture(Gl::TEXTURE0);
-        gl.sampler_parameteri(&self.sampler, Gl::TEXTURE_MIN_FILTER,
-            if animated { Gl::LINEAR as i32 } else { Gl::LINEAR_MIPMAP_LINEAR as i32 });
+        let settings = if animated {
+            milkrust_core::resources::SamplerSettings {
+                min_point: false,
+                mag_point: false,
+                mip: milkrust_core::resources::MipFilter::None,
+                wrap: [milkrust_core::resources::AddressMode::Wrap; 3],
+            }
+        } else {
+            milkrust_core::resources::sampler_profile(&sprite.texture)
+        };
+        let min_filter = match (settings.min_point, settings.mip) {
+            (true, milkrust_core::resources::MipFilter::None) => Gl::NEAREST,
+            (false, milkrust_core::resources::MipFilter::None) => Gl::LINEAR,
+            (true, milkrust_core::resources::MipFilter::Point) => Gl::NEAREST_MIPMAP_NEAREST,
+            (false, milkrust_core::resources::MipFilter::Point) => Gl::LINEAR_MIPMAP_NEAREST,
+            (true, milkrust_core::resources::MipFilter::Linear) => Gl::NEAREST_MIPMAP_LINEAR,
+            (false, milkrust_core::resources::MipFilter::Linear) => Gl::LINEAR_MIPMAP_LINEAR,
+        };
+        gl.sampler_parameteri(&self.sampler, Gl::TEXTURE_MIN_FILTER, min_filter as i32);
+        gl.sampler_parameteri(
+            &self.sampler,
+            Gl::TEXTURE_MAG_FILTER,
+            if settings.mag_point { Gl::NEAREST as i32 } else { Gl::LINEAR as i32 },
+        );
+        for (axis, mode) in [
+            (Gl::TEXTURE_WRAP_S, settings.wrap[0]),
+            (Gl::TEXTURE_WRAP_T, settings.wrap[1]),
+            (Gl::TEXTURE_WRAP_R, settings.wrap[2]),
+        ] {
+            let address = match mode {
+                milkrust_core::resources::AddressMode::Clamp => Gl::CLAMP_TO_EDGE,
+                milkrust_core::resources::AddressMode::Wrap => Gl::REPEAT,
+                milkrust_core::resources::AddressMode::Mirror => Gl::MIRRORED_REPEAT,
+            };
+            gl.sampler_parameteri(&self.sampler, axis, address as i32);
+        }
         gl.bind_texture(Gl::TEXTURE_2D, Some(keyed.unwrap_or(image)));
         gl.bind_sampler(0, Some(&self.sampler));
         gl.use_program(Some(&self.program));
