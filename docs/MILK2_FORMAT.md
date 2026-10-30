@@ -38,12 +38,10 @@ no valid process-start value.
 
 Direction is a signed integer in the saved header; only `-1` reverses the four
 direction-sensitive patterns, while other integer values preserve the normal
-orientation. A non-integer direction is rejected. Before any random registers
-have been initialized, analytic patterns use the reference renderer's midpoint
-random inputs (`0.5`), and plasma uses its deterministically seeded legacy
-random sequence. Once a saved random block has initialized the carried random
-state, omitted slots inherit their preceding values, including in partial
-blocks.
+orientation. A non-integer direction is rejected. Pattern formulas always use the effective carried `random_1..5` registers.
+Before any saved values exist, they use the process-start defaults of `0.0`;
+a partial block inherits preceding values for omitted slots. Mask evaluation
+does not synthesize midpoint or seeded random values.
 
 Both preset scopes run their init and per-frame equations independently. For
 rendering, PRESET2 receives MilkDrop's cosine interpolation of the documented
