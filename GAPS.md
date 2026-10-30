@@ -60,10 +60,11 @@ run is recorded for this checkpoint.
   round-trip float output have authored numerical controls; execution is unrun.
 - Global `Texture1D`/`Texture2D` and legacy `sampler`/`sampler2D`
   arrays with literal bounds from 1 through 15 expand into separately named
-  image bindings. Texture methods and legacy `tex*` intrinsics use constant
-  decimal indices and assets named `<resource>_<index>`; dynamic/grouped
-  arrays, `Texture3D`/`sampler3D` arrays, and arrays in structs or function
-  scopes still fail closed.
+  image bindings. Constant-index array fields also work on global resource
+  struct instances. Texture methods and legacy `tex*` intrinsics bind direct
+  assets as `<resource>_<index>` and struct fields as
+  `<object>_<field>_<index>`. Dynamic/grouped arrays, `Texture3D`/`sampler3D`
+  arrays, function-local arrays and nested resource-bearing structs fail closed.
 - The bounded WGSL expression path lowers floating scalar/vector HLSL `fmod` to
   signed WGSL remainder; its integer/boolean, advanced sampling and broader
   shader-language limits remain explicit.
@@ -186,10 +187,10 @@ render frames, resolve external texture packs, or establish fidelity.
   maps to the center row of a 2D image and needs a one-row asset for 1D parity.
   It still rejects texture types outside those three dimensions, integer/non-color texture
   element types, dynamically indexed/grouped texture or sampler arrays,
-  `Texture3D`/`sampler3D` arrays, resource arrays inside structs or function
-  scopes, numeric arrays-of-arrays, initialized/nested resource structs,
-  resource-bearing struct parameters, custom sampler-state definitions,
-  comparison methods and gather methods. Declared direct
+  `Texture3D`/`sampler3D` arrays, resource arrays in function scopes or nested
+  resource-bearing structs, numeric arrays-of-arrays, initialized resource
+  instances, resource-bearing struct parameters, custom sampler-state
+  definitions, comparison methods and gather methods. Declared direct
   `SamplerState` fields are accepted as method arguments; custom per-object
   filtering/addressing remains outside the binding model. The compiler remains a
   bounded pixel-shader profile, not all HLSL shader models. The separate WGSL
