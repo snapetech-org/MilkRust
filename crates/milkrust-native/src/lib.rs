@@ -237,7 +237,7 @@ fn render_session(session: &mut Session, elapsed: f64,
     let audio = session.audio.analyze(elapsed);
     session.runtime.set_stereo_audio(audio.stereo)?;
     let result = session.runtime.try_render_source_with_audio_and_input(&session.source, elapsed,
-        audio.bands[0], audio.bands[1], audio.bands[2], &audio.waveform, &audio.spectrum, session.input)
+        audio.bands[0], audio.bands[1], audio.bands[2], &audio.waveform, &audio.spectrum, session.input.clone())
         .and_then(|frames| draw(&mut session.renderer, &frames));
     if result.is_err() { session.failed = true; } else { session.last_time = Some(elapsed); }
     result
