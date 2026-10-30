@@ -96,10 +96,12 @@ run is recorded for this checkpoint.
 - Three blur levels use MilkDrop's paired-tap horizontal/vertical weights,
   source-texel offsets, nested range transforms and first-level edge darkening in
   native/WebGL; safe nondegenerate bounds avoid the historical zero-span typo.
-  Deterministic original 2D/3D noise, mipmaps and per-binding filtering/wrapping
-  are also present. q registers, frame uniforms, texture sizes and random/roam
-  vectors are bound. Blur pixel parity and generated-noise reference comparison
-  remain open; missing resources and compiler/driver errors do not become a placeholder.
+  Deterministic 2D/3D noise uses the reference texture dimensions and
+  quality-specific X/Y/Z cubic expansion order; mipmaps and per-binding
+  filtering/wrapping are also present. q registers, frame uniforms, texture sizes
+  and random/roam vectors are bound. Blur pixel parity and generated-noise pixel
+  comparison remain open because the reference seeds from its runtime clock;
+  missing resources and compiler/driver errors do not become a placeholder.
 - A bounded `.milk2` wrapper parser, round-trip metadata preservation, two
   independent states, all 30 saved-pattern formulas with per-fragment 64x48
   triangle interpolation from the reference's clamped, truncated 8-bit vertex alpha, and the documented sprite
@@ -406,3 +408,14 @@ PlezyNG's desktop containment source is committed at
 MilkRust run inside packaged helpers with bounded native IPC and process
 termination. Mobile/TV local drivers and device-wide GPU/kernel failure remain
 separate limits. This is not a claim of tested recovery or universal completion.
+
+
+## 2026-10-30 classic noise texture quality generation
+
+Built-in noise textures now use the compatible physical dimensions, random-value ranges,
+packed color layout, and separable cubic interpolation order from MilkDrop's
+`AddNoiseTex` and `AddNoiseVol` paths. Medium/high 2D noise expands in X then Y;
+high 3D noise expands in X, Y, then Z. The generator uses stable per-preset seeds
+instead of the reference's performance-counter reseeding, so quality semantics are
+implemented but generated pixels are not claimed bit-identical. Builds and GPU
+reference captures remain pending.
