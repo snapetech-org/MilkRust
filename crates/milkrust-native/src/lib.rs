@@ -22,6 +22,7 @@ struct Session {
     renderer: Renderer,
     runtime: MilkRustFrameSetRuntime,
     audio: Audio,
+    input: MilkRustInputState,
     source: String,
     texture_names: String,
     last_time: Option<f64>,
@@ -81,7 +82,8 @@ pub unsafe extern "C" fn milkrust_create(loader: Option<gl::Loader>, gles: i32) 
             let handle = NEXT_HANDLE.fetch_add(1, Ordering::Relaxed);
             if handle == 0 { return Err("Native session identity exhausted".into()); }
             sessions.insert(handle, Session { renderer, runtime: MilkRustFrameSetRuntime::default(),
-                audio: Audio::default(), source: String::new(), texture_names: String::new(), last_time: None, failed: false });
+                audio: Audio::default(), input: MilkRustInputState::default(), source: String::new(),
+                texture_names: String::new(), last_time: None, failed: false });
             Ok(handle)
         })
     }));
@@ -191,6 +193,27 @@ pub extern "C" fn milkrust_set_clock(handle: u64, year: i32, month: u32, day: u3
     }))
 }
 
+/// Update normalized pointer input for following frames. Call on the render thread.
+/// mouse_down is exactly 0 or 1; non-finite values are rejected.
+#[no_mangle]
+pub extern "C" fn milkrust_set_mouse(handle: u64, mouse_down: i32, mouse_x: f64,
+    mouse_y: f64, mouse_dx: f64, mouse_dy: f64) -> i32 {
+    call(handle, |session| {
+        if !matches!(mouse_down, 0 | 1) || !mouse_x.is_finite() || !mouse_y.is_finite()
+            || !mouse_dx.is_finite() || !mouse_dy.is_finite() {
+            return Err("Invalid native mouse input".into());
+        }
+        session.input = MilkRustInputState {
+            mouse_down: f64::from(mouse_down),
+            mouse_x: mouse_x.clamp(0.0, 1.0),
+            mouse_y: mouse_y.clamp(0.0, 1.0),
+            mouse_dx,
+            mouse_dy,
+        };
+        Ok(())
+    })
+}
+
 /// # Safety
 /// stereo must point to frames*2 aligned readable float samples (<=4096 frames).
 #[no_mangle]
@@ -214,7 +237,7 @@ fn render_session(session: &mut Session, elapsed: f64,
     let audio = session.audio.analyze(elapsed);
     session.runtime.set_stereo_audio(audio.stereo)?;
     let result = session.runtime.try_render_source_with_audio_and_input(&session.source, elapsed,
-        audio.bands[0], audio.bands[1], audio.bands[2], &audio.waveform, &audio.spectrum, MilkRustInputState::default())
+        audio.bands[0], audio.bands[1], audio.bands[2], &audio.waveform, &audio.spectrum, session.input)
         .and_then(|frames| draw(&mut session.renderer, &frames));
     if result.is_err() { session.failed = true; } else { session.last_time = Some(elapsed); }
     result
