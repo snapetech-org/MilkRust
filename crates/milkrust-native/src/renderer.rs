@@ -363,8 +363,7 @@ impl Renderer {
         let mask_key = frames.entries.get(1).and_then(|entry| {
             let pattern = milk2::blend_pattern_code(&entry.blend_pattern)?;
             (pattern != 0).then(|| milk2::TransitionMaskKey::new(pattern, entry.blend_alpha as f32,
-                entry.blend_direction, entry.blend_random.map(|value| value as f32), entry.blend_has_randoms,
-                &entry.blend_pattern, width, height))
+                entry.blend_direction, entry.blend_random.map(|value| value as f32), width, height))
         });
         if let Some(key) = mask_key {
             if self.transition_mask.as_ref().is_none_or(|(cached, _)| *cached != key) {
