@@ -594,6 +594,15 @@ fn next_milkrust_mouse_click(input: MilkRustInputState, previous_down: &mut bool
     milkrust_bool_number(click)
 }
 
+fn milkrust_preset_elapsed(start_time: Option<f64>, time_seconds: f64) -> f64 {
+    if !time_seconds.is_finite() { return 0.0; }
+    start_time
+        .filter(|start| start.is_finite())
+        .map(|start| time_seconds - start)
+        .filter(|elapsed| elapsed.is_finite())
+        .map_or(0.0, |elapsed| elapsed.max(0.0))
+}
+
 fn update_milkrust_scope_clock(scope: &mut BTreeMap<String, MilkRustValue>, time_seconds: f64) {
     let day_seconds = if time_seconds.is_finite() { time_seconds.rem_euclid(86_400.0) } else { 0.0 };
     let whole_seconds = day_seconds.floor();
@@ -1222,6 +1231,7 @@ pub fn milkrust_frame_set_from_source(
 pub struct MilkRustRuntime {
     last_error: Option<String>,
     previous_mouse_down: bool,
+    preset_start_time: Option<f64>,
      initialized: bool,
      preset_document: Option<MilkRustPresetDocument>,
      scope: BTreeMap<String, MilkRustValue>,
@@ -1341,7 +1351,8 @@ impl MilkRustRuntime {
                     treble,
                 );
             };
-            self.scope = create_milkrust_scope(&preset_document, time_seconds, bass, mid, treble);
+            self.preset_start_time = Some(time_seconds);
+            self.scope = create_milkrust_scope(&preset_document, 0.0, bass, mid, treble);
             self.translated_shader_source = translated_milkrust_shader_source(&preset_document)
                 .into();
             self.shader_texture_samplers = milkrust_shader_texture_samplers(&preset_document);
@@ -1351,13 +1362,14 @@ impl MilkRustRuntime {
             self.initialized = false;
         }
 
+        let preset_time = milkrust_preset_elapsed(self.preset_start_time, time_seconds);
         let Some(mut preset_document) = self.preset_document.take() else {
             return milkrust_frame(&MilkRustPreset::default(), time_seconds, bass, mid, treble);
         };
         let next_frame = milkrust_scope_number(&self.scope, "frame", 0.0) + 1.0;
         update_milkrust_scope_audio(
             &mut self.scope,
-            time_seconds,
+            preset_time,
             next_frame,
             bass,
             mid,
@@ -1391,7 +1403,7 @@ impl MilkRustRuntime {
             self.translated_shader_source.as_deref(),
             self.shader_texture_samplers.as_slice(),
             &self.shader_stages,
-            time_seconds,
+            preset_time,
             bass,
             mid,
             treble,
@@ -1412,6 +1424,7 @@ pub struct MilkRustFrameSetRuntime {
     previous_mouse_down: bool,
     stereo_audio: Option<audio::Stereo>,
     previous_time: Option<f64>,
+    preset_start_time: Option<f64>,
     viewport: Option<(u32, u32)>,
     sprite_runtime: sprites::Runtime,
     last_error: Option<String>,
@@ -1556,7 +1569,8 @@ impl MilkRustFrameSetRuntime {
                 blend_milkrust_milk2_scope(&mut sprite_scopes[1], &old, mix, snap);
             }
         }
-        let sprite_result = self.sprite_runtime.render_with_parents(&parsed.embedded_sprites, &sprite_scopes, time_seconds,
+        let preset_time = milkrust_preset_elapsed(self.preset_start_time, time_seconds);
+        let sprite_result = self.sprite_runtime.render_with_parents(&parsed.embedded_sprites, &sprite_scopes, preset_time,
             parsed.saved_blend.as_ref().map_or_else(|| milkrust_scope_number(&self.scopes[0], "progress", 1.0), |blend| blend.progress));
         let sprite_error = match sprite_result {
             Ok(sprites) => { frame.sprites = sprites; None }
@@ -1595,6 +1609,7 @@ impl MilkRustFrameSetRuntime {
                 self.milk2_header_state.update(blend);
             }
             self.previous_time = None;
+            self.preset_start_time = Some(time_seconds);
             self.sprite_runtime = sprites::Runtime::default();
             self.cached_preset_set = Some(parsed.clone());
             self.shader_stages = parsed.presets.iter().map(milkrust_shader_stages).collect();
@@ -1603,7 +1618,7 @@ impl MilkRustFrameSetRuntime {
                 .presets
                 .iter()
                 .map(|preset| {
-                    let mut scope = create_milkrust_scope(preset, time_seconds, bass, mid, treble);
+                    let mut scope = create_milkrust_scope(preset, 0.0, bass, mid, treble);
                     seed_milk2_header_scope(&mut scope, &self.milk2_header_state);
                     scope
                 })
@@ -1612,6 +1627,7 @@ impl MilkRustFrameSetRuntime {
             self.source = source.to_string();
         }
 
+        let preset_time = milkrust_preset_elapsed(self.preset_start_time, time_seconds);
         let fps = self.previous_time.filter(|previous| time_seconds > *previous)
             .map_or(60.0, |previous| (1.0 / (time_seconds - previous)).clamp(1.0, 1000.0));
         self.previous_time = Some(time_seconds);
@@ -1628,7 +1644,7 @@ impl MilkRustFrameSetRuntime {
             let next_frame = milkrust_scope_number(scope, "frame", 0.0) + 1.0;
             update_milkrust_scope_audio(
                  scope,
-                 time_seconds,
+                 preset_time,
                  next_frame,
                  bass,
                  mid,
@@ -1708,7 +1724,7 @@ impl MilkRustFrameSetRuntime {
                 Some(translated_shader_source.as_str()),
                 &shader_texture_samplers,
                 &self.shader_stages[index],
-                time_seconds,
+                preset_time,
                 bass,
                 mid,
                 treble,
@@ -8147,6 +8163,41 @@ comp_shader_2=ret = vec3(shifted, energy * bass_att);
         ] {
             assert_eq!(scope[key], MilkRustValue::Number(value), "{key}");
         }
+    }
+
+    #[test]
+    fn preset_runtime_clock_restarts_for_each_loaded_preset() {
+        let first_source = "[preset00]\nname=First\nper_frame_1=q1=time;\n";
+        let second_source = "[preset00]\nname=Second\nper_frame_1=q1=time;\n";
+        let mut runtime = MilkRustRuntime::default();
+
+        runtime.render_source(first_source, 40.0, 0.0, 0.0, 0.0);
+        assert_eq!(runtime.render_error(), None);
+        assert_eq!(milkrust_scope_number(&runtime.scope, "time", -1.0), 0.0);
+        assert_eq!(milkrust_scope_number(&runtime.scope, "frame", -1.0), 1.0);
+
+        runtime.render_source(first_source, 40.5, 0.0, 0.0, 0.0);
+        assert_eq!(milkrust_scope_number(&runtime.scope, "time", -1.0), 0.5);
+        assert_eq!(milkrust_scope_number(&runtime.scope, "frame", -1.0), 2.0);
+
+        runtime.render_source(second_source, 900.0, 0.0, 0.0, 0.0);
+        assert_eq!(milkrust_scope_number(&runtime.scope, "time", -1.0), 0.0);
+        assert_eq!(milkrust_scope_number(&runtime.scope, "frame", -1.0), 1.0);
+    }
+
+    #[test]
+    fn saved_pair_scopes_share_a_fresh_preset_clock() {
+        let source = "blending_pattern=Zoom\nblending_progress=0.5\n[PRESET1_BEGIN]\n[preset00]\nname=Old\nper_frame_1=q1=time;\n[PRESET1_END]\n[PRESET2_BEGIN]\n[preset00]\nname=New\nper_frame_1=q1=time;\n[PRESET2_END]";
+        let mut runtime = MilkRustFrameSetRuntime::default();
+        let first = runtime.render_source(source, 73.0, 0.0, 0.0, 0.0);
+        assert_eq!(first.preset_count, 2);
+        assert_eq!(runtime.render_error(), None);
+        assert_eq!(milkrust_scope_number(&runtime.scopes[0], "time", -1.0), 0.0);
+        assert_eq!(milkrust_scope_number(&runtime.scopes[1], "time", -1.0), 0.0);
+
+        runtime.render_source(source, 73.25, 0.0, 0.0, 0.0);
+        assert_eq!(milkrust_scope_number(&runtime.scopes[0], "time", -1.0), 0.25);
+        assert_eq!(milkrust_scope_number(&runtime.scopes[1], "time", -1.0), 0.25);
     }
 
     #[test]
