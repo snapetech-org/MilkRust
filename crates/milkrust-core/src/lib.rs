@@ -2204,7 +2204,7 @@ pub fn parse_milkrust_preset_set(source: &str, force_milk2: bool) -> MilkRustPre
         }
     };
     let source = blocks.body.as_str();
-    let (chunks, saved_blend) = if milk2::has_wrapper(source) {
+    let (chunks, saved_blend) = if milk2::has_complete_wrapper(source) {
         match milk2::parse(source) {
             Ok((blend, chunks)) => (chunks.to_vec(), Some(blend)),
             Err(error) => {
@@ -2215,7 +2215,7 @@ pub fn parse_milkrust_preset_set(source: &str, force_milk2: bool) -> MilkRustPre
             }
         }
     } else { (split_milkrust_preset_pair(source), None) };
-    let format = if force_milk2 || chunks.len() > 1 || saved_blend.is_some() {
+    let format = if chunks.len() > 1 || saved_blend.is_some() {
         "milk2"
     } else {
         "milk"

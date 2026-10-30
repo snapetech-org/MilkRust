@@ -298,3 +298,14 @@ numeric fields consume the compatible decimal prefix. Both import and direct
 saved-blend validation apply the same sprite rule, including BOM-prefixed
 wrapper headers. The change follows the pinned compatible source in Lactea's
 MIT-licensed parser. No build, test or reference capture has run yet.
+
+
+## 2026-10-30 real-file MilkDrop 3 header and fallback semantics
+
+MilkDrop's free-form Created/version and URL preamble is accepted and retained.
+Repeated key/value header records use the last value, and `blending_progress`,
+`blending_direction`, and random fields consume the Windows CRT-compatible
+numeric prefix. The app loader recognizes a `.milk2` wrapper only when all four
+envelope markers exist; incomplete wrappers fall back to ordinary preset
+parsing. Direct wrapper parsing remains strict. No build, test or reference
+capture has run.

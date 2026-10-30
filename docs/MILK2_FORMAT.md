@@ -34,7 +34,9 @@ The persistent native and WebAssembly preset-load/inspect paths validate a
 wrapper against the runtime's carried header state before resetting its
 per-preset equations and renderer. Stateless import/pack validation has no
 history to consult and therefore rejects a wrapper whose omitted pattern has
-no valid process-start value.
+no valid process-start value. The app loader treats a source with an incomplete
+marker set as an ordinary preset, matching MilkDrop's NotDouble fallback;
+direct `milk2::parse` reports the incomplete wrapper as an error.
 
 Direction is a signed integer in the saved header; only `-1` reverses the four
 direction-sensitive patterns, while other integer values preserve the normal

@@ -322,6 +322,22 @@ pub fn has_wrapper(source: &str) -> bool {
     })
 }
 
+/// A saved wrapper is present only when all four envelope markers exist.
+/// Callers can use an incomplete .milk2 as an ordinary preset, matching the
+/// original loader's NotDouble fallback.
+pub fn has_complete_wrapper(source: &str) -> bool {
+    let markers = ["[PRESET1_BEGIN]", "[PRESET1_END]", "[PRESET2_BEGIN]", "[PRESET2_END]"];
+    let mut found = [false; 4];
+    for (index, raw_line) in source.lines().enumerate() {
+        let line = raw_line.trim();
+        let line = if index == 0 { line.trim_start_matches('\u{feff}') } else { line };
+        for (marker_index, marker) in markers.iter().enumerate() {
+            if line.eq_ignore_ascii_case(marker) { found[marker_index] = true; }
+        }
+    }
+    found.into_iter().all(|present| present)
+}
+
 /// Match the decimal prefix accepted by the Windows CRT's `std::stof`
 /// without accepting a hexadecimal literal. MilkDrop files may have a harmless
 /// suffix after the numeric value.
@@ -354,7 +370,12 @@ fn parse_header_float(value: &str, key: &str) -> Result<f64, String> {
         }
     }
     if cursor <= start { return Err(format!("invalid milk2 {key}")); }
-    let number = value[..cursor].parse::<f32>().map_err(|_| format!("invalid milk2 {key}"))?;
+    let mut token = value[..cursor].to_string();
+    let sign = usize::from(token.starts_with('+') || token.starts_with('-'));
+    if token.as_bytes().get(sign) == Some(&b'.') { token.insert(sign, '0'); }
+    let exponent = token.find(|ch| ch == 'e' || ch == 'E').unwrap_or(token.len());
+    if exponent > 0 && token.as_bytes().get(exponent - 1) == Some(&b'.') { token.insert(exponent, '0'); }
+    let number = token.parse::<f32>().map_err(|_| format!("invalid milk2 {key}"))?;
     if !number.is_finite() { return Err(format!("non-finite milk2 {key}")); }
     Ok(f64::from(number))
 }

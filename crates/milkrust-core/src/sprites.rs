@@ -142,7 +142,7 @@ pub fn extract(source: &str, enabled: bool) -> Result<Blocks, String> {
 /// The saved enable flag belongs to the envelope/header, not to sprite code.
 /// Classic .milk files default on; a .milk2 trailer requires explicit sprite=1.
 pub fn enabled(source: &str) -> bool {
-    let is_milk2 = crate::milk2::has_wrapper(source);
+    let is_milk2 = crate::milk2::has_complete_wrapper(source);
     for (index, raw_line) in source.lines().enumerate() {
         let line = raw_line.trim();
         let line = if index == 0 { line.trim_start_matches('\u{feff}') } else { line };
