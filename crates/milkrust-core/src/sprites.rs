@@ -144,10 +144,14 @@ pub fn extract(source: &str, enabled: bool) -> Result<Blocks, String> {
 pub fn enabled(source: &str) -> bool {
     let is_milk2 = crate::milk2::has_complete_wrapper(source);
     let mut milk2_flag = None;
+    let mut inside_sprite = false;
     for (index, raw_line) in source.lines().enumerate() {
         let line = raw_line.trim();
         let line = if index == 0 { line.trim_start_matches('\u{feff}') } else { line };
-        if line.starts_with('[') { break; }
+        if is_milk2 && line.starts_with('[') { break; }
+        if marker(line, "_BEGIN]").is_some() { inside_sprite = true; continue; }
+        if marker(line, "_END]").is_some() { inside_sprite = false; continue; }
+        if !is_milk2 && inside_sprite { continue; }
         if let Some((key, value)) = line.split_once('=') {
             if key.trim().eq_ignore_ascii_case("sprite") {
                 let value = value.trim();
@@ -156,7 +160,8 @@ pub fn enabled(source: &str) -> bool {
                     // header records, so sprite gating must use that same value.
                     milk2_flag = Some(value == "1");
                 } else {
-                    // Preserve the classic .milk first-occurrence behavior.
+                    // Classic preset properties are inside [preset00]; keep
+                    // first-occurrence behavior while ignoring sprite blocks.
                     return value != "0";
                 }
             }
@@ -849,9 +854,11 @@ mod tests {
     }
 
     #[test]
-    fn classic_sprite_gate_keeps_first_header_value_and_default_on() {
+    fn classic_sprite_gate_keeps_first_value_and_default_on() {
         assert!(!enabled("sprite=0\nsprite=1\n[preset00]\n"));
+        assert!(!enabled("[preset00]\nsprite=0\n"));
         assert!(enabled("[preset00]\nname=classic\n"));
+        assert!(enabled("[preset00]\n[SPRITE1_BEGIN]\nsprite=0\n[SPRITE1_END]\n"));
     }
 
 }
