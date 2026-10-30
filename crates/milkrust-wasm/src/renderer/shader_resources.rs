@@ -88,7 +88,9 @@ impl ShaderResources {
                         self.gl.tex_image_2d_with_i32_and_i32_and_i32_and_format_and_type_and_opt_u8_array(
                             target, 0, Gl::RGBA8 as i32, w as i32, h as i32, 0, Gl::RGBA, Gl::UNSIGNED_BYTE, Some(&data))?;
                     }
-                    self.gl.generate_mipmap(target);
+                    // MilkDrop creates built-in noise textures with one mip level.
+                    // Keep mipmapped sampler profiles complete without inventing a chain.
+                    self.gl.tex_parameteri(target, 0x813D, 0); // TEXTURE_MAX_LEVEL
                 }
                 _ => {}
             }
