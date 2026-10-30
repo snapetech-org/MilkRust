@@ -160,7 +160,7 @@ fn parse_legacy_sampler_state(
     while cursor < tokens.len() && tokens[cursor] != "}" {
         let property = tokens[cursor].as_str();
         if !matches!(property, "Texture" | "MinFilter" | "MagFilter" | "MipFilter" | "AddressU" | "AddressV" | "AddressW") {
-            return Err(format!("Legacy HLSL sampler_state property {property} is outside the texture/point/linear/wrap/clamp profile"));
+            return Err(format!("Legacy HLSL sampler_state property {property} is outside the texture/point/linear/wrap/clamp/mirror profile"));
         }
         if !seen.insert(property.to_string()) {
             return Err(format!("Duplicate legacy HLSL sampler_state property {property}"));
