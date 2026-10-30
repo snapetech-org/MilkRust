@@ -238,9 +238,12 @@ render frames, resolve external texture packs, or establish fidelity.
   path remains limited.
 - Complete format/EEL/texture behavior for every corpus file, including other legacy
   encodings, other executable extensions and unsupported formats. The current
-  community-tree inventory found no unhandled text encoding or equation call,
-  but CLI parser/shader analysis and missing external texture-pack accounting
-  remain unrun. Additional unsupported historical image formats remain explicit import failures.
+  community-tree inventory found no unhandled text encoding or equation call.
+  Full CLI parser/shader analysis and external texture-pack accounting remain
+  unrun. The compatibility-report source now retains per-file, manifest and scan
+  failures; the checked-in summary remains a historical snapshot until a private
+  runner regenerates it. Additional unsupported historical image formats remain
+  explicit import failures.
 - Desktop helper process containment is implemented in PlezyNG PR #82, with
   fault-regression sources and platform packaging; execution is unverified.
   Mobile/TV local-driver and device-wide GPU hang containment, browser-process OOM
@@ -548,3 +551,19 @@ requires real per-texture qualification rows on all existing targets; an empty
 preset list never bypasses release evidence. PlezyNG resolves aliases into
 bounded private views and protects referenced versions from deletion/replacement.
 Source regression cases are authored; no build or test was run.
+
+
+## 2026-10-30 community corpus accounting source correction
+
+The CLI compatibility walk now has an explicit traversal budget, does not follow
+symlinks, and reports directory discovery failures without dropping already
+found preset paths. Oversize and invalid-file rejections are separate from true
+read failures. Empty roots return an explicit empty report. The community report
+generator checks that CLI entries equal the discovered-file denominator, joins
+results to every manifest preset path, records missing/unlisted/duplicate paths,
+and preserves compact file and per-preset outcomes plus read, decode, input-limit,
+and scan diagnostics. Sample runs map temporary names back to original manifest
+paths. Pack inventory and hashing are also bounded and retain scan/read errors.
+Regression sources cover these boundaries; no CLI, compiler, report-generation or
+private-runner execution has been performed. The checked-in generated summary
+remains a historical snapshot until the full private-runner report is regenerated.

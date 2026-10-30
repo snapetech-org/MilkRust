@@ -165,17 +165,12 @@ fn compat_command(path: Option<&String>) -> MilkRustCliResult {
         return MilkRustCliResult::err(2, usage());
     };
     let path = PathBuf::from(path);
-    let Ok(files) = collect_preset_files(&path) else {
-        return MilkRustCliResult::err(1, format!("failed to read {}\n", path.display()));
-    };
-    if files.is_empty() {
-        return MilkRustCliResult::err(
-            1,
-            format!("no .milk or .milk2 files in {}\n", path.display()),
-        );
-    }
-
+    let collection = collect_preset_files(&path);
+    let files = collection.files;
+    let discovery_errors = collection.discovery_errors;
+    let file_accounting_complete = discovery_errors.is_empty() && !collection.scan_truncated;
     let mut file_read_errors = Vec::new();
+    let mut input_rejections = Vec::new();
     let mut encoding_warnings = Vec::new();
     let mut source_read_statuses = Vec::with_capacity(files.len());
     let entries = files
@@ -238,6 +233,27 @@ fn compat_command(path: Option<&String>) -> MilkRustCliResult {
                         entry
                     }
                 },
+                Err(error) if matches!(error.kind(), io::ErrorKind::InvalidData | io::ErrorKind::InvalidInput) => {
+                    let status = if error.kind() == io::ErrorKind::InvalidData {
+                        "input-limit-rejected"
+                    } else {
+                        "invalid-file-type"
+                    };
+                    source_read_statuses.push(status);
+                    input_rejections.push(serde_json::json!({
+                        "fileName": file_name,
+                        "status": status,
+                        "error": error.to_string(),
+                    }));
+                    MilkRustCompatibilityEntry {
+                        file_name,
+                        format: if is_milk2 { "milk2" } else { "milk" }.to_string(),
+                        id,
+                        supported: false,
+                        webgpu_supported: false,
+                        ..MilkRustCompatibilityEntry::default()
+                    }
+                }
                 Err(error) => {
                     source_read_statuses.push("read-failed");
                     file_read_errors.push(serde_json::json!({
@@ -268,8 +284,13 @@ fn compat_command(path: Option<&String>) -> MilkRustCliResult {
             "renderedCount": 0,
             "visuallyReviewedCount": 0,
             "totalCount": summary.total_count,
+            "fileAccountingComplete": file_accounting_complete,
+            "discoveryErrorCount": discovery_errors.len(),
+            "discoveryErrors": discovery_errors,
             "fileReadErrorCount": file_read_errors.len(),
             "fileReadErrors": file_read_errors,
+            "inputRejectionCount": input_rejections.len(),
+            "inputRejections": input_rejections,
             "encodingWarningCount": encoding_warnings.len(),
             "encodingWarnings": encoding_warnings,
             "presetCount": summary.preset_count,
@@ -295,6 +316,8 @@ fn compat_command(path: Option<&String>) -> MilkRustCliResult {
                 "sourceReadStatus": source_read_statuses[index],
                 "parseStatus": match source_read_statuses[index] {
                     "read-failed" => "not-run",
+                    "input-limit-rejected" => "rejected-input-limits",
+                    "invalid-file-type" => "rejected-file-type",
                     "decode-failed" => "lossy-diagnostic-only",
                     _ if entry.preset_count == 0 => "no-presets-parsed",
                     _ if entry.preset_reports.iter().any(|report| !report.parse_errors.is_empty()) => "rejected-input-limits",
@@ -302,6 +325,8 @@ fn compat_command(path: Option<&String>) -> MilkRustCliResult {
                 },
                 "featureSubsetStatus": match source_read_statuses[index] {
                     "read-failed" => "not-evaluated",
+                    "input-limit-rejected" => "rejected-input-limits",
+                    "invalid-file-type" => "rejected-file-type",
                     "decode-failed" => "unsupported-encoding",
                     _ if entry.preset_count == 0 => "no-presets-parsed",
                     _ if entry.supported => "supported-by-current-static-subset",
@@ -417,26 +442,88 @@ fn pack_validate_command(path: Option<&String>) -> MilkRustCliResult {
     }
 }
 
-fn collect_preset_files(path: &Path) -> Result<Vec<PathBuf>, std::io::Error> {
-    if path.is_file() {
-        return Ok(if is_preset_file(path) {
-            vec![path.to_path_buf()]
-        } else {
-            Vec::new()
-        });
+const MAX_COMPAT_SCAN_ENTRIES: usize = 250_000;
+const MAX_COMPAT_DISCOVERY_ERRORS: usize = 256;
+
+#[derive(Default)]
+struct PresetCollection {
+    files: Vec<PathBuf>,
+    discovery_errors: Vec<serde_json::Value>,
+    visited_entries: usize,
+    scan_truncated: bool,
+    errors_truncated: bool,
+}
+
+fn record_discovery_error(collection: &mut PresetCollection, path: &Path, error: impl ToString) {
+    if collection.discovery_errors.len() + 1 < MAX_COMPAT_DISCOVERY_ERRORS {
+        collection.discovery_errors.push(serde_json::json!({
+            "path": path.to_string_lossy().into_owned(),
+            "error": error.to_string(),
+        }));
+    } else if !collection.errors_truncated {
+        collection.discovery_errors.push(serde_json::json!({
+            "path": path.to_string_lossy().into_owned(),
+            "error": "additional discovery errors omitted after the diagnostic limit",
+        }));
+        collection.errors_truncated = true;
     }
-    let mut files = Vec::new();
-    for entry in fs::read_dir(path)? {
-        let entry = entry?;
-        let entry_path = entry.path();
-        if entry_path.is_dir() {
-            files.extend(collect_preset_files(&entry_path)?);
-        } else if is_preset_file(&entry_path) {
-            files.push(entry_path);
+}
+
+fn collect_preset_files(path: &Path) -> PresetCollection {
+    fn visit(path: &Path, collection: &mut PresetCollection) {
+        if collection.visited_entries >= MAX_COMPAT_SCAN_ENTRIES {
+            if !collection.scan_truncated {
+                collection.scan_truncated = true;
+                record_discovery_error(collection, path, format!(
+                    "preset scan stopped at the {MAX_COMPAT_SCAN_ENTRIES} entry limit"
+                ));
+            }
+            return;
+        }
+        collection.visited_entries += 1;
+        let metadata = match fs::symlink_metadata(path) {
+            Ok(metadata) => metadata,
+            Err(error) => {
+                record_discovery_error(collection, path, error);
+                return;
+            }
+        };
+        if metadata.file_type().is_symlink() {
+            record_discovery_error(collection, path, "symbolic links are not followed");
+            return;
+        }
+        if metadata.is_file() {
+            if is_preset_file(path) {
+                collection.files.push(path.to_path_buf());
+            }
+            return;
+        }
+        if !metadata.is_dir() {
+            if is_preset_file(path) {
+                record_discovery_error(collection, path, "preset path is not a regular file");
+            }
+            return;
+        }
+        let entries = match fs::read_dir(path) {
+            Ok(entries) => entries,
+            Err(error) => {
+                record_discovery_error(collection, path, error);
+                return;
+            }
+        };
+        for entry in entries {
+            match entry {
+                Ok(entry) => visit(&entry.path(), collection),
+                Err(error) => record_discovery_error(collection, path, error),
+            }
+            if collection.scan_truncated { break; }
         }
     }
-    files.sort();
-    Ok(files)
+
+    let mut collection = PresetCollection::default();
+    visit(path, &mut collection);
+    collection.files.sort();
+    collection
 }
 
 fn is_preset_file(path: &Path) -> bool {
@@ -572,6 +659,8 @@ mod tests {
         assert_eq!(result.code, 0);
         let value: serde_json::Value = serde_json::from_str(&result.stdout).unwrap();
         assert_eq!(value["totalCount"], 1);
+        assert_eq!(value["fileAccountingComplete"], true);
+        assert_eq!(value["discoveryErrorCount"], 0);
         assert_eq!(value["entries"].as_array().unwrap().len(), 1);
     }
 
@@ -676,10 +765,11 @@ mod tests {
         fs::write(dir.join("test.milk2"), "name=test\n").unwrap();
         fs::write(dir.join("other.json"), "{}").unwrap();
 
-        let files = collect_preset_files(&dir).unwrap();
+        let collection = collect_preset_files(&dir);
         let _ = fs::remove_dir_all(&dir);
 
-        assert_eq!(files.len(), 2);
+        assert_eq!(collection.files.len(), 2);
+        assert!(collection.discovery_errors.is_empty());
     }
 
     #[test]
@@ -687,10 +777,54 @@ mod tests {
         let dir = temp_path("empty-dir");
         fs::create_dir_all(&dir).unwrap();
 
-        let files = collect_preset_files(&dir).unwrap();
+        let collection = collect_preset_files(&dir);
         let _ = fs::remove_dir_all(&dir);
 
-        assert!(files.is_empty());
+        assert!(collection.files.is_empty());
+        assert!(collection.discovery_errors.is_empty());
+    }
+
+    #[test]
+    fn compat_empty_directory_returns_complete_empty_report() {
+        let root = temp_path("empty-compat-root");
+        fs::create_dir_all(&root).unwrap();
+        let result = run_milkrust_cli(&["compat".to_string(), root.display().to_string()]);
+        let _ = fs::remove_dir_all(&root);
+        assert_eq!(result.code, 0);
+        let report: serde_json::Value = serde_json::from_str(&result.stdout).unwrap();
+        assert_eq!(report["totalCount"], 0);
+        assert_eq!(report["presetCount"], 0);
+        assert_eq!(report["fileAccountingComplete"], true);
+        assert_eq!(report["entries"].as_array().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn compat_preserves_root_discovery_errors_in_json() {
+        let path = temp_path("missing-compat-root");
+        let result = run_milkrust_cli(&["compat".to_string(), path.display().to_string()]);
+        assert_eq!(result.code, 0);
+        let report: serde_json::Value = serde_json::from_str(&result.stdout).unwrap();
+        assert_eq!(report["totalCount"], 0);
+        assert_eq!(report["fileAccountingComplete"], false);
+        assert_eq!(report["discoveryErrorCount"], 1);
+        assert!(report["discoveryErrors"][0]["path"].as_str().unwrap().contains("missing-compat-root"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn preset_collection_does_not_follow_symlinks() {
+        use std::os::unix::fs::symlink;
+        let root = temp_path("symlink-scan");
+        fs::create_dir_all(&root).unwrap();
+        let source = root.join("real.milk");
+        fs::write(&source, "name=real").unwrap();
+        let alias = root.join("alias.milk");
+        symlink(&source, &alias).unwrap();
+        let collection = collect_preset_files(&root);
+        let _ = fs::remove_dir_all(&root);
+        assert_eq!(collection.files.len(), 1);
+        assert_eq!(collection.discovery_errors.len(), 1);
+        assert!(collection.discovery_errors[0]["error"].as_str().unwrap().contains("symbolic links"));
     }
 
     #[test]
@@ -716,11 +850,15 @@ mod tests {
         let report: serde_json::Value = serde_json::from_str(&result.stdout).unwrap();
         assert_eq!(report["totalCount"], 2);
         assert_eq!(report["unsupportedCount"], 2);
-        assert_eq!(report["fileReadErrorCount"], 1);
+        assert_eq!(report["fileReadErrorCount"], 0);
+        assert_eq!(report["inputRejectionCount"], 1);
+        assert_eq!(report["fileAccountingComplete"], true);
         let entries = report["entries"].as_array().unwrap();
         let sparse = entries.iter().find(|entry| entry["fileName"].as_str().unwrap().ends_with("sparse.milk")).unwrap();
         assert_eq!(sparse["parseStatus"], "rejected-input-limits");
-        assert!(!sparse["presetReports"][0]["parseErrors"].as_array().unwrap().is_empty());
+        let oversized = entries.iter().find(|entry| entry["fileName"].as_str().unwrap().ends_with("oversized.milk")).unwrap();
+        assert_eq!(oversized["sourceReadStatus"], "input-limit-rejected");
+        assert_eq!(oversized["parseStatus"], "rejected-input-limits");
         fs::remove_dir_all(root).unwrap();
     }
 

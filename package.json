@@ -34,7 +34,7 @@
     "dev:player": "node ./tools/serve-rustymilk-app.mjs player",
     "dev:studio": "node ./tools/serve-rustymilk-app.mjs studio",
     "test:rust": "cargo test --workspace",
-    "test:all": "cargo test --workspace && npm run test:web && npm run test:apps && npm run test:desktop && npm run pack:validate && npm run content:validate",
+    "test:all": "cargo test --workspace && npm run test:web && npm run test:apps && npm run test:desktop && npm run pack:validate && npm run content:validate && npm run test:content-report",
     "test:compatibility": "node ./tools/report-rustymilk-compatibility.mjs",
     "test:performance": "node ./tools/measure-rustymilk-performance.mjs",
     "test:apps": "node ./tools/smoke-rustymilk-apps.mjs",
@@ -52,7 +52,8 @@
     "desktop:plugin-report": "node ./tools/report-rustymilk-desktop-plugin-discovery.mjs",
     "desktop:plugin-report:catalog": "node ./tools/report-rustymilk-desktop-plugin-discovery.mjs --catalog --include-community --include-no-assertion --write-markdown",
     "desktop:plugin-report:ci": "node ./tools/report-rustymilk-desktop-plugin-discovery.mjs --pack examples/sample-pack --frames 4",
-    "test:hlsl": "node ./tools/smoke-hlsl.mjs"
+    "test:hlsl": "node ./tools/smoke-hlsl.mjs",
+    "test:content-report": "node --test tools/tests/*.test.mjs"
   },
   "devDependencies": {
     "@playwright/test": "^1.52.0"
