@@ -43,10 +43,14 @@ impl ShaderResources {
             gl.sampler_parameteri(&sampler, Gl::TEXTURE_MIN_FILTER, min_filter as i32);
             gl.sampler_parameteri(&sampler, Gl::TEXTURE_MAG_FILTER,
                 (if settings.mag_point { Gl::NEAREST } else { Gl::LINEAR }) as i32);
-            for (axis, wrap) in [(Gl::TEXTURE_WRAP_S, settings.wrap[0]),
+            for (axis, address) in [(Gl::TEXTURE_WRAP_S, settings.wrap[0]),
                 (Gl::TEXTURE_WRAP_T, settings.wrap[1]), (Gl::TEXTURE_WRAP_R, settings.wrap[2])] {
-                gl.sampler_parameteri(&sampler, axis,
-                    (if wrap { Gl::REPEAT } else { Gl::CLAMP_TO_EDGE }) as i32);
+                let mode = match address {
+                    resources::AddressMode::Wrap => Gl::REPEAT,
+                    resources::AddressMode::Clamp => Gl::CLAMP_TO_EDGE,
+                    resources::AddressMode::Mirror => Gl::MIRRORED_REPEAT,
+                };
+                gl.sampler_parameteri(&sampler, axis, mode as i32);
             }
             result.samplers.push(sampler);
         }
