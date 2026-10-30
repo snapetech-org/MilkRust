@@ -262,37 +262,14 @@ pub struct TransitionMaskKey {
     pub progress: u32,
     pub direction: i32,
     pub random: [u32; 5],
-    pub has_randoms: bool,
-    pub field_seed: u32,
     pub width: u32,
     pub height: u32,
 }
 
 impl TransitionMaskKey {
-    pub fn new(pattern: i32, progress: f32, direction: i32, random: [f32; 5], has_randoms: bool,
-        pattern_name: &str, width: u32, height: u32) -> Self {
-        let field_seed = milk2_field_seed(pattern_name, random, has_randoms);
-        Self { pattern, progress: progress.to_bits(), direction, random: random.map(f32::to_bits), has_randoms,
-            field_seed, width, height }
+    pub fn new(pattern: i32, progress: f32, direction: i32, random: [f32; 5], width: u32, height: u32) -> Self {
+        Self { pattern, progress: progress.to_bits(), direction, random: random.map(f32::to_bits), width, height }
     }
-}
-
-fn milk2_field_seed(pattern: &str, random: [f32; 5], has_randoms: bool) -> u32 {
-    let mut hash = 2_166_136_261u32;
-    // The compatible loader seeds from the stored header spelling, so casing
-    // is significant for the procedural no-random plasma field.
-    for byte in pattern.bytes() {
-        hash = (hash ^ u32::from(byte)).wrapping_mul(16_777_619);
-    }
-    if has_randoms {
-        for value in random {
-            let quantized = (value * 100_000.0 + 0.5) as u32;
-            for byte in quantized.to_le_bytes() {
-                hash = (hash ^ u32::from(byte)).wrapping_mul(16_777_619);
-            }
-        }
-    }
-    if hash == 0 { 1 } else { hash }
 }
 
 /// Dimensions of MilkDrop 3's saved blend mesh, including its boundary vertices.
