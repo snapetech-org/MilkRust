@@ -207,14 +207,13 @@ render frames, resolve external texture packs, or establish fidelity.
   element types, resource arrays in function scopes or nested resource-bearing
   structs, initialized resource instances, resource-bearing struct parameters,
   comparison methods and gather methods. Global static `SamplerState` definitions
-  support point/linear min-mag-mip filtering and wrap/clamp addressing when all
-  active texture axes agree. Separate min/mag/mip filters, anisotropic filtering,
+  support point/linear min-mag-mip filtering with independent U/V/W Wrap or
+  Clamp addressing. Separate min/mag/mip filters, anisotropic filtering,
   mirror/border modes, dynamic state expressions, and custom local/struct state
   initialization remain outside the profile.
   Dynamic array dispatch is limited to side-effect-free indices, supported
   sampling/load methods, standalone `GetDimensions`, and legacy `tex*` calls
-  with the array element as their first argument. Declared direct
-  Direct `SamplerState` fields are accepted as method arguments but use the
+  with the array element as their first argument. Direct `SamplerState` fields are accepted as method arguments but use the
   resource prefix. Global initialized states lower through per-resource aliases;
   parameter and struct-field state propagation is not implemented. The compiler remains a
   bounded pixel-shader profile, not all HLSL shader models. The separate WGSL
