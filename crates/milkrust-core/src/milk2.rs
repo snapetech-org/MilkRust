@@ -3,6 +3,10 @@
 //! docs/MILK2_FORMAT.md.
 use std::collections::BTreeMap;
 
+fn is_valid_milk2_float(value: f64) -> bool {
+    value.is_finite() && (value as f32).is_finite()
+}
+
 /// MilkDrop keeps saved blend header values between loads. A fresh host starts
 /// with the values initialized by the format implementation.
 #[derive(Clone, Debug, PartialEq)]
@@ -33,10 +37,10 @@ impl HeaderState {
         if self.pattern.len() > 80 || (!self.pattern.is_empty() && blend_pattern_code(&self.pattern).is_none()) {
             return Err("invalid carried milk2 blending_pattern".into());
         }
-        if !self.progress.is_finite() || !(0.0..=1.0).contains(&self.progress) {
+        if !is_valid_milk2_float(self.progress) {
             return Err("invalid carried milk2 blending_progress".into());
         }
-        if self.random.iter().any(|value| !value.is_finite() || !(0.0..=1.0).contains(value)) {
+        if self.random.iter().any(|value| !is_valid_milk2_float(*value)) {
             return Err("invalid carried milk2 random register".into());
         }
         Ok(())
@@ -52,7 +56,7 @@ impl HeaderState {
             }
         }
         if let Some(progress) = scope.get("blending_progress").and_then(crate::MilkRustValue::as_number) {
-            if progress.is_finite() && (0.0..=1.0).contains(&progress) {
+            if is_valid_milk2_float(progress) {
                 self.progress = progress;
             }
         }
@@ -65,7 +69,7 @@ impl HeaderState {
         for index in 0..self.random.len() {
             let key = format!("random_{}", index + 1);
             if let Some(value) = scope.get(&key).and_then(crate::MilkRustValue::as_number) {
-                if value.is_finite() && (0.0..=1.0).contains(&value) {
+                if is_valid_milk2_float(value) {
                     self.random[index] = value;
                     self.randoms_active = true;
                 }
@@ -163,14 +167,14 @@ impl SavedBlend {
         self.header.iter().all(|(key, value)| match key.as_str() {
             "blending_pattern" => value.eq_ignore_ascii_case(&self.pattern),
             "blending_progress" => parse_header_float(value, "blending_progress")
-                .is_ok_and(|number| (0.0..=1.0).contains(&number)),
+                .is_ok_and(is_valid_milk2_float),
             // The saved header stores direction as a signed integer. The
             // renderer's direction-sensitive patterns test exactly `-1`;
             // other integer values are valid and behave like the default
             // orientation.
             "blending_direction" => parse_header_integer(value, "blending_direction").is_ok(),
             "random_1" | "random_2" | "random_3" | "random_4" | "random_5" => parse_header_float(value, key)
-                .is_ok_and(|number| (0.0..=1.0).contains(&number)),
+                .is_ok_and(is_valid_milk2_float),
             "sprite" => matches!(value.as_str(), "0" | "1"),
             _ => false,
         })
@@ -449,7 +453,6 @@ pub fn parse(source: &str) -> Result<(SavedBlend, [String; 2]), String> {
         }
     };
     let progress = number("blending_progress", 1.0)?;
-    if !(0.0..=1.0).contains(&progress) { return Err("milk2 progress is outside 0..1".into()); }
     let direction = match header.get("blending_direction") {
         Some(value) => parse_header_integer(value, "blending_direction")?,
         None => 0,
@@ -460,7 +463,6 @@ pub fn parse(source: &str) -> Result<(SavedBlend, [String; 2]), String> {
         let key = format!("random_{}", index + 1);
         if header.contains_key(&key) {
             let parsed = number(&key, 0.0)?;
-            if !(0.0..=1.0).contains(&parsed) { return Err("milk2 saved random value is outside 0..1".into()); }
             *value = Some(parsed);
             resolved_random[index] = parsed;
         }
@@ -542,12 +544,36 @@ mod tests {
     #[test]
     fn malformed_blocks_and_nonfinite_metadata_fail() {
         for source in [PAIR.replace("[PRESET1_END]", ""), PAIR.replace("[PRESET2_BEGIN]", "[PRESET1_BEGIN]"),
-            PAIR.replace("progress=0.3", "progress=NaN"), PAIR.replace("progress=0.3", "progress=1.01"),
+            PAIR.replace("progress=0.3", "progress=NaN"), PAIR.replace("progress=0.3", "progress=1e999"),
             PAIR.replace("direction=-1", "direction=not-an-integer")] {
             assert!(parse(&source).is_err());
         }
         let repeated = PAIR.replace("blending_pattern=Zoom\n", "blending_pattern=Plasma\nblending_pattern=Zoom\n");
         assert_eq!(parse(&repeated).unwrap().0.pattern, "Zoom");
+    }
+
+    #[test]
+    fn finite_out_of_range_header_values_are_preserved_raw() {
+        for (progress, random) in [(1.25, -0.25), (-0.5, 1.5)] {
+            let source = PAIR
+                .replace("blending_progress=0.3", &format!("blending_progress={progress}"))
+                .replace("random_1=0.123", &format!("random_1={random}"));
+            let (blend, presets) = parse(&source).unwrap();
+            assert_eq!(blend.progress, progress);
+            assert_eq!(blend.random[0], Some(random));
+            assert!(blend.supports_rendered_pattern());
+            assert_eq!(parse(&blend.serialize(&presets)).unwrap(), (blend, presets));
+        }
+
+        let mut state = HeaderState::default();
+        let scope = BTreeMap::from([
+            ("blending_progress".to_string(), crate::MilkRustValue::Number(1.25)),
+            ("random_1".to_string(), crate::MilkRustValue::Number(-0.25)),
+        ]);
+        state.update_from_scope(&scope);
+        assert_eq!(state.progress, 1.25);
+        assert_eq!(state.random[0], -0.25);
+        assert!(state.validate().is_ok());
     }
 
     #[test]

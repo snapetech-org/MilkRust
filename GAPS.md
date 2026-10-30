@@ -347,3 +347,16 @@ R8 field, and native GL and WebGL sample it through normalized `sampler2D`
 lookups before matching triangle interpolation. A source control checks the
 byte count and clamp/truncation endpoints; private build, execution and
 reference-image comparison remain pending.
+
+
+## 2026-10-30 raw finite MilkDrop 3 header values
+
+`.milk2` progress and random registers now preserve all finite values representable as
+the format's float, including values outside [0, 1], through parsing, carry state,
+render validation, and serialization. The saved-mask path clamps only
+`a * progress + c` at each vertex; cosine variable blending and the two scene
+weights use raw progress. Non-finite fields and float overflow in input are rejected; an overflowing
+per-vertex mix saturates through the reference's ordered clamp, while a NaN mix
+fails closed. Regression sources cover raw positive and
+negative values, state carry, serialization, and mask endpoints; no build,
+test, or reference capture has run for this change.

@@ -733,7 +733,6 @@ const MILK2_BLEND_SNAP_KEYS: &[(&str, f64)] = &[
 ];
 
 fn milkrust_milk2_blend_mix(progress: f64) -> f64 {
-    let progress = progress.clamp(0.0, 1.0);
     0.5 - 0.5 * (std::f64::consts::PI * progress).cos()
 }
 
@@ -782,7 +781,7 @@ fn restore_milkrust_milk2_scope_values(
 }
 
 fn milkrust_milk2_scene_alpha(index: usize, progress: f64) -> f64 {
-    if index == 0 { 1.0 - progress.clamp(0.0, 1.0) } else { progress.clamp(0.0, 1.0) }
+    if index == 0 { 1.0 - progress } else { progress }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -8051,6 +8050,18 @@ comp_shader_2=ret = vec3(shifted, energy * bass_att);
         let frames = runtime.try_render_source_with_audio_and_input(&source, 0.0, 0.0, 0.0, 0.0,
             &[], &[], MilkRustInputState::default()).unwrap();
         assert_eq!(frames.entries[0].frame.background_alpha, 1.0);
+    }
+
+    #[test]
+    fn saved_pair_blends_keep_raw_out_of_range_progress() {
+        for (progress, expected_mix) in [
+            (1.25, 0.5 - 0.5 * (std::f64::consts::PI * 1.25).cos()),
+            (-0.5, 0.5 - 0.5 * (std::f64::consts::PI * -0.5).cos()),
+        ] {
+            assert!((milkrust_milk2_blend_mix(progress) - expected_mix).abs() < 1e-12);
+            assert_eq!(milkrust_milk2_scene_alpha(0, progress), 1.0 - progress);
+            assert_eq!(milkrust_milk2_scene_alpha(1, progress), progress);
+        }
     }
 
     #[test]

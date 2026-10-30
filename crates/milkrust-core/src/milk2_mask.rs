@@ -318,8 +318,8 @@ pub(super) fn generate(key: TransitionMaskKey) -> Result<Vec<u8>, String> {
     if Pattern::from_code(key.pattern).is_none() { return Err("Unknown MilkDrop 3 blend pattern".into()); }
     let progress = f32::from_bits(key.progress);
     let random = key.random.map(f32::from_bits);
-    if !progress.is_finite() || !(0.0..=1.0).contains(&progress) || random.iter().any(|v| !v.is_finite() || !(0.0..=1.0).contains(v)) {
-        return Err("MilkDrop 3 blend progress or random values are outside their saved domain".into());
+    if !progress.is_finite() || random.iter().any(|v| !v.is_finite()) {
+        return Err("MilkDrop 3 blend progress and random values must be finite".into());
     }
     if key.width == 0 || key.height == 0 || key.width > 4096 || key.height > 4096
         || u64::from(key.width) * u64::from(key.height) > MAX_TARGET_PIXELS {
@@ -330,7 +330,14 @@ pub(super) fn generate(key: TransitionMaskKey) -> Result<Vec<u8>, String> {
     fill_vertices(GRID_X, GRID_Y, Pattern::from_code(key.pattern).expect("validated pattern"), key.direction, random, aspect, &mut vertices);
     let mut alpha_bytes = Vec::with_capacity(vertices.len());
     for [a, c] in vertices {
-        let alpha = (a * progress + c).clamp(0.0, 1.0);
+        let mix = a * progress + c;
+        if mix.is_nan() {
+            return Err("MilkDrop 3 transition mix became NaN".into());
+        }
+        // Match the reference's ordered comparisons: infinities saturate to the
+        // endpoints while a NaN is rejected above.
+        let upper_clamped = if 1.0 < mix { 1.0 } else { mix };
+        let alpha = if 0.0 > upper_clamped { 0.0 } else { upper_clamped };
         // D3D9 stores the per-vertex mix in D3DCOLOR alpha: truncate, do not round.
         alpha_bytes.push((alpha * 255.0) as u8);
     }
@@ -412,11 +419,17 @@ mod tests {
 
     #[test]
     fn saved_mix_truncates_to_d3d9_vertex_alpha_bytes() {
-        for (progress, expected) in [(0.0, 0), (0.5, 127), (1.0, 255)] {
+        for (progress, expected) in [(0.0, 0), (0.5, 127), (1.0, 255), (-0.5, 0), (1.5, 255)] {
             let key = TransitionMaskKey::new(1, progress, 1, [0.0; 5], 640, 480);
             let bytes = generate(key).unwrap();
             assert_eq!(bytes.len(), (GRID_X + 1) * (GRID_Y + 1));
             assert!(bytes.iter().all(|&value| value == expected));
         }
+        let raw_random = TransitionMaskKey::new(1, 0.5, 1, [-0.25, 1.25, 0.0, 0.0, 0.0], 640, 480);
+        assert!(generate(raw_random).unwrap().iter().all(|&value| value == 127));
+        let positive_overflow = TransitionMaskKey::new(2, f32::MAX, 1, [0.0; 5], 640, 480);
+        assert!(generate(positive_overflow).unwrap().iter().all(|&value| value == 255));
+        let negative_overflow = TransitionMaskKey::new(2, -f32::MAX, 1, [0.0; 5], 640, 480);
+        assert!(generate(negative_overflow).unwrap().iter().all(|&value| value == 0));
     }
 }

@@ -136,3 +136,18 @@ triangles. Native GL and WebGL share the same 65x49 R8 mesh upload and
 normalized shader sampling. The source regression checks the reference's byte
 count and endpoint/truncation behavior; execution and pixel comparison remain
 unverified.
+
+
+## Raw saved header numbers
+
+The `.milk2` parser follows the compatible `stof` behavior: it consumes the
+numeric prefix as a finite 32-bit float, rejects NaN, infinity, and overflow,
+and retains finite progress and random values even outside [0, 1]. Persistent
+header state applies the same float-representability check. Rendering uses raw
+progress for cosine variable interpolation and the PRESET1/PRESET2 scene
+weights (`1 - P` / `P`). Only the per-vertex saved-mask result
+`a * P + c` is clamped to [0, 1] before its D3D9 alpha byte is truncated.
+The reference's ordered clamp saturates positive/negative infinity to the
+corresponding endpoint and rejects a NaN mix. Regression sources cover parsing, carried state,
+serialization, raw scene/interpolation weights, and out-of-range mask inputs;
+they have not run.
