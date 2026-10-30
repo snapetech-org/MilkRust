@@ -143,6 +143,7 @@ pub fn extract(source: &str, enabled: bool) -> Result<Blocks, String> {
 /// Classic .milk files default on; a .milk2 trailer requires explicit sprite=1.
 pub fn enabled(source: &str) -> bool {
     let is_milk2 = crate::milk2::has_complete_wrapper(source);
+    let mut milk2_flag = None;
     for (index, raw_line) in source.lines().enumerate() {
         let line = raw_line.trim();
         let line = if index == 0 { line.trim_start_matches('\u{feff}') } else { line };
@@ -150,11 +151,18 @@ pub fn enabled(source: &str) -> bool {
         if let Some((key, value)) = line.split_once('=') {
             if key.trim().eq_ignore_ascii_case("sprite") {
                 let value = value.trim();
-                return if is_milk2 { value == "1" } else { value != "0" };
+                if is_milk2 {
+                    // The wrapper parser uses last-value-wins for duplicate
+                    // header records, so sprite gating must use that same value.
+                    milk2_flag = Some(value == "1");
+                } else {
+                    // Preserve the classic .milk first-occurrence behavior.
+                    return value != "0";
+                }
             }
         }
     }
-    !is_milk2
+    if is_milk2 { milk2_flag.unwrap_or(false) } else { true }
 }
 
 fn definition(index: u32, preset_index: usize, records: &BTreeMap<String, String>) -> Result<Option<Definition>, String> {
@@ -818,4 +826,29 @@ mod tests {
         assert_eq!(runtime.render_source(&valid, 1.0, 0.0, 0.0, 0.0).sprites.len(), 1);
         assert!(runtime.render_error().is_none());
     }
+
+    #[test]
+    fn milk2_sprite_gate_uses_last_header_value_and_ignores_preset_records() {
+        fn wrapper(header: &str, body: &str) -> String {
+            format!(
+                "{header}\n[PRESET1_BEGIN]\n[preset00]\n{body}\n[PRESET1_END]\n[PRESET2_BEGIN]\n[preset00]\n[PRESET2_END]\n"
+            )
+        }
+
+        let enabled_source = format!("{}{}", wrapper("sprite=0\nsprite=1", "sprite=0"), block(""));
+        assert!(enabled(&enabled_source));
+
+        let disabled_source = format!("{}{}", wrapper("sprite=1\nsprite=0", "sprite=1"), block(""));
+        assert!(!enabled(&disabled_source));
+
+        let body_only = format!("{}{}", wrapper("", "sprite=1"), block(""));
+        assert!(!enabled(&body_only));
+    }
+
+    #[test]
+    fn classic_sprite_gate_keeps_first_header_value_and_default_on() {
+        assert!(!enabled("sprite=0\nsprite=1\n[preset00]\n"));
+        assert!(enabled("[preset00]\nname=classic\n"));
+    }
+
 }
