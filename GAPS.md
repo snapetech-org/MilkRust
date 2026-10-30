@@ -211,17 +211,17 @@ render frames, resolve external texture packs, or establish fidelity.
   maps to the center row of a 2D image and needs a one-row asset for 1D parity.
   It still rejects texture types outside those three dimensions, integer/non-color texture
   element types, resource arrays in function scopes or nested resource-bearing
-  structs, initialized resource instances, resource-bearing struct parameters,
-  `SampleCmp` and comparison methods beyond the bounded Texture2D
-  `GatherCmp`/`GatherCmpRed` and `SampleCmpLevelZero` paths. Static
-  `SamplerComparisonState` declarations lower supported comparison filters,
-  all eight comparison functions and U/V/W Wrap/Clamp/Mirror modes. GatherCmp
-  compares four base-level red-channel texels in D3D order and accepts an
-  optional literal int2 offset. SampleCmpLevelZero compares at mip zero using the
-  comparison-before-filter point or bilinear path when min/mag filters match.
-  Both require a statically initialized comparison state; other texture
-  dimensions, dynamic state, implicit-LOD SampleCmp and reference-pixel parity
-  remain open. The five ordinary `Texture2D.Gather` methods also read the four
+  structs, initialized resource instances, and resource-bearing struct
+  parameters. Comparison methods outside the bounded Texture2D
+  `GatherCmp`/`GatherCmpRed`/`SampleCmp`/`SampleCmpLevelZero` paths remain
+  unsupported. Static `SamplerComparisonState` declarations lower supported
+  comparison filters, all eight comparison functions and U/V/W
+  Wrap/Clamp/Mirror modes. GatherCmp compares four base-level red-channel texels
+  in D3D order and accepts an optional literal int2 offset. SampleCmp and
+  SampleCmpLevelZero compare before filtering. SampleCmp selects point/linear
+  minification or magnification filters from derivatives and applies point or
+  linear mip selection. Both require a static comparison state; other texture
+  dimensions and reference-pixel parity remain open. The five ordinary `Texture2D.Gather` methods also read the four
   base-level texels in D3D order; reference-pixel comparison remains open.
   Global static `SamplerState` definitions
   support all eight standard point/linear min/mag/mip `Filter` combinations and
@@ -468,7 +468,7 @@ malformed-input, disposal/loop and reference-pixel checks remain unrun; no
 platform or visual qualification is claimed.
 
 
-## 2026-10-30 bounded Texture2D GatherCmp source path
+## 2026-10-30 bounded Texture2D comparison-sampling source path
 
 The typed compiler now lowers `Texture2D.GatherCmp`, `GatherCmpRed` and
 `SampleCmpLevelZero` for statically initialized `SamplerComparisonState`
@@ -477,7 +477,7 @@ bounded point/linear profile; comparison functions cover NEVER, LESS, EQUAL,
 LESS_EQUAL, GREATER, NOT_EQUAL, GREATER_EQUAL and ALWAYS. U/V/W addressing and
 the optional literal int2 offset are retained. Four base-level red-channel values
 are compared independently and returned in the same ordering as the existing
-Texture2D Gather implementation. SampleCmpLevelZero compares before filtering at
-mip zero and supports matching point or linear min/mag filters. Implicit-LOD
-SampleCmp, other texture dimensions and pixel-reference qualification remain
-open. No compiler/build/test/render was run for this source update.
+Texture2D Gather implementation. SampleCmp and SampleCmpLevelZero compare
+before point/bilinear filtering; SampleCmp also selects min/mag filters from
+derivatives and point/linear mip selection from the static comparison filter.
+Other texture dimensions and pixel-reference qualification remain open. No compiler/build/test/render was run for this source update.

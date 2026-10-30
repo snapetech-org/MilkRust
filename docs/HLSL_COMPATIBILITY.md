@@ -336,8 +336,10 @@ use `<resource>_<index>` names (for example, `textures_0`); struct-field assets
 use `<object>_<field>_<index>`.
 `TextureCube`, `Texture*Array`, multisample resources, arrays inside function
 scopes or nested resource-bearing structs, initialized resource instances,
-resource-bearing struct parameters, comparison sampling and `GatherCmp`
-variants remain outside the profile. The separate
+resource-bearing struct parameters and dynamic comparison-state propagation
+remain outside the profile. Texture2D GatherCmp, GatherCmpRed, SampleCmp and
+SampleCmpLevelZero use the bounded static comparison profile described below;
+other comparison resource forms remain outside. The separate
 WGSL path remains limited; within its floating scalar/vector expression subset,
 HLSL `fmod` now lowers to WGSL's signed remainder operator. Integer/boolean and
 the separately rejected sampling operations still stay outside that path.
@@ -482,24 +484,25 @@ from point-wrap and checking that numeric argument side effects occur once.
 Neither compiler nor GPU controls have been executed for this checkpoint.
 
 
-## Bounded Texture2D GatherCmp
+## Bounded Texture2D comparison sampling
 
 `Texture2D.GatherCmp`, `GatherCmpRed` and `SampleCmpLevelZero` are implemented
 for global, statically initialized `SamplerComparisonState` profiles on
-Texture2D resources. Supported
-`COMPARISON_MIN_MAG_*` point/linear filter combinations are parsed, with
+Texture2D resources. The bounded profile parses the supported
+`COMPARISON_MIN_MAG_*` point/linear filter combinations, with
 NEVER, LESS, EQUAL, LESS_EQUAL, GREATER, NOT_EQUAL, GREATER_EQUAL and ALWAYS
 comparison functions. The shader compares the resource's red channel for four
 base-level texels in the same component order used by the bounded ordinary
 Gather helper, honoring the static U/V/W address profile and optional literal int2
 offset.
 
-SampleCmpLevelZero compares the red channel of each mip-zero texel before
-nearest or bilinear filtering. To keep minification/magnification selection
-unambiguous, this path requires equal point/linear filters for min and mag.
+SampleCmp and SampleCmpLevelZero compare the red channel of each fetched texel
+before filtering. SampleCmp derives LOD from texture-coordinate derivatives,
+selects the configured minification or magnification filter, and applies the
+configured point or linear mip selection. SampleCmpLevelZero uses mip zero.
 The compiler rejects comparison states without an explicit ComparisonFunc,
 ordinary texture methods passed a comparison state, and comparison calls without
-a static comparison state. SampleCmp with implicit LOD, dynamic comparison state,
-other texture dimensions and broader resource forms remain unsupported.
-Optional offsets are restricted to literal int2 constructors. This is a bounded source path, not a reference-pixel claim; no
-build, compiler test, render or device check was run for this update.
+a static comparison state. Dynamic comparison state, other texture dimensions,
+and broader resource forms remain unsupported. Optional offsets are restricted
+to literal int2 constructors. This is a bounded source path, not a reference-pixel
+claim; no build, compiler test, render, or device check was run for this update.

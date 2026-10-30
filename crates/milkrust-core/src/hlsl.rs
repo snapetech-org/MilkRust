@@ -1019,7 +1019,7 @@ fn lower_modern_resource_syntax(tokens: &mut Vec<String>) -> Result<(), String> 
             continue;
         }
         let method = tokens[index + 1].as_str();
-        if !matches!(method, "Sample" | "SampleLevel" | "SampleBias" | "SampleGrad" | "SampleCmpLevelZero" | "Gather" | "GatherRed" | "GatherGreen" | "GatherBlue" | "GatherAlpha" | "GatherCmp" | "GatherCmpRed" | "Load" | "GetDimensions") {
+        if !matches!(method, "Sample" | "SampleLevel" | "SampleBias" | "SampleGrad" | "SampleCmp" | "SampleCmpLevelZero" | "Gather" | "GatherRed" | "GatherGreen" | "GatherBlue" | "GatherAlpha" | "GatherCmp" | "GatherCmpRed" | "Load" | "GetDimensions") {
             if index > 0 && is_identifier(&tokens[index - 1]) {
                 let mut base_start = index - 1;
                 while base_start >= 2 && tokens[base_start - 1] == "." && is_identifier(&tokens[base_start - 2]) {
@@ -1063,7 +1063,7 @@ fn lower_modern_resource_syntax(tokens: &mut Vec<String>) -> Result<(), String> 
         let dimension = resource_shape.dimension;
         let (args, end) = split_hlsl_call(tokens, index + 2)?;
         let gather_cmp = matches!(method, "GatherCmp" | "GatherCmpRed");
-        let sample_cmp_level_zero = method == "SampleCmpLevelZero";
+        let sample_cmp = matches!(method, "SampleCmp" | "SampleCmpLevelZero");
         let gather_component = match method {
             "Gather" | "GatherRed" => Some(0),
             "GatherGreen" => Some(1),
@@ -1077,10 +1077,10 @@ fn lower_modern_resource_syntax(tokens: &mut Vec<String>) -> Result<(), String> 
         if gather_cmp && (dimension != 2 || !matches!(args.len(), 3 | 4)) {
             return Err("Texture2D GatherCmp requires a comparison sampler, float2 location, compare value, and optional int2 offset".into());
         }
-        if sample_cmp_level_zero && (dimension != 2 || !matches!(args.len(), 3 | 4)) {
-            return Err("Texture2D SampleCmpLevelZero requires a comparison sampler, float2 location, compare value, and optional int2 offset".into());
+        if sample_cmp && (dimension != 2 || !matches!(args.len(), 3 | 4)) {
+            return Err(format!("Texture2D {method} requires a comparison sampler, float2 location, compare value, and optional int2 offset"));
         }
-        if (gather_cmp || sample_cmp_level_zero) && args.len() == 4 && !is_static_int2_offset(&args[3]) {
+        if (gather_cmp || sample_cmp) && args.len() == 4 && !is_static_int2_offset(&args[3]) {
             return Err(format!("Texture2D {method} offset must be a literal int2 in this profile"));
         }
         if method == "GetDimensions" {
@@ -1153,7 +1153,7 @@ fn lower_modern_resource_syntax(tokens: &mut Vec<String>) -> Result<(), String> 
             ("Gather" | "GatherRed" | "GatherGreen" | "GatherBlue" | "GatherAlpha", 2 | 3, 2) =>
                 ("milkRustInternalGather2D", args[1].clone()),
             ("GatherCmp" | "GatherCmpRed", 3 | 4, 2) => ("milkRustInternalGatherCmp2D", args[1].clone()),
-            ("SampleCmpLevelZero", 3 | 4, 2) => ("milkRustInternalSampleCmpLevelZero2D", args[1].clone()),
+            ("SampleCmp" | "SampleCmpLevelZero", 3 | 4, 2) => ("milkRustInternalSampleCmp2D", args[1].clone()),
             ("Load", 1 | 2, 1 | 2) => ("tex2Dfetch", args[0].clone()),
             ("Load", 1 | 2, 3) => ("tex3Dfetch", args[0].clone()),
             _ => return Err(format!("Invalid argument count for HLSL texture method {method}")),
@@ -1174,16 +1174,14 @@ fn lower_modern_resource_syntax(tokens: &mut Vec<String>) -> Result<(), String> 
         }
         let sampler_profile = sampler_state_name.as_ref().and_then(|name| sampler_state_profiles.get(name)).copied();
         let comparison_function = sampler_profile.and_then(|profile| profile.comparison);
-        let comparison_method = gather_cmp || sample_cmp_level_zero;
+        let comparison_method = gather_cmp || sample_cmp;
         if comparison_method && comparison_function.is_none() {
             return Err(format!("Texture2D {method} requires a statically initialized SamplerComparisonState with ComparisonFunc"));
         }
         if !comparison_method && comparison_function.is_some() {
             return Err(format!("HLSL comparison sampler cannot be used with texture method {method}"));
         }
-        if sample_cmp_level_zero && sampler_profile.is_some_and(|profile| profile.min_point != profile.mag_point) {
-            return Err("Texture2D SampleCmpLevelZero requires matching minification and magnification comparison filters".into());
-        }
+
         rewritten.truncate(rewritten.len().saturating_sub(index - base_start));
         rewritten.push(intrinsic.into());
         rewritten.push("(".into());
@@ -1261,7 +1259,7 @@ fn lower_modern_resource_syntax(tokens: &mut Vec<String>) -> Result<(), String> 
             ("SampleGrad", 5) => Some(4),
             ("Load", 2) => Some(1),
             ("GatherCmp" | "GatherCmpRed", 4) => Some(3),
-            ("SampleCmpLevelZero", 4) => Some(3),
+            ("SampleCmp" | "SampleCmpLevelZero", 4) => Some(3),
             _ => None,
         };
         if let Some(offset) = offset_index.and_then(|offset| args.get(offset)) {
@@ -1280,9 +1278,16 @@ fn lower_modern_resource_syntax(tokens: &mut Vec<String>) -> Result<(), String> 
             }
             rewritten.push(",".into());
             rewritten.push(comparison_function.ok_or_else(|| format!("Missing comparison function for Texture2D {method}"))?.to_string());
-            if sample_cmp_level_zero {
-                let point = sampler_profile.is_some_and(|profile| profile.min_point);
-                rewritten.extend([",".into(), if point { "1" } else { "0" }.into()]);
+            if sample_cmp {
+                let profile = sampler_profile.ok_or_else(|| format!("Missing comparison filter for Texture2D {method}"))?;
+                let mip_point = profile.mip == crate::resources::MipFilter::Point;
+                let level_zero = method == "SampleCmpLevelZero";
+                rewritten.extend([
+                    ",".into(), if profile.min_point { "1" } else { "0" }.into(),
+                    ",".into(), if profile.mag_point { "1" } else { "0" }.into(),
+                    ",".into(), if mip_point { "1" } else { "0" }.into(),
+                    ",".into(), if level_zero { "1" } else { "0" }.into(),
+                ]);
             }
         }
         if let Some(component) = gather_component {
@@ -1704,7 +1709,7 @@ pub(crate) fn compile(source: &str, legacy_feedback: bool) -> Result<String, Str
     // Rename any user entry before the emitter adds its GLSL main.
     aliases.insert("main".into(), "milkrust_user_entry".into());
     let mut tokens = milkrust_hlsl::tokenize(&source)?;
-    if tokens.iter().any(|token| matches!(token.as_str(), "milkRustInternalGather2D" | "milkRustInternalGatherCmp2D" | "milkRustInternalSampleCmpLevelZero2D")) {
+    if tokens.iter().any(|token| matches!(token.as_str(), "milkRustInternalGather2D" | "milkRustInternalGatherCmp2D" | "milkRustInternalSampleCmp2D")) {
         return Err("Shader uses a reserved compiler identifier".into());
     }
     lower_modern_resource_syntax(&mut tokens)?;
@@ -1762,7 +1767,7 @@ pub(crate) fn compile(source: &str, legacy_feedback: bool) -> Result<String, Str
         let kind = if crate::resources::texture_kind(name).is_volume() { "sampler3D" } else { "sampler2D" };
         preamble.push_str(&format!("{kind} shaderTexture{index};\n"));
     }
-    let needs_sample_cmp = tokens.iter().any(|token| token == "milkRustInternalSampleCmpLevelZero2D");
+    let needs_sample_cmp = tokens.iter().any(|token| token == "milkRustInternalSampleCmp2D");
     let needs_gather_cmp = needs_sample_cmp || tokens.iter().any(|token| token == "milkRustInternalGatherCmp2D");
     if needs_gather_cmp || tokens.iter().any(|token| token == "milkRustInternalGather2D") {
         preamble.push_str("float4 milkRustInternalGather2D(sampler2D source, float2 location, int2 offset, int component);\n");
@@ -1771,7 +1776,8 @@ pub(crate) fn compile(source: &str, legacy_feedback: bool) -> Result<String, Str
         preamble.push_str("float4 milkRustInternalGatherCmp2D(sampler2D source, float2 location, float compareValue, int2 offset, int comparisonFunction);\n");
     }
     if needs_sample_cmp {
-        preamble.push_str("float milkRustInternalSampleCmpLevelZero2D(sampler2D source, float2 location, float compareValue, int2 offset, int comparisonFunction, int pointFilter);\n");
+        preamble.push_str("float4 milkRustInternalGatherCmpLevel2D(sampler2D source, float2 location, float compareValue, int2 offset, int comparisonFunction, int mipLevel);\n");
+        preamble.push_str("float milkRustInternalSampleCmp2D(sampler2D source, float2 location, float compareValue, int2 offset, int comparisonFunction, int minPoint, int magPoint, int mipPoint, int levelZero);\n");
     }
 
     for name in crate::resources::SCALAR_UNIFORMS { preamble.push_str(&format!("float {name};\n")); }
@@ -1880,7 +1886,7 @@ fn adapt_output(glsl: &str, feedback: bool) -> Result<String, String> {
     if !has_output || !has_main { return Err("Shader entry must write COLOR0".into()); }
     if !has_uv { output.push_str("in vec2 uv;\n"); }
     output.insert_str(output.find('\n').map_or(0, |i| i+1), "in highp vec2 originalUv;\n");
-    if glsl.contains("milkRustInternalGather2D") || glsl.contains("milkRustInternalGatherCmp2D") || glsl.contains("milkRustInternalSampleCmpLevelZero2D") {
+    if glsl.contains("milkRustInternalGather2D") || glsl.contains("milkRustInternalGatherCmp2D") || glsl.contains("milkRustInternalSampleCmp2D") {
         let mut cursor = 0usize;
         let mut insertion = output.find('\n').map_or(0, |index| index + 1);
         for line in output.split_inclusive('\n') {
@@ -1922,17 +1928,53 @@ vec4 milkRustInternalGatherCmp2D(sampler2D source, vec2 location, float compareV
         milkRustInternalCompare(compareValue, values.z, comparisonFunction),
         milkRustInternalCompare(compareValue, values.w, comparisonFunction));
 }
-float milkRustInternalSampleCmpLevelZero2D(sampler2D source, vec2 location, float compareValue, ivec2 offset, int comparisonFunction, int pointFilter) {
-    vec2 size = vec2(textureSize(source, 0));
-    if (pointFilter != 0) {
+vec4 milkRustInternalGatherCmpLevel2D(sampler2D source, vec2 location, float compareValue, ivec2 offset, int comparisonFunction, int mipLevel) {
+    vec2 size = vec2(textureSize(source, mipLevel));
+    vec2 low = floor(location * size - vec2(0.5)) + vec2(offset);
+    vec2 inv = vec2(1.0) / size;
+    vec4 c0 = textureLod(source, (low + vec2(0.5, 1.5)) * inv, float(mipLevel));
+    vec4 c1 = textureLod(source, (low + vec2(1.5, 1.5)) * inv, float(mipLevel));
+    vec4 c2 = textureLod(source, (low + vec2(1.5, 0.5)) * inv, float(mipLevel));
+    vec4 c3 = textureLod(source, (low + vec2(0.5, 0.5)) * inv, float(mipLevel));
+    return vec4(
+        milkRustInternalCompare(compareValue, c0.r, comparisonFunction),
+        milkRustInternalCompare(compareValue, c1.r, comparisonFunction),
+        milkRustInternalCompare(compareValue, c2.r, comparisonFunction),
+        milkRustInternalCompare(compareValue, c3.r, comparisonFunction));
+}
+float milkRustInternalCompareAtLevel2D(sampler2D source, vec2 location, float compareValue, ivec2 offset, int comparisonFunction, int linearFilter, int mipLevel) {
+    vec2 size = vec2(textureSize(source, mipLevel));
+    if (linearFilter == 0) {
         vec2 texel = floor(location * size) + vec2(offset);
-        float value = textureLod(source, (texel + vec2(0.5)) / size, 0.0).r;
+        float value = textureLod(source, (texel + vec2(0.5)) / size, float(mipLevel)).r;
         return milkRustInternalCompare(compareValue, value, comparisonFunction);
     }
-    vec4 gathered = milkRustInternalGatherCmp2D(source, location, compareValue, offset, comparisonFunction);
+    vec4 gathered = milkRustInternalGatherCmpLevel2D(source, location, compareValue, offset, comparisonFunction, mipLevel);
     vec2 fraction = fract(location * size - vec2(0.5));
     return mix(mix(gathered.w, gathered.z, fraction.x),
                mix(gathered.x, gathered.y, fraction.x), fraction.y);
+}
+float milkRustInternalSampleCmp2D(sampler2D source, vec2 location, float compareValue, ivec2 offset, int comparisonFunction, int minPoint, int magPoint, int mipPoint, int levelZero) {
+    vec2 baseSize = vec2(textureSize(source, 0));
+    vec2 dx = dFdx(location * baseSize);
+    vec2 dy = dFdy(location * baseSize);
+    float lod = 0.5 * log2(max(max(dot(dx, dx), dot(dy, dy)), 1.0e-12));
+    int linearFilter = lod <= 0.0 ? (magPoint == 0 ? 1 : 0) : (minPoint == 0 ? 1 : 0);
+    if (levelZero != 0) {
+        return milkRustInternalCompareAtLevel2D(source, location, compareValue, offset, comparisonFunction, linearFilter, 0);
+    }
+    int maxLevel = int(floor(log2(max(baseSize.x, baseSize.y))));
+    float selectedLod = clamp(max(lod, 0.0), 0.0, float(maxLevel));
+    if (mipPoint != 0) {
+        int level = int(floor(selectedLod + 0.5));
+        return milkRustInternalCompareAtLevel2D(source, location, compareValue, offset, comparisonFunction, linearFilter, level);
+    }
+    int lowerLevel = int(floor(selectedLod));
+    int upperLevel = min(lowerLevel + 1, maxLevel);
+    float mipWeight = selectedLod - float(lowerLevel);
+    float lower = milkRustInternalCompareAtLevel2D(source, location, compareValue, offset, comparisonFunction, linearFilter, lowerLevel);
+    float upper = milkRustInternalCompareAtLevel2D(source, location, compareValue, offset, comparisonFunction, linearFilter, upperLevel);
+    return mix(lower, upper, mipWeight);
 }
 "#);
     }
