@@ -806,11 +806,14 @@ fn lower_modern_resource_syntax(tokens: &mut Vec<String>) -> Result<(), String> 
             // convention on both hosts. Supported static state initializers
             // are converted into the same explicit sampler prefixes.
             let structure = struct_ranges.iter().find(|(_, range)| range.contains(&index)).map(|(name, _)| name.clone());
-            let global_scope = tokens[..index].iter().fold(0i32, |depth, token| match token.as_str() {
-                "{" => depth + 1,
-                "}" => depth - 1,
-                _ => depth,
-            }) == 0;
+            let (brace_depth, paren_depth) = tokens[..index].iter().fold((0i32, 0i32), |(braces, parens), token| match token.as_str() {
+                "{" => (braces + 1, parens),
+                "}" => (braces - 1, parens),
+                "(" => (braces, parens + 1),
+                ")" => (braces, parens - 1),
+                _ => (braces, parens),
+            });
+            let global_scope = brace_depth == 0 && paren_depth == 0;
             if structure.is_none() && global_scope
                 && sampler_state_types.insert(name.clone(), comparison_state).is_some() {
                 return Err(format!("Duplicate global HLSL sampler-state declaration {name}"));
