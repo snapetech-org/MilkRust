@@ -85,9 +85,7 @@ impl Pattern {
 }
 
 /// Compute the per-vertex `(a,c)` field from MilkDrop 3's saved pattern.
-fn fill_vertices(pattern: Pattern, direction: i32, random: [f32; 5], aspect: (f32, f32), out: &mut [[f32; 2]]) {
-    let gx = GRID_X;
-    let gy = GRID_Y;
+fn fill_vertices(gx: usize, gy: usize, pattern: Pattern, direction: i32, random: [f32; 5], aspect: (f32, f32), out: &mut [[f32; 2]]) {
     let width = gx + 1;
     let (ax, ay) = aspect;
     let (gxf, gyf) = (gx as f32, gy as f32);
@@ -134,7 +132,7 @@ fn fill_vertices(pattern: Pattern, direction: i32, random: [f32; 5], aspect: (f3
             let inverse = 1.0 / width;
             let mut values = vec![0.0f32; (gx + 1) * (gy + 1)];
             for index in 0..4 {
-                values[[0, gx, gy * width_of_grid(), gy * width_of_grid() + gx][index]] = random[index + 1];
+                values[[0, gx, gy * width, gy * width + gx][index]] = random[index + 1];
             }
             gen_plasma(&mut values, gx, (ax, ay), random,
                 Span { x0: 0, x1: gx, y0: 0, y1: gy }, dt);
@@ -261,7 +259,6 @@ fn fill_vertices(pattern: Pattern, direction: i32, random: [f32; 5], aspect: (f3
     }
 }
 
-fn width_of_grid() -> usize { GRID_X + 1 }
 
 #[derive(Clone, Copy)]
 struct Span { x0: usize, x1: usize, y0: usize, y1: usize }
@@ -330,7 +327,7 @@ pub(super) fn generate(key: TransitionMaskKey) -> Result<Vec<u8>, String> {
     }
     let aspect = ((key.width as f32 / key.height as f32).max(1.0), (key.height as f32 / key.width as f32).max(1.0));
     let mut vertices = vec![[0.0f32; 2]; (GRID_X + 1) * (GRID_Y + 1)];
-    fill_vertices(Pattern::from_code(key.pattern).expect("validated pattern"), key.direction, random, aspect, &mut vertices);
+    fill_vertices(GRID_X, GRID_Y, Pattern::from_code(key.pattern).expect("validated pattern"), key.direction, random, aspect, &mut vertices);
     let mut packed = Vec::with_capacity(vertices.len() * 4);
     for [a, c] in vertices {
         let alpha = (a * progress + c).clamp(0.0, 1.0);
@@ -339,4 +336,78 @@ pub(super) fn generate(key: TransitionMaskKey) -> Result<Vec<u8>, String> {
         packed.extend_from_slice(&encoded.to_be_bytes());
     }
     Ok(packed)
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const GX: usize = 4;
+    const GY: usize = 2;
+    const ASPECT: (f32, f32) = (1.0, 0.5625);
+    const RANDOM: [f32; 5] = [0.25, 0.5, 0.75, 0.125, 0.875];
+    const PICK: [usize; 4] = [0, 3, 7, 14];
+
+    /// Published Lactea reference table for the 30 saved patterns, sampled at
+    /// the same 4x2 mesh vertices and random registers. Pattern codes are
+    /// MilkRust's one-based saved-header values (the reference enum is zero-based).
+    #[rustfmt::skip]
+    #[allow(clippy::type_complexity)]
+    const REFERENCE: &[(i32, i32, [(f32, f32); 4])] = &[
+        (1, 1, [(1.0000, 0.0000), (1.0000, 0.0000), (1.0000, 0.0000), (1.0000, 0.0000)]),
+        (2, 1, [(6.0000, -4.2692), (6.0000, -4.2671), (6.0000, -3.2734), (6.0000, -2.2776)]),
+        (3, 1, [(7.5574, -3.2787), (7.5574, -0.5464), (7.5574, -1.3832), (7.5574, 0.0000)]),
+        (4, 1, [(4.4783, -0.5514), (4.4783, -0.1192), (4.4783, -0.0001), (4.4783, -0.3155)]),
+        (5, 1, [(4.4783, -0.3137), (4.4783, -0.3155), (4.4783, -0.2387), (4.4783, -0.0357)]),
+        (6, 1, [(5.4444, -0.8387), (5.4444, -2.0793), (5.4444, -4.4444), (5.4444, -0.8387)]),
+        (6, -1, [(5.4444, -3.6058), (5.4444, -2.3652), (5.4444, 0.0000), (5.4444, -3.6058)]),
+        (7, 1, [(5.4444, -1.3018), (5.4444, -2.6767), (5.4444, -4.4444), (5.4444, -1.3018)]),
+        (8, 1, [(9.8889, -6.9246), (9.8889, -5.9697), (9.8889, -4.4444), (9.8889, -1.9643)]),
+        (9, 1, [(9.8889, -3.1841), (9.8889, -5.2600), (9.8889, -4.4444), (9.8889, -5.7048)]),
+        (10, 1, [(9.8889, -1.9231), (9.8889, -5.0628), (9.8889, -4.4444), (9.8889, -6.9658)]),
+        (11, 1, [(5.4444, -0.9722), (5.4444, -2.0833), (5.4444, -4.4444), (5.4444, -0.9722)]),
+        (11, -1, [(5.4444, -3.4722), (5.4444, -2.3611), (5.4444, 0.0000), (5.4444, -3.4722)]),
+        (12, 1, [(14.3333, -0.0149), (14.3333, -6.5156), (14.3333, -0.4711), (14.3333, -0.0149)]),
+        (13, 1, [(5.4444, -2.7860), (5.4444, -1.2573), (5.4444, -2.4444), (5.4444, 0.0000)]),
+        (13, -1, [(5.4444, -1.6584), (5.4444, -3.1871), (5.4444, -2.0001), (5.4444, -4.4444)]),
+        (14, 1, [(5.4444, -2.2082), (5.4444, -2.6087), (5.4444, -1.1111), (5.4444, -4.3392)]),
+        (14, -1, [(5.4444, -2.2362), (5.4444, -1.8357), (5.4444, -3.3333), (5.4444, -0.1053)]),
+        (15, 1, [(14.3333, -2.4652), (14.3333, -3.5522), (14.3333, -4.5502), (14.3333, -3.6801)]),
+        (16, 1, [(7.0000, -2.8988), (7.0000, -3.8268), (7.0000, -3.3973), (7.0000, -0.2957)]),
+        (17, 1, [(14.3333, -0.0294), (14.3333, -8.0757), (14.3333, -0.4711), (14.3333, -8.8595)]),
+        (18, 1, [(14.3333, -1.0300), (14.3333, -4.9895), (14.3333, -0.4711), (14.3333, -1.0300)]),
+        (19, 1, [(14.3333, -6.6234), (14.3333, -7.7663), (14.3333, -4.4444), (14.3333, -2.2655)]),
+        (20, 1, [(14.3333, -8.8864), (14.3333, -6.9874), (14.3333, -4.4444), (14.3333, -0.0025)]),
+        (21, 1, [(5.4444, -2.5465), (5.4444, -0.8628), (5.4444, -0.3523), (5.4444, -0.4118)]),
+        (22, 1, [(14.3333, -8.4178), (14.3333, -8.4178), (14.3333, -2.2109), (14.3333, -6.4359)]),
+        (23, 1, [(14.3333, -6.6950), (14.3333, -8.8195), (14.3333, -0.0149), (14.3333, -0.0830)]),
+        (24, 1, [(4.3333, -1.6583), (4.3333, -0.4941), (4.3333, -0.0000), (4.3333, -1.6656)]),
+        (25, 1, [(6.0000, -4.2621), (6.0000, -1.6105), (6.0000, -2.4975), (6.0000, -0.7329)]),
+        (26, 1, [(6.0000, -4.2621), (6.0000, -3.3782), (6.0000, -2.4975), (6.0000, -0.7329)]),
+        (27, 1, [(7.0000, -3.8760), (7.0000, -3.1431), (7.0000, -2.0000), (7.0000, -0.1240)]),
+        (28, 1, [(7.0000, -0.2388), (7.0000, -0.2388), (7.0000, -2.0000), (7.0000, -3.7612)]),
+        (29, 1, [(5.4444, -1.9444), (5.4444, -2.2222), (5.4444, -4.4444), (5.4444, -1.9444)]),
+        (30, 1, [(0.0000, 0.0000), (0.0000, 0.0000), (5.4444, -4.4444), (0.0000, 0.0000)]),
+    ];
+
+    #[test]
+    fn all_saved_pattern_meshes_match_reference_vertices() {
+        let mut seen = [false; 30];
+        for &(code, direction, expected) in REFERENCE {
+            let pattern = Pattern::from_code(code).expect("reference pattern code");
+            let mut vertices = vec![[0.0; 2]; (GX + 1) * (GY + 1)];
+            fill_vertices(GX, GY, pattern, direction, RANDOM, ASPECT, &mut vertices);
+            let index = usize::try_from(code - 1).expect("positive saved pattern code");
+            seen[index] = true;
+            for (&vertex, &(want_a, want_c)) in PICK.iter().zip(expected.iter()) {
+                let [got_a, got_c] = vertices[vertex];
+                assert!(
+                    (got_a - want_a).abs() <= 1e-3 && (got_c - want_c).abs() <= 1e-3,
+                    "pattern {code}, direction {direction}, vertex {vertex}: got ({got_a:.4}, {got_c:.4}), want ({want_a:.4}, {want_c:.4})"
+                );
+            }
+        }
+        assert!(seen.into_iter().all(|present| present), "every saved pattern has a reference row");
+    }
 }
