@@ -55,11 +55,19 @@ class Shader:
         self.tokens.append("<end>")
         self.index, self.depth = 0, 0
         self.types = dict(TYPES)
-        self.samplers = {}
+        self.sampler_scopes = [{}]
         self.used = set()
-        for index, token in enumerate(self.tokens[:-2]):
-            if token in ("sampler2D", "sampler3D") and IDENT.fullmatch(self.tokens[index + 1]):
-                self.samplers[self.tokens[index + 1]] = 3 if token == "sampler3D" else 2
+
+    def bind_sampler(self, name, type_name):
+        base = type_name.split()[-1]
+        self.sampler_scopes[-1][name] = 3 if base == "sampler3D" else 2 if base == "sampler2D" else None
+
+    def sampler_dimension(self, name):
+        for scope in reversed(self.sampler_scopes):
+            if name in scope:
+                require(scope[name] is not None, "texture argument does not name a sampler")
+                return scope[name]
+        return 3 if re.fullmatch(r"sampler_(?:[pf][wc]_)?noisevol_(?:lq|hq)", name, re.I) else 2
 
     def peek(self):
         return self.tokens[self.index]
@@ -100,13 +108,17 @@ class Shader:
         name = self.identifier()
         if self.peek() == "(":
             self.take()
+            self.sampler_scopes.append({})
             parameters = []
             if self.peek() != ")":
                 while True:
                     parameter_type = self.qualified_type()
                     if parameter_type == "void" and self.peek() == ")" and not parameters:
                         break
-                    parameter = parameter_type + " " + self.identifier()
+                    parameter_name = (self.identifier() if IDENT.fullmatch(self.peek())
+                                      else f"bcglslParameter{len(parameters)}")
+                    self.bind_sampler(parameter_name, parameter_type)
+                    parameter = parameter_type + " " + parameter_name
                     while self.peek() == "[":
                         self.take()
                         parameter += "[" + self.expression() + "]"
@@ -119,11 +131,15 @@ class Shader:
             signature = f"{type_name} {name}({','.join(parameters)})"
             if self.peek() == ";":
                 self.take()
+                self.sampler_scopes.pop()
                 return signature + ";"
             require(self.peek() == "{", "expected GLSL function body")
-            return signature + self.statement()
+            body = self.statement()
+            self.sampler_scopes.pop()
+            return signature + body
         declarations = []
         while True:
+            self.bind_sampler(name, type_name)
             current = name
             while self.peek() == "[":
                 self.take()
@@ -140,17 +156,25 @@ class Shader:
         self.expect(terminator)
         return type_name + " " + ",".join(declarations) + terminator
 
+    def scoped_statement(self):
+        self.sampler_scopes.append({})
+        result = self.statement()
+        self.sampler_scopes.pop()
+        return result
+
     def statement(self):
         self.enter()
         try:
             token = self.peek()
             if token == "{":
                 self.take()
+                self.sampler_scopes.append({})
                 statements = []
                 while self.peek() != "}":
                     require(self.peek() != "<end>", "unclosed GLSL block")
                     statements.append(self.statement())
                 self.take()
+                self.sampler_scopes.pop()
                 return "{\n" + "\n".join(statements) + "\n}"
             if token == "shader_body":
                 self.take()
@@ -173,10 +197,12 @@ class Shader:
                 require(name not in self.types, "duplicate GLSL structure")
                 self.types[name] = name
                 self.expect("{")
+                self.sampler_scopes.append({})
                 fields = []
                 while self.peek() != "}":
                     fields.append(self.declaration())
                 self.take()
+                self.sampler_scopes.pop()
                 self.expect(";")
                 return f"struct {name}" + "{\n" + "\n".join(fields) + "\n};"
             if token in ("if", "while", "switch"):
@@ -184,13 +210,14 @@ class Shader:
                 self.expect("(")
                 condition = self.expression()
                 self.expect(")")
-                result = f"{token}({condition})" + self.statement()
+                result = f"{token}({condition})" + self.scoped_statement()
                 if token == "if" and self.peek() == "else":
                     self.take()
-                    result += " else " + self.statement()
+                    result += " else " + self.scoped_statement()
                 return result
             if token == "for":
                 self.take()
+                self.sampler_scopes.append({})
                 self.expect("(")
                 if self.peek() == ";":
                     self.take()
@@ -204,10 +231,12 @@ class Shader:
                 self.expect(";")
                 step = "" if self.peek() == ")" else self.expression()
                 self.expect(")")
-                return f"for({initial}{condition};{step})" + self.statement()
+                body = self.scoped_statement()
+                self.sampler_scopes.pop()
+                return f"for({initial}{condition};{step})" + body
             if token == "do":
                 self.take()
-                body = self.statement()
+                body = self.scoped_statement()
                 self.expect("while")
                 self.expect("(")
                 condition = self.expression()
@@ -314,7 +343,7 @@ class Shader:
         elif name in ("texture", "texture2D", "texture3D", "textureLod", "texture2DLod", "texture3DLod", "textureGrad"):
             require(arguments and IDENT.fullmatch(arguments[0]), "texture argument must be a static sampler")
             sampler = arguments[0]
-            dimension = self.samplers.get(sampler, 3 if re.fullmatch(r"sampler_(?:[pf][wc])?noisevol_(?:lq|hq)", sampler, re.I) else 2)
+            dimension = self.sampler_dimension(sampler)
             if name in ("texture3D", "texture3DLod"):
                 dimension = 3
             suffix = "Grad" if name == "textureGrad" else "Lod" if name.endswith("Lod") else "Bias" if len(arguments) == 3 else ""

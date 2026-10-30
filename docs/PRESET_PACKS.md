@@ -175,3 +175,15 @@ reports use a nonempty `textures` list per target and `textureSha256` in each
 evidence record. All existing rights, 13-target, render/reference, resource,
 audio-fixture and lifecycle requirements still apply using a texture exercise
 preset. Existing preset report fields and fixture exceptions are unchanged.
+
+## Versioned converted-preset requirements
+
+A preset entry may declare `"requiredEngine": "milkrust"` and
+`"requiredProfile": "butterchurn-numeric-v1"`. Both builder/release validation
+and native pack inspection reject unknown requirements; a profile must name its
+engine. The converter also writes
+`// MILKRUST_REQUIRED_PROFILE=butterchurn-numeric-v1` into the preset so an
+ordinary ZIP export or loose import retains the requirement. PlezyNG checks
+the selected engine before loading and leaves unsupported entries visible with
+their reason. These requirements do not count as render qualification.
+See [Butterchurn conversion](BUTTERCHURN_CONVERSION.md).

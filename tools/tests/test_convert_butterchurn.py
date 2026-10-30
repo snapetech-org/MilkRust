@@ -109,6 +109,16 @@ class DeclarativeConversion(unittest.TestCase):
             with self.subTest(source=source), self.assertRaises(ShaderConversionError):
                 convert_shader(source)
 
+    def test_sampler_parameters_keep_their_lexical_dimensions(self):
+        result = convert_shader(
+            "vec4 planar(sampler2D s,vec2 uv){return texture(s,uv);}"
+            "vec4 volume(sampler3D s,vec3 uv){return texture(s,uv);}"
+            "shader_body {ret=planar(sampler_main,uv).rgb+volume(sampler_noisevol_lq,vec3(uv,0)).rgb;}")
+        self.assertIn("return bcglslTexture2D(s,uv)", result)
+        self.assertIn("return bcglslTexture3D(s,uv)", result)
+        with self.assertRaises(ShaderConversionError):
+            convert_shader("shader_body {float sampler_noisevol_lq=0;ret=texture(sampler_noisevol_lq,vec3(0)).rgb;}")
+
     def test_limits_fail_before_recursion_or_unbounded_output(self):
         for source in ("a.x=" + "(" * 80 + "1" + ")" * 80 + ";", "a.x=1;" * 12000):
             with self.assertRaises(convert.Unsupported):

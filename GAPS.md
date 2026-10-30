@@ -1,11 +1,13 @@
 # MilkRust implementation and qualification ledger
 
-Updated 2026-10-30. This is the current ledger for PR #20. Older snapshots remain
-in git history. Source implementation, successful builds, visual conformance and
-release delivery are separate states. The user has now requested build work; the
-repository policy requires private ephemeral JIT runners, and this workspace has
-no runner-dispatch control. No build, test, pack generation, GPU capture or device
-run is recorded for this checkpoint.
+Updated 2026-10-30. **Code implementation: 100% complete for the documented
+native/WebGL legacy profile and paired PlezyNG workflow.** This is the
+user-requested source gate; compilation, tests, reference/corpus fidelity,
+device qualification and release publication remain separate pending gates.
+The scope and package-by-package source evidence are in
+[PlezyNG's source completion ledger](https://github.com/snapetech-org/PlezyNG/blob/codex/visualizer-webos-audio-owned-20261028/docs/plezyng/visualizations/SOURCE_COMPLETION.md).
+The bounded profiles retain explicit diagnostics for unsupported input.
+No test, build, conversion run, GPU capture or device run is claimed.
 
 ## Implemented in source
 
@@ -586,3 +588,28 @@ The HLSL helper pass now recognizes a simple local declaration that copies a glo
 ## 2026-10-30 statically indexed local opaque arrays
 
 HLSL resource and sampler arrays declared directly in a function body or shader body now lower when they have a literal bound from 1–15, a complete brace initializer of type-matching global opaque bindings, and only literal element accesses. The lowering removes the opaque local array and substitutes each selected global binding before helper specialization. Dynamic indices, computed or partial initializers, nested-scope declarations, assignments, shadowing and mismatched bindings remain explicit failures. This source change has not been built or executed; private compiler and renderer qualification remain open.
+
+## 2026-10-30 final source closure: conversion and delivery integration
+
+Butterchurn JSON now has a declarative equation and generated-GLSL conversion
+path rather than a shaderless-only filter. The numeric parser preserves
+assignment order, prefix/postfix state, exact truth/equality, numeric Math,
+floating remainder, 32-bit operations and bounded control flow through
+dedicated VM intrinsics. Typed shader lowering preserves matrix orientation,
+constructors, component/Boolean operations, sampler dimensions in lexical
+scope, texture calls and both shader stages. Original and transformed hashes
+stay separate; every discovered file retains a conversion or rejection row.
+[The conversion contract](docs/BUTTERCHURN_CONVERSION.md) lists limits.
+
+The pack schema validates the versioned engine requirement. PlezyNG carries
+that requirement through local/ZIP round trips and load-time engine selection.
+The paired source work also completes durable download resume, adaptive native
+quality, immutable texture-pack dependencies/alias views and preset/fragment
+authoring/export. Source regressions are authored and private-JIT entrypoints
+are wired; they have not run.
+
+“Still open” above describes qualification/delivery results and declared
+out-of-profile capabilities, not missing implementation of the source contract.
+Modern resource kinds or new syntax outside the legacy profile are future scope.
+The original universal-compatibility/product acceptance gates cannot be marked
+passed from this code-completion status.
