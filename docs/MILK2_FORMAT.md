@@ -90,8 +90,10 @@ except `SpriteName`, whose last occurrence wins. A block with no non-empty
 `SpriteName` does not create a sprite. Repeated sprite block indices still use
 the last complete block.
 
-The mask arithmetic includes the no-random fallback, `-1` direction rule for
-the four direction-aware patterns and the non-square `horizontal` mesh
+The mask arithmetic uses effective carried `random_1..5` values for every
+pattern: fresh runtime registers default to zero, and partial headers inherit
+prior values. It also follows the `-1` direction rule for the four
+direction-aware patterns and preserves the non-square `horizontal` mesh
 behavior. Saved sprite handling includes per-owner scopes, flip UVs, saved
 offsets/repeats, absolute-time `SpriteSpeed` for `SpriteRot` modes 1 and 2,
 saved alpha multiplication, static layer/blend selection, integer burn modes,
