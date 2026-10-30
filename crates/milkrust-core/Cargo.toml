@@ -12,6 +12,7 @@ rust-version.workspace = true
 
 [dependencies]
 gif = { version = "=0.14.2", default-features = false, features = ["raii_no_panic", "std"] }
+png = "=0.17.16"
 milkrust-hlsl = { path = "../milkrust-hlsl" }
 milkrust-expr = { path = "../milkrust-expr" }
 serde_json = "1"
