@@ -365,3 +365,14 @@ test, or reference capture has run for this change.
 ## 2026-10-30 saved-preset host inputs
 
 MilkRust now exposes the standard `mousex`, `mousey`, `mousedown`, and `mouseclick` EEL host variables while retaining its existing underscore-style input aliases. A runtime samples one rising-edge `mouseclick` for all active preset scopes. The frame-clock fallback also supplies `year` through `totalseconds` (zero calendar fields, derived time-of-day). MilkDrop 3 cosine-mixes mouse positions and clock fields and snaps button values at its shader-dependent threshold; the temporary blend values are restored after scene generation. Source regressions cover input binding, click edges, interpolation and snap behavior; they have not run.
+
+
+## 2026-10-30 per-preset runtime clock
+
+Stateful single-preset and frame-set runtimes now anchor EEL `time`, frame count,
+and embedded sprite playback at each source load. Both halves of a saved
+`.milk2` start at the same zero point while retaining independent equation
+state; frame-rate estimation continues to use host-clock deltas. Regression
+sources cover initial time/frame values, successive frames and source changes.
+They have not run. The calendar fields (`year`, `month`, `day`, `weekday`) remain
+zero; local system-clock injection is still unimplemented.

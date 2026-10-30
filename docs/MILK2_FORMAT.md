@@ -13,7 +13,9 @@ while refusing to render unimplemented extensions. MilkDrop 3.2's trailing
 the supported uniform Zoom path. Duplicate names, oversized names, and any
 other executable trailer content remains gated. Progress is a frozen blend position; it
 does not advance as a transition timer. Each preset retains its own
-equation/register state and feedback targets.
+equation/register state and feedback targets. Stateful runtimes anchor EEL
+`time` and sprite playback at source load; both halves of a saved pair start at
+the same zero point and keep separate equation state.
 
 MilkDrop retains these header variables across sequential loads. A fresh host
 starts with an empty pattern, progress `1.0`, direction `0`, and random values
@@ -57,8 +59,10 @@ composite-shader boundary (or the midpoint when both presets use the same
 shader mode). Standard `mousex`/`mousey` coordinates and the date/time
 registers (`year` through `totalseconds`) use the cosine mix. `mousedown` and
 the shared rising-edge `mouseclick` snap at the same shader-dependent threshold.
-The clock fallback derives time-of-day from the frame clock and leaves calendar
-fields zero; it does not read the system clock. The temporary mixed scope is
+The runtime clock derives elapsed time from each source load. Hour, minute,
+second and millisecond fields derive from that preset-relative clock; year,
+month, day and weekday remain zero because no local system-clock input is
+currently exposed. The engine does not read the system clock. The temporary mixed scope is
 restored after scene generation, so its values do not become PRESET2's
 next-frame equation state. Custom shape fills, outlines and custom waves use linear
 `1 - P` / `P` alpha weights for PRESET1 / PRESET2. Outer and inner preset
@@ -120,6 +124,13 @@ compositing, sprite filtering and draw order still need reference captures to
 qualify pixel behavior on each renderer. The Canvas and WGSL paths explicitly
 reject unsupported spatial masks or saved sprites. Unknown trailing extensions
 remain gated.
+
+Stateful `MilkRustRuntime` and `MilkRustFrameSetRuntime` APIs treat their
+`time_seconds` argument as a monotonic host clock. On each source load they
+reset EEL `time` to zero, start `frame` at the first frame, and anchor embedded
+sprite time to that load. The two halves of one `.milk2` start together. Frame
+rate still uses differences in the host clock. Stateless frame-builder APIs
+continue to take preset-relative time directly.
 
 ## Reference-source boundary
 
