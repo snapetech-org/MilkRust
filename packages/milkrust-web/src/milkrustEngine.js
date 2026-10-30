@@ -916,6 +916,17 @@ export const createMilkRustEngine = async ({
       const contextRecovered = wasWaitingForContext;
       wasWaitingForContext = false;
       const now = audioContext.currentTime || 0;
+      const localClock = new Date();
+      rustEngine.setClockState(
+        localClock.getFullYear(),
+        localClock.getMonth() + 1,
+        localClock.getDate(),
+        localClock.getDay(),
+        localClock.getHours(),
+        localClock.getMinutes(),
+        localClock.getSeconds(),
+        localClock.getMilliseconds(),
+      );
       const frame = frameReader.read();
       runFrameHooks(now, frame);
       const automatedPresetName = maybeAdvanceAutomatedPreset(frame, now);
