@@ -307,7 +307,9 @@ supported; fields bind as `sampler_<object>_<field>` unless their name already
 begins with `sampler_`. Global `SamplerState` declarations with static
 initializers accept all eight standard point/linear `Filter` enum combinations,
 plus `AddressU/V/W = Wrap`, `Clamp`, or `Mirror`. Generated bindings preserve independent
-min, mag and mip filtering and each address axis. Declared state names and direct
+min, mag and mip filtering and each address axis. A global state may alias a
+statically initialized state declared before or after it; the alias retains the
+target's filter, address, and comparison function. Declared state names and direct
 declared `SamplerState` fields remain valid method arguments; fields use the
 resource's default prefix. Legacy effect-file `sampler`, `sampler2D`, and
 `sampler3D` globals may initialize with `= sampler_state {}`. That subset

@@ -226,9 +226,11 @@ render frames, resolve external texture packs, or establish fidelity.
   base-level texels in D3D order; reference-pixel comparison remains open.
   Global static `SamplerState` definitions
   support all eight standard point/linear min/mag/mip `Filter` combinations and
-  independent U/V/W Wrap, Clamp or Mirror addressing. Anisotropic filtering, border
-  addressing, dynamic state expressions, and custom local/struct state initialization
-  remain outside the profile. Global legacy effect-file `sampler_state` blocks
+  independent U/V/W Wrap, Clamp or Mirror addressing. A global static state may
+  alias another initialized state, including a comparison state, with its full
+  profile preserved. Anisotropic filtering, border addressing, dynamic state
+  expressions, and custom local/struct state initialization remain outside the
+  profile. Global legacy effect-file `sampler_state` blocks
   bind one `Texture = <identifier>` and support independent Point/Linear min and
   mag filters plus None/Point/Linear mip filtering and per-axis Wrap/Clamp/Mirror.
   Direct `tex*` first arguments and statically specialized resource helpers are

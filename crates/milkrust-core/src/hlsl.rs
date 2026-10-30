@@ -562,6 +562,8 @@ fn lower_modern_resource_syntax(tokens: &mut Vec<String>) -> Result<(), String> 
     let mut resource_array_edits = Vec::<(std::ops::Range<usize>, Vec<String>)>::new();
     let mut sampler_state_names = std::collections::BTreeSet::new();
     let mut sampler_state_profiles = BTreeMap::<String, SamplerStateProfile>::new();
+    let mut sampler_state_aliases = BTreeMap::<String, String>::new();
+    let mut sampler_state_types = BTreeMap::<String, bool>::new();
     let mut sampler_state_fields = BTreeMap::<String, std::collections::BTreeSet<String>>::new();
     let mut legacy_sampler_bindings = BTreeMap::<String, String>::new();
     let mut generic_ranges = Vec::new();
@@ -804,23 +806,43 @@ fn lower_modern_resource_syntax(tokens: &mut Vec<String>) -> Result<(), String> 
             // convention on both hosts. Supported static state initializers
             // are converted into the same explicit sampler prefixes.
             let structure = struct_ranges.iter().find(|(_, range)| range.contains(&index)).map(|(name, _)| name.clone());
+            let global_scope = tokens[..index].iter().fold(0i32, |depth, token| match token.as_str() {
+                "{" => depth + 1,
+                "}" => depth - 1,
+                _ => depth,
+            }) == 0;
+            if structure.is_none() && global_scope
+                && sampler_state_types.insert(name.clone(), comparison_state).is_some() {
+                return Err(format!("Duplicate global HLSL sampler-state declaration {name}"));
+            }
             let mut initializer = None;
+            let mut alias_initializer = None;
             match tokens.get(index + 2).map(String::as_str) {
                 Some("[") => return Err("HLSL SamplerState arrays are unsupported".into()),
                 Some("{") => initializer = Some((index + 2, index + 2)),
                 Some("=") => match tokens.get(index + 3).map(String::as_str) {
                     Some("{") => initializer = Some((index + 2, index + 3)),
                     Some("sampler_state") if tokens.get(index + 4).map(String::as_str) == Some("{") => initializer = Some((index + 2, index + 4)),
+                    Some(alias) if is_identifier(alias) && tokens.get(index + 4).map(String::as_str) == Some(";") => {
+                        alias_initializer = Some(alias.to_string());
+                    }
                     _ => return Err("Dynamic or unsupported HLSL SamplerState initializers are unavailable".into()),
                 },
                 _ => {}
             }
+            let has_initializer = initializer.is_some() || alias_initializer.is_some();
+            if let Some(alias) = alias_initializer.as_ref() {
+                if structure.is_some() || !global_scope {
+                    return Err("Static HLSL sampler-state aliases must be global declarations".into());
+                }
+                if sampler_state_aliases.insert(name.clone(), alias.clone()).is_some() {
+                    return Err(format!("Duplicate HLSL sampler-state alias {name}"));
+                }
+                let edit_start = if index > 0 && tokens[index - 1] == "uniform" { index - 1 } else { index };
+                resource_array_edits.push((edit_start..index + 5, Vec::new()));
+            }
             if let Some((edit_start, open)) = initializer {
-                if structure.is_some() || tokens[..index].iter().fold(0i32, |depth, token| match token.as_str() {
-                    "{" => depth + 1,
-                    "}" => depth - 1,
-                    _ => depth,
-                }) != 0 {
+                if structure.is_some() || !global_scope {
                     return Err("Initialized HLSL SamplerState declarations must be global".into());
                 }
                 let (profile, close) = parse_sampler_state_profile(tokens, open, comparison_state)?;
@@ -835,7 +857,7 @@ fn lower_modern_resource_syntax(tokens: &mut Vec<String>) -> Result<(), String> 
             } else {
                 sampler_state_names.insert(name.clone());
             }
-            let mut declarator = if initializer.is_some() { tokens.len() } else { index + 2 };
+            let mut declarator = if has_initializer { tokens.len() } else { index + 2 };
             while tokens.get(declarator).map(String::as_str) == Some(",") {
                 let candidate = declarator + 1;
                 let next = tokens.get(candidate + 1).map(String::as_str);
@@ -856,6 +878,31 @@ fn lower_modern_resource_syntax(tokens: &mut Vec<String>) -> Result<(), String> 
             tokens[index] = "int".into();
         }
         index += 1;
+    }
+
+    // A static global state may alias another initialized state. Resolve
+    // forward declarations and chains before texture-method lowering so aliases
+    // retain the target's complete filtering/address/comparison profile.
+    for _ in 0..=sampler_state_aliases.len() {
+        let pending: Vec<(String, String)> = sampler_state_aliases.iter()
+            .map(|(alias, target)| (alias.clone(), target.clone()))
+            .collect();
+        let mut changed = false;
+        for (alias, target) in pending {
+            if sampler_state_profiles.contains_key(&alias) { continue; }
+            if let Some(profile) = sampler_state_profiles.get(&target).copied() {
+                if profile.comparison.is_some() != sampler_state_types.get(&alias).copied().unwrap_or(false) {
+                    return Err(format!("HLSL sampler-state alias {alias} has a different type from {target}"));
+                }
+                sampler_state_profiles.insert(alias, profile);
+                changed = true;
+            }
+        }
+        if !changed { break; }
+    }
+    if let Some((alias, target)) = sampler_state_aliases.iter()
+        .find(|(alias, _)| !sampler_state_profiles.contains_key(*alias)) {
+        return Err(format!("HLSL sampler-state alias {alias} must resolve to a statically initialized state; unresolved target {target}"));
     }
 
     // The lowered resource methods translate supported state arguments into
@@ -2232,13 +2279,28 @@ mod tests {
     }
     #[test]
     fn comparison_resource_arrays_dispatch_with_scalar_or_gather_result_types() {
-        for method in ["SampleCmp", "SampleCmpLevelZero", "GatherCmp", "GatherCmpRed"] {
+        for method in ["SampleCmp", "SampleCmpLevelZero", "GatherCmp", "GatherCmpRed", "GatherCmpGreen", "GatherCmpBlue", "GatherCmpAlpha"] {
             for index in ["1", "index"] {
                 let selection = if matches!(method, "SampleCmp" | "SampleCmpLevelZero") { "" } else { ".x" };
                 let source = format!("Texture2D<float4> sampler_art[2]; SamplerComparisonState point{{Filter=COMPARISON_MIN_MAG_MIP_POINT; ComparisonFunc=LESS;}}; shader_body{{int index=int(uv.x*2); ret=sampler_art[{index}].{method}(point,uv,0.5){selection};}}");
                 compile(&source, false).expect("literal and dynamic comparison arrays must retain their actual result width");
             }
         }
+    }
+    #[test]
+    fn static_sampler_state_aliases_preserve_profiles_and_reject_unresolved_targets() {
+        let ordinary = "Texture2D<float4> sampler_art; SamplerState point{Filter=MIN_MAG_MIP_POINT;AddressU=Clamp;}; SamplerState alias=point; shader_body{ret=sampler_art.Sample(alias,uv).rgb;}";
+        let names = sampler_names(ordinary).unwrap();
+        assert!(names.iter().any(|name| name == "sampler_hlsl_1cww_art"), "{names:?}");
+        compile(ordinary, false).expect("static SamplerState aliases must lower through the original profile");
+
+        let comparison = "Texture2D<float4> sampler_art; SamplerComparisonState less{Filter=COMPARISON_MIN_MAG_MIP_POINT;ComparisonFunc=LESS;AddressU=Clamp;}; SamplerComparisonState alias=less; shader_body{ret=sampler_art.SampleCmpLevelZero(alias,uv,0.5).xxx;}";
+        let names = sampler_names(comparison).unwrap();
+        assert!(names.iter().any(|name| name == "sampler_hlsl_1cww_art"), "{names:?}");
+        compile(comparison, false).expect("comparison aliases must preserve comparison state");
+
+        assert!(compile("SamplerState broken=missing; shader_body{ret=float3(uv,0.0);}", false).is_err());
+        assert!(compile("SamplerState ordinary{Filter=MIN_MAG_MIP_POINT;}; SamplerComparisonState wrong=ordinary; shader_body{ret=float3(uv,0.0);}", false).is_err());
     }
     #[test]
     fn compiles_milkdrop_environment_and_distinct_main_sampler_modes() {
