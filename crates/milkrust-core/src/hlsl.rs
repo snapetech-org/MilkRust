@@ -959,7 +959,18 @@ fn lower_modern_resource_syntax(tokens: &mut Vec<String>) -> Result<(), String> 
         .map(|range| (range, Vec::new())).chain(resource_array_edits).collect();
     edits.sort_by_key(|(range, _)| std::cmp::Reverse(range.start));
     for (range, replacement) in edits { tokens.splice(range, replacement); }
-    let (_, _, resource_instances) = resource_struct_fields(tokens)?;
+    let (_, initialized_field_bindings, resource_instances) = resource_struct_fields(tokens)?;
+    for (field_path, binding_name) in &initialized_field_bindings {
+        let Some((object, field)) = field_path.split_once('.') else { continue; };
+        let Some(structure) = resource_instances.get(object) else { continue; };
+        let declared = resource_shapes.get(&format!("{structure}.{field}")).copied().flatten();
+        let bound = resource_shapes.get(binding_name).copied().flatten();
+        if let (Some(declared), Some(bound)) = (declared, bound) {
+            if declared.dimension != bound.dimension || declared.width != bound.width {
+                return Err(format!("Initialized resource field {field_path} does not match global binding {binding_name}"));
+            }
+        }
+    }
 
     // ESSL 3.00 restricts indexing of opaque sampler arrays. Expand resource
     // array references to separately named bindings. Dynamic accesses dispatch
@@ -2401,6 +2412,24 @@ mod tests {
             shader_body { ret=primary.image.Sample(linear, uv).rgb; }
         "#;
         assert!(sampler_names(mismatch).is_err(), "resource initializers must preserve sampler dimensionality");
+
+        let dimension_mismatch = r#"
+            Texture1D<float4> sampler_line;
+            struct Surface { Texture2D<float4> image; };
+            Surface primary = { sampler_line };
+            SamplerState linear { Filter=MIN_MAG_MIP_LINEAR; };
+            shader_body { ret=primary.image.Sample(linear, uv).rgb; }
+        "#;
+        assert!(sampler_names(dimension_mismatch).is_err(), "1D and 2D resources must not alias despite sharing the GLSL sampler type");
+
+        let width_mismatch = r#"
+            Texture2D<float> sampler_gray;
+            struct Surface { Texture2D<float4> image; };
+            Surface primary = { sampler_gray };
+            SamplerState linear { Filter=MIN_MAG_MIP_LINEAR; };
+            shader_body { ret=primary.image.Sample(linear, uv).rgb; }
+        "#;
+        assert!(sampler_names(width_mismatch).is_err(), "resource element widths must match");
     }
 
     #[test]

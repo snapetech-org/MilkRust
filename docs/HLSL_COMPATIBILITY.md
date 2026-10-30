@@ -337,14 +337,15 @@ calls, assignments and increment/decrement in index expressions. Direct assets
 use `<resource>_<index>` names (for example, `textures_0`); struct-field assets
 use `<object>_<field>_<index>`.
 Global resource-only struct instances also accept direct brace aggregates that alias
-compatible global resources before sampler-state specialization.
+global resources only when their original texture dimensions and scalar/vector
+component widths match, before sampler-state specialization.
 `TextureCube`, `Texture*Array`, multisample resources, arrays inside function
 scopes or nested resource-bearing structs, resource-bearing struct parameters
 with local or dynamic arguments, and dynamic comparison-state propagation remain
 outside the profile. Direct resource-bearing struct parameters specialize only
 against an unambiguous global struct instance. A resource-only global struct may
-use a direct aggregate initializer with one type-compatible global resource per
-field. Numeric or mixed resource/numeric aggregates, computed values, member
+use a direct aggregate initializer with one global resource per field whose original texture dimension and
+scalar/vector component width both match. Numeric or mixed resource/numeric aggregates, computed values, member
 aliases and local instances remain unsupported. Texture2D GatherCmp/GatherCmpRed/GatherCmpGreen/GatherCmpBlue/GatherCmpAlpha, SampleCmp and
 SampleCmpLevelZero use the bounded static comparison profile described below;
 other comparison resource forms remain outside. The separate

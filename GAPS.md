@@ -54,7 +54,8 @@ run is recorded for this checkpoint.
   into separately named bindings; grouped resource declarators and array
   fields on global resource structs are supported. Literal element accesses
   select one binding. Resource-only global struct instances accept direct brace
-  initializers with one type-compatible global resource per field; computed or
+  initializers with one global resource per field whose original texture dimension and
+  scalar/vector component width both match; computed or
   mixed numeric/resource initializers fail closed. Side-effect-free dynamic indices dispatch modern
   `Sample`/`SampleLevel`/`SampleBias`/`SampleGrad`/`Load` and standalone
   `GetDimensions` calls across those names; legacy sampler arrays dispatch
@@ -528,3 +529,12 @@ Computed/member/local aliases, numeric members mixed into initialized structs,
 and type mismatches fail closed. Native regression source covers two aliased
 instances, helper specialization, mixed fields and dimension mismatch. This
 source change has not been built or executed.
+
+
+## 2026-10-30 initialized resource alias shape checks
+
+Initialized global resource-only struct aggregates now compare the source texture
+dimension and scalar/vector component width before binding aliases. This rejects
+Texture1D-to-Texture2D aliases even though both use the same legacy GLSL sampler
+type, and rejects mismatched element widths. Regression sources cover both cases;
+the private compiler run remains pending.
