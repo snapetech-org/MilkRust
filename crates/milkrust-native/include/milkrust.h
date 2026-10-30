@@ -37,6 +37,11 @@ int milkrust_texture(milkrust_handle handle, const uint8_t* name, size_t name_le
  * sprites use sprite-local time. */
 int milkrust_texture_gif(milkrust_handle handle, const uint8_t* name, size_t name_length,
                          const uint8_t* encoded, size_t length);
+/* Supply validated local wall-clock fields for the next render. Refresh on the
+ * render thread; weekday is Sunday=0 and milliseconds is 0..999. */
+int milkrust_set_clock(milkrust_handle handle, int32_t year, uint32_t month,
+                       uint32_t day, uint32_t weekday, uint32_t hour,
+                       uint32_t minute, uint32_t second, uint32_t milliseconds);
 /* Interleaved float stereo at 44100 Hz. At most 4096 frames/call. A new generation
  * discards pre-seek audio. Call from the render consumer, never the real-time AO.
  */

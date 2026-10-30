@@ -6,7 +6,7 @@ mod renderer;
 
 use std::{cell::RefCell, collections::BTreeMap, panic::{catch_unwind, AssertUnwindSafe},
     sync::atomic::{AtomicU64, Ordering}};
-use milkrust_core::{MilkRustFrameSetRuntime, MilkRustInputState, validate_milkrust_webgl_import_with_state};
+use milkrust_core::{MilkRustClockState, MilkRustFrameSetRuntime, MilkRustInputState, validate_milkrust_webgl_import_with_state};
 use audio::Audio;
 use renderer::Renderer;
 
@@ -179,6 +179,16 @@ pub unsafe extern "C" fn milkrust_texture_gif(handle: u64, name: *const u8, name
         session.renderer.texture_animation(name, width, height, &frames, &animation.delays_seconds,
             animation.repeat_count)
     })
+}
+
+/// Update local calendar/time registers used by EEL equations. All values are
+/// validated before the runtime accepts them; the host should refresh per frame.
+#[no_mangle]
+pub extern "C" fn milkrust_set_clock(handle: u64, year: i32, month: u32, day: u32,
+    weekday: u32, hour: u32, minute: u32, second: u32, milliseconds: u32) -> i32 {
+    call(handle, |session| session.runtime.set_clock_state(MilkRustClockState {
+        year, month, day, weekday, hour, minute, second, milliseconds,
+    }))
 }
 
 /// # Safety

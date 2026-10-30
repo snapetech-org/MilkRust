@@ -164,6 +164,44 @@ impl Default for MilkRustInputState {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct MilkRustClockState {
+    pub year: i32,
+    pub month: u32,
+    pub day: u32,
+    pub weekday: u32,
+    pub hour: u32,
+    pub minute: u32,
+    pub second: u32,
+    pub milliseconds: u32,
+}
+
+impl MilkRustClockState {
+    pub fn validate(self) -> Result<(), String> {
+        if !(1..=9999).contains(&self.year)
+            || !(1..=12).contains(&self.month)
+            || !(0..=6).contains(&self.weekday)
+            || self.hour > 23
+            || self.minute > 59
+            || self.second > 59
+            || self.milliseconds > 999
+        {
+            return Err("Invalid local clock fields".into());
+        }
+        let leap_year = self.year % 4 == 0 && (self.year % 100 != 0 || self.year % 400 == 0);
+        let days_in_month = match self.month {
+            2 if leap_year => 29,
+            2 => 28,
+            4 | 6 | 9 | 11 => 30,
+            _ => 31,
+        };
+        if self.day == 0 || self.day > days_in_month {
+            return Err("Invalid local calendar date".into());
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum MilkRustPrimitiveMode {
     LineStrip,
     Lines,
@@ -619,6 +657,29 @@ fn update_milkrust_scope_clock(scope: &mut BTreeMap<String, MilkRustValue>, time
         scope.insert(name.to_string(), MilkRustValue::Number(value));
     }
  }
+
+fn update_milkrust_scope_host_clock(
+    scope: &mut BTreeMap<String, MilkRustValue>,
+    clock: MilkRustClockState,
+) {
+    let total_seconds = f64::from(clock.hour) * 3_600.0
+        + f64::from(clock.minute) * 60.0
+        + f64::from(clock.second)
+        + f64::from(clock.milliseconds) / 1_000.0;
+    for (name, value) in [
+        ("year", f64::from(clock.year)),
+        ("month", f64::from(clock.month)),
+        ("day", f64::from(clock.day)),
+        ("weekday", f64::from(clock.weekday)),
+        ("hour", f64::from(clock.hour)),
+        ("minute", f64::from(clock.minute)),
+        ("second", f64::from(clock.second)),
+        ("milliseconds", f64::from(clock.milliseconds)),
+        ("totalseconds", total_seconds),
+    ] {
+        scope.insert(name.to_string(), MilkRustValue::Number(value));
+    }
+}
 
 fn milkrust_sample_text(values: &[f64]) -> String {
      if values.is_empty() {
@@ -1232,6 +1293,7 @@ pub struct MilkRustRuntime {
     last_error: Option<String>,
     previous_mouse_down: bool,
     preset_start_time: Option<f64>,
+    clock_state: Option<MilkRustClockState>,
      initialized: bool,
      preset_document: Option<MilkRustPresetDocument>,
      scope: BTreeMap<String, MilkRustValue>,
@@ -1292,6 +1354,14 @@ impl MilkRustRuntime {
             Ok(frame) => frame,
             Err(_) => milkrust_frame(&MilkRustPreset::default(), time_seconds, bass, mid, treble),
         }
+    }
+
+    /// Set local date/time registers for subsequent frames. Hosts should refresh
+    /// this from their local clock before rendering.
+    pub fn set_clock_state(&mut self, clock: MilkRustClockState) -> Result<(), String> {
+        clock.validate()?;
+        self.clock_state = Some(clock);
+        Ok(())
     }
 
     /// Returns the latest checked frame error. Legacy callers must inspect this
@@ -1377,6 +1447,9 @@ impl MilkRustRuntime {
             waveform,
             spectrum,
         );
+        if let Some(clock) = self.clock_state {
+            update_milkrust_scope_host_clock(&mut self.scope, clock);
+        }
         let mouse_click = next_milkrust_mouse_click(input, &mut self.previous_mouse_down);
         update_milkrust_scope_input(&mut self.scope, input, mouse_click);
         if !self.initialized {
@@ -1425,6 +1498,7 @@ pub struct MilkRustFrameSetRuntime {
     stereo_audio: Option<audio::Stereo>,
     previous_time: Option<f64>,
     preset_start_time: Option<f64>,
+    clock_state: Option<MilkRustClockState>,
     viewport: Option<(u32, u32)>,
     sprite_runtime: sprites::Runtime,
     last_error: Option<String>,
@@ -1524,6 +1598,14 @@ impl MilkRustFrameSetRuntime {
             Err(_) => MilkRustFrameSet { sprites: Vec::new(), entries: Vec::new(), preset_count: 0, title: String::new(),
                     transition_mode: "none".to_string(), transition_seconds: 0.0 },
         }
+    }
+
+    /// Set local date/time registers for subsequent frames. Hosts should refresh
+    /// this from their local clock before rendering.
+    pub fn set_clock_state(&mut self, clock: MilkRustClockState) -> Result<(), String> {
+        clock.validate()?;
+        self.clock_state = Some(clock);
+        Ok(())
     }
 
     /// Returns the latest checked frame error. Legacy callers must inspect this
@@ -1638,6 +1720,7 @@ impl MilkRustFrameSetRuntime {
         let transition_seconds = milkrust_transition_seconds(preset_set);
         let capture_softcut_header = preset_set.saved_blend.is_none() && self.preset_documents.len() == 1;
         let mouse_click = next_milkrust_mouse_click(input, &mut self.previous_mouse_down);
+        let clock_state = self.clock_state;
         for index in 0..self.preset_documents.len() {
             let preset_document = &mut self.preset_documents[index];
             let scope = &mut self.scopes[index];
@@ -1652,6 +1735,9 @@ impl MilkRustFrameSetRuntime {
                  waveform,
                  spectrum,
              );
+             if let Some(clock) = clock_state {
+                 update_milkrust_scope_host_clock(scope, clock);
+             }
              scope.insert("fps".into(), MilkRustValue::Number(fps));
              if let Some((width, height)) = self.viewport {
                  let ratio = f64::from(width) / f64::from(height);
@@ -8162,6 +8248,34 @@ comp_shader_2=ret = vec3(shifted, energy * bass_att);
             ("totalseconds", 1.25),
         ] {
             assert_eq!(scope[key], MilkRustValue::Number(value), "{key}");
+        }
+    }
+
+    #[test]
+    fn host_calendar_clock_is_validated_and_bound_to_runtime_scopes() {
+        let clock = MilkRustClockState {
+            year: 2026,
+            month: 10,
+            day: 30,
+            weekday: 5,
+            hour: 12,
+            minute: 34,
+            second: 56,
+            milliseconds: 789,
+        };
+        assert!(clock.validate().is_ok());
+        assert!(MilkRustClockState { month: 2, day: 29, year: 2025, ..clock }.validate().is_err());
+
+        let mut runtime = MilkRustRuntime::default();
+        runtime.set_clock_state(clock).unwrap();
+        runtime.render_source("[preset00]\nname=Clock\n", 12.0, 0.0, 0.0, 0.0);
+        assert_eq!(runtime.render_error(), None);
+        for (key, value) in [
+            ("year", 2026.0), ("month", 10.0), ("day", 30.0), ("weekday", 5.0),
+            ("hour", 12.0), ("minute", 34.0), ("second", 56.0),
+            ("milliseconds", 789.0), ("totalseconds", 45_296.789),
+        ] {
+            assert_eq!(milkrust_scope_number(&runtime.scope, key, -1.0), value, "{key}");
         }
     }
 
