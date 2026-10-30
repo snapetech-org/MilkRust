@@ -15,7 +15,9 @@ struct ResourceShape {
 
 #[derive(Clone, Copy)]
 struct SamplerStateProfile {
-    point: bool,
+    min_point: bool,
+    mag_point: bool,
+    mip: crate::resources::MipFilter,
     wrap: [bool; 3],
 }
 
@@ -30,7 +32,16 @@ impl SamplerStateProfile {
         if !(1..=3).contains(&dimension) {
             return Err("HLSL sampler state has an invalid texture dimension".into());
         }
-        let filter = if self.point { 'p' } else { 'l' };
+        let filter_code = usize::from(!self.min_point) * 6 + usize::from(!self.mag_point) * 3 + match self.mip {
+            crate::resources::MipFilter::None => 0,
+            crate::resources::MipFilter::Point => 1,
+            crate::resources::MipFilter::Linear => 2,
+        };
+        let filter = if filter_code < 10 {
+            char::from(b'0' + filter_code as u8)
+        } else {
+            char::from(b'a' + (filter_code - 10) as u8)
+        };
         let address = self.wrap.iter().map(|wrap| if *wrap { 'w' } else { 'c' }).collect::<String>();
         Ok(format!("sampler_hlsl_{filter}{address}_{resource}"))
     }
@@ -40,7 +51,9 @@ fn parse_sampler_state_profile(tokens: &[String], open: usize) -> Result<(Sample
     if tokens.get(open).map(String::as_str) != Some("{") {
         return Err("Malformed HLSL SamplerState initializer".into());
     }
-    let mut profile = SamplerStateProfile { point: false, wrap: [true; 3] };
+    let mut profile = SamplerStateProfile {
+        min_point: false, mag_point: false, mip: crate::resources::MipFilter::Linear, wrap: [true; 3],
+    };
     let mut seen = std::collections::BTreeSet::new();
     let mut cursor = open + 1;
     while cursor < tokens.len() && tokens[cursor] != "}" {
@@ -59,9 +72,47 @@ fn parse_sampler_state_profile(tokens: &[String], open: usize) -> Result<(Sample
         let value = tokens[cursor + 2].to_ascii_uppercase();
         match property {
             "Filter" => match value.as_str() {
-                "MIN_MAG_MIP_POINT" | "POINT" => profile.point = true,
-                "MIN_MAG_MIP_LINEAR" | "LINEAR" => profile.point = false,
-                _ => return Err(format!("HLSL SamplerState filter {value} is unsupported; use point or linear min/mag/mip filtering")),
+                "MIN_MAG_MIP_POINT" | "POINT" => {
+                    profile.min_point = true;
+                    profile.mag_point = true;
+                    profile.mip = crate::resources::MipFilter::Point;
+                }
+                "MIN_MAG_POINT_MIP_LINEAR" => {
+                    profile.min_point = true;
+                    profile.mag_point = true;
+                    profile.mip = crate::resources::MipFilter::Linear;
+                }
+                "MIN_POINT_MAG_LINEAR_MIP_POINT" => {
+                    profile.min_point = true;
+                    profile.mag_point = false;
+                    profile.mip = crate::resources::MipFilter::Point;
+                }
+                "MIN_POINT_MAG_MIP_LINEAR" => {
+                    profile.min_point = true;
+                    profile.mag_point = false;
+                    profile.mip = crate::resources::MipFilter::Linear;
+                }
+                "MIN_LINEAR_MAG_MIP_POINT" => {
+                    profile.min_point = false;
+                    profile.mag_point = true;
+                    profile.mip = crate::resources::MipFilter::Point;
+                }
+                "MIN_LINEAR_MAG_POINT_MIP_LINEAR" => {
+                    profile.min_point = false;
+                    profile.mag_point = true;
+                    profile.mip = crate::resources::MipFilter::Linear;
+                }
+                "MIN_MAG_LINEAR_MIP_POINT" => {
+                    profile.min_point = false;
+                    profile.mag_point = false;
+                    profile.mip = crate::resources::MipFilter::Point;
+                }
+                "MIN_MAG_MIP_LINEAR" | "LINEAR" => {
+                    profile.min_point = false;
+                    profile.mag_point = false;
+                    profile.mip = crate::resources::MipFilter::Linear;
+                }
+                _ => return Err(format!("HLSL SamplerState filter {value} is unsupported; use a standard point/linear filter combination")),
             },
             "AddressU" | "AddressV" | "AddressW" => {
                 let wrap = match value.as_str() {
@@ -93,9 +144,10 @@ fn parse_legacy_sampler_state(
     if tokens.get(open).map(String::as_str) != Some("{") {
         return Err("Malformed legacy HLSL sampler_state initializer".into());
     }
-    let mut profile = SamplerStateProfile { point: false, wrap: [true; 3] };
+    let mut profile = SamplerStateProfile {
+        min_point: false, mag_point: false, mip: crate::resources::MipFilter::Linear, wrap: [true; 3],
+    };
     let mut seen = std::collections::BTreeSet::new();
-    let mut filters = Vec::new();
     let mut resource = None;
     let mut cursor = open + 1;
     while cursor < tokens.len() && tokens[cursor] != "}" {
@@ -126,13 +178,29 @@ fn parse_legacy_sampler_state(
         }
         let value = tokens[cursor + 2].to_ascii_uppercase();
         match property {
-            "MinFilter" | "MagFilter" | "MipFilter" => {
+            "MinFilter" => {
                 let point = match value.as_str() {
                     "POINT" => true,
                     "LINEAR" => false,
-                    _ => return Err(format!("Legacy HLSL sampler_state filter {value} is unsupported; use Point or Linear")),
+                    _ => return Err(format!("Legacy HLSL sampler_state min filter {value} is unsupported; use Point or Linear")),
                 };
-                filters.push((property, point));
+                profile.min_point = point;
+            }
+            "MagFilter" => {
+                let point = match value.as_str() {
+                    "POINT" => true,
+                    "LINEAR" => false,
+                    _ => return Err(format!("Legacy HLSL sampler_state mag filter {value} is unsupported; use Point or Linear")),
+                };
+                profile.mag_point = point;
+            }
+            "MipFilter" => {
+                profile.mip = match value.as_str() {
+                    "NONE" => crate::resources::MipFilter::None,
+                    "POINT" => crate::resources::MipFilter::Point,
+                    "LINEAR" => crate::resources::MipFilter::Linear,
+                    _ => return Err(format!("Legacy HLSL sampler_state mip filter {value} is unsupported; use None, Point or Linear")),
+                };
             }
             "AddressU" | "AddressV" | "AddressW" => {
                 let wrap = match value.as_str() {
@@ -149,12 +217,6 @@ fn parse_legacy_sampler_state(
     }
     if tokens.get(cursor).map(String::as_str) != Some("}") {
         return Err("Unterminated legacy HLSL sampler_state initializer".into());
-    }
-    if let Some((_, first)) = filters.first() {
-        if filters.iter().any(|(_, filter)| filter != first) {
-            return Err("Legacy HLSL sampler_state requires matching MinFilter, MagFilter, and MipFilter values".into());
-        }
-        profile.point = *first;
     }
     let resource = resource.or_else(|| fallback_resource.map(str::to_string))
         .ok_or_else(|| "Legacy HLSL sampler_state requires Texture = <name> unless the sampler uses a sampler_* binding name".to_string())?;
