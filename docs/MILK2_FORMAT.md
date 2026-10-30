@@ -116,12 +116,15 @@ The mask arithmetic uses effective carried `random_1..5` values for every
 pattern: fresh runtime registers default to zero, and partial headers inherit
 prior values. It also follows the `-1` direction rule for the four
 direction-aware patterns and preserves the non-square `horizontal` mesh
-behavior. Saved sprite handling includes per-owner scopes, flip UVs, saved
-offsets/repeats, absolute-time `SpriteSpeed` for `SpriteRot` modes 1 and 2,
-saved alpha multiplication, static layer/blend selection, integer burn modes,
-and all eleven saved blend modes with default 4 and invalid values selecting
-mode 0. A missing pattern fails closed rather than selecting an invented
-transition.
+behavior. Saved sprite handling includes per-owner scopes, flip UVs, saved offsets and
+repeats, absolute-time `SpriteSpeed` for `SpriteRot` modes 1 and 2, optional
+saved alpha/layer/burn controls, and static blend overrides. Standard upstream
+`blendmode` is EEL state: it defaults to 0, is read after each frame's sprite
+equations, truncated to an integer, and clamped to 0..4. Explicit
+`SpriteBlend` is a MilkRust-only static override that uses the 11-entry engine
+table; modes 5..10 are engine extensions. Without `SpriteBlend`, the dynamic
+upstream selector is used. A missing pattern fails closed rather than selecting
+an invented transition.
 These are source-level implementations. GPU triangle interpolation,
 compositing, sprite filtering and draw order still need reference captures to
 qualify pixel behavior on each renderer. The Canvas and WGSL paths explicitly
