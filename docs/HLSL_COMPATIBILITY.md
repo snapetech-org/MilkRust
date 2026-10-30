@@ -298,7 +298,7 @@ Direct texture parameters and direct texture fields in global structs are
 supported; fields bind as `sampler_<object>_<field>` unless their name already
 begins with `sampler_`. Global `SamplerState` declarations with static
 initializers accept all eight standard point/linear `Filter` enum combinations,
-plus `AddressU/V/W = Wrap` or `Clamp`. Generated bindings preserve independent
+plus `AddressU/V/W = Wrap`, `Clamp`, or `Mirror`. Generated bindings preserve independent
 min, mag and mip filtering and each address axis. Declared state names and direct
 declared `SamplerState` fields remain valid method arguments; fields use the
 resource's default prefix. Legacy effect-file `sampler`, `sampler2D`, and
@@ -310,7 +310,7 @@ independent `MinFilter = Point|Linear`, `MagFilter = Point|Linear`, and
 default to wrap. These legacy states lower to generated aliases when used as the
 first argument to a supported `tex*` intrinsic. Grouped declarations, dynamic
 state, helper/assignment escapes, local or struct initializers, and
-anisotropic/mirror/border modes remain unsupported. `Texture1D` sampling lowers to a 2D lookup at
+anisotropic filtering and border addressing remain unsupported. `Texture1D` sampling lowers to a 2D lookup at
 the center of the bound image row; use a one-row asset when the original shader
 expects true 1D storage. Global `Texture1D`/`Texture2D`/`Texture3D`
 and legacy `sampler`/`sampler2D`/`sampler3D` arrays with literal bounds
@@ -394,8 +394,8 @@ legacy sampler arrays dispatch when used as the first argument of a supported
 `tex*` intrinsic. Out-of-range dynamic indices yield zero. The expansion
 budget is 512 KiB. Arrays in function scopes or nested resource-bearing structs,
 initialized resource instances, resource-bearing struct parameters, non-2D/3D
-texture kinds, anisotropic filtering, mirror/border addressing and dynamic
-sampler-state expressions remain unsupported. Direct
+texture kinds, anisotropic filtering, border addressing and dynamic sampler-state expressions
+remain unsupported. Direct
 `Texture2D`/`Texture3D` float/half scalar and vector declarations and
 parameters lower through the same sampler model. Sampling methods support the documented static integer offsets;
 `GetDimensions` accepts the base-level and mip-level output forms, with the
