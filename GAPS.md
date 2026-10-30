@@ -58,13 +58,17 @@ run is recorded for this checkpoint.
   rectangular linear algebra, writable selections, converting function outputs,
   vector logic and legacy intrinsics. Bounded numeric/identifier parsing and
   round-trip float output have authored numerical controls; execution is unrun.
-- Global `Texture1D`/`Texture2D` and legacy `sampler`/`sampler2D`
-  arrays with literal bounds from 1 through 15 expand into separately named
-  image bindings. Constant-index array fields also work on global resource
-  struct instances. Texture methods and legacy `tex*` intrinsics bind direct
-  assets as `<resource>_<index>` and struct fields as
-  `<object>_<field>_<index>`. Dynamic/grouped arrays, `Texture3D`/`sampler3D`
-  arrays, function-local arrays and nested resource-bearing structs fail closed.
+- Global `Texture1D`/`Texture2D`/`Texture3D` and legacy
+  `sampler`/`sampler2D`/`sampler3D` arrays with literal bounds 1–15 expand
+  into separately named bindings; grouped resource declarators and array
+  fields on global resource structs are supported. Literal element accesses
+  select one binding. Side-effect-free dynamic indices dispatch modern
+  `Sample`/`SampleLevel`/`SampleBias`/`SampleGrad`/`Load` and standalone
+  `GetDimensions` calls across those names; legacy sampler arrays dispatch
+  supported `tex*` intrinsics when used as the first argument. Out-of-range
+  dynamic reads return zero (or zero dimension outputs), and dispatch code is
+  capped at 512 KiB. Dynamic accesses with calls or side effects, function-local
+  arrays, and nested resource-bearing structs fail closed.
 - The bounded WGSL expression path lowers floating scalar/vector HLSL `fmod` to
   signed WGSL remainder; its integer/boolean, advanced sampling and broader
   shader-language limits remain explicit.
@@ -196,11 +200,12 @@ render frames, resolve external texture packs, or establish fidelity.
   base/mip-level `GetDimensions` with full mip-chain level counts. `Texture1D`
   maps to the center row of a 2D image and needs a one-row asset for 1D parity.
   It still rejects texture types outside those three dimensions, integer/non-color texture
-  element types, dynamically indexed/grouped texture or sampler arrays,
-  `Texture3D`/`sampler3D` arrays, resource arrays in function scopes or nested
-  resource-bearing structs, initialized resource
-  instances, resource-bearing struct parameters, custom sampler-state
-  definitions, comparison methods and gather methods. Declared direct
+  element types, resource arrays in function scopes or nested resource-bearing
+  structs, initialized resource instances, resource-bearing struct parameters,
+  custom sampler-state definitions, comparison methods and gather methods.
+  Dynamic array dispatch is limited to side-effect-free indices, supported
+  sampling/load methods, standalone `GetDimensions`, and legacy `tex*` calls
+  with the array element as their first argument. Declared direct
   `SamplerState` fields are accepted as method arguments; custom per-object
   filtering/addressing remains outside the binding model. The compiler remains a
   bounded pixel-shader profile, not all HLSL shader models. The separate WGSL
@@ -231,3 +236,8 @@ The original PlezyNG plan and current status live under
 `docs/plezyng/visualizations/` in that repository. All executable work must use
 compatible private ephemeral JIT runners; missing capacity never authorizes a
 hosted fallback. Keep untrusted PR work isolated and secret-free.
+
+
+## 2026-10-30 dynamic resource-array lowering
+
+Global bounded texture/sampler arrays now support grouped declarations, 1D/2D/3D texture bindings, literal indices, and side-effect-free dynamic selection without indexing opaque GLSL values. Dynamic texture method calls are expanded across each named binding; legacy sampler arrays expand supported `tex*` calls with the array element as the first argument. Standalone dynamic `GetDimensions` uses a bounded branch, and out-of-range dynamic access produces zero. A 512 KiB generated-dispatch budget limits nested expansion. Function-local arrays, nested resource-bearing structs, custom sampler states and unsupported HLSL resource forms remain explicit compiler failures. The source lock and handoff are synchronized in PlezyNG PR #82. No build or test was run under the source-only restriction.
