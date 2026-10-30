@@ -68,6 +68,21 @@ try {
     tga.set([0,0,255,0,255,0],18);
     const legacyTexture = 'data:image/x-tga;base64,' + btoa(String.fromCharCode(...tga));
     cases.push({ id: 'legacy-tga-dimensions', shader: 'shader_body { ret=tex2D(sampler_pc_art,uv).rgb * (texsize_art.x/2); }', textures: {art: legacyTexture} });
+    cases.push({ id: 'forwarded-static-sampler-state', expected: [0,255,128], textures: {art: legacyTexture}, shader: `
+      Texture2D<float4> sampler_art;
+      SamplerState clampState { Filter=MIN_MAG_MIP_POINT; AddressU=Clamp; AddressV=Clamp; AddressW=Clamp; };
+      SamplerState wrapState { Filter=MIN_MAG_MIP_POINT; };
+      float4 fetch(Texture2D<float4> image, SamplerState state, float2 p, float once) { return image.SampleLevel(state,p,0)+once*0; }
+      float4 forward(Texture2D<float4> image, SamplerState state, float2 p, float once) { return fetch(image,state,p,once); }
+      shader_body { float n=0; float a=forward(sampler_art,clampState,float2(1.125,0.5),++n).r;
+        float b=forward(sampler_art,wrapState,float2(1.125,0.5),++n).r; ret=float3(a,b,n/4); }
+    ` });
+    cases.push({ id: 'forwarded-legacy-sampler-state', expected: [0,255,128], textures: {art: legacyTexture}, shader: `
+      sampler2D clampState = sampler_state { Texture=<art>; MinFilter=Point; MagFilter=Point; MipFilter=None; AddressU=Clamp; };
+      sampler2D wrapState = sampler_state { Texture=<art>; MinFilter=Point; MagFilter=Point; MipFilter=None; AddressU=Wrap; };
+      float4 fetch(sampler2D image, float2 p) { return tex2D(image,p); }
+      shader_body { ret=float3(fetch(clampState,float2(1.125,0.5)).r,fetch(wrapState,float2(1.125,0.5)).r,0.5); }
+    ` });
     const rows = [];
     const spriteRows = [];
     const spriteAlphaRows = [];
@@ -208,7 +223,7 @@ try {
     } finally { engine.free(); }
     return { schemaVersion: 1, profile: 'milkrust-hlslparser-es300-v1', rows, spriteRows, spriteAlphaRows, rejected: invalid.length, contextRecovery: 'pass', shapeOrderAndGradient: 'pass', fidelity: 'not-assessed', physicalDevice: false };
   }, { cases, invalid });
-  assert.equal(report.rows.length, cases.length + 1);
+  assert.equal(report.rows.length, cases.length + 3);
   assert.equal(report.spriteRows.length, 11);
   assert.equal(report.spriteAlphaRows.length, 66);
   if (process.env.RUNNER_TEMP) await writeFile(resolve(process.env.RUNNER_TEMP, 'milkrust-hlsl-browser.json'), JSON.stringify(report, null, 2) + '\n');

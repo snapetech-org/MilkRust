@@ -213,14 +213,14 @@ render frames, resolve external texture packs, or establish fidelity.
   remain outside the profile. Global legacy effect-file `sampler_state` blocks
   bind one `Texture = <identifier>` and support independent Point/Linear min and
   mag filters plus None/Point/Linear mip filtering and per-axis Wrap/Clamp/Mirror.
-  Only direct `tex*` first arguments are supported. Grouped declarations and
-  state escape through helpers or assignments remain explicit failures.
+  Direct `tex*` first arguments and statically specialized resource helpers are
+  supported. Grouped declarations and state assignment remain explicit failures.
   Dynamic array dispatch is limited to side-effect-free indices, supported
   sampling/load methods, standalone `GetDimensions`, and legacy `tex*` calls
   with the array element as their first argument. Direct `SamplerState` fields
   are accepted as method arguments but use resource prefixes. Global initialized
-  states lower through per-resource aliases; parameter and struct-field state
-  propagation is not implemented. The compiler remains a
+  states lower through per-resource aliases; direct helper parameters preserve static global state through bounded specialization;
+  dynamic or assigned struct-field state propagation is not implemented. The compiler remains a
   bounded pixel-shader profile, not all HLSL shader models. The separate WGSL
   path remains limited.
 - Complete format/EEL/texture behavior for every corpus file, including other legacy
@@ -229,7 +229,9 @@ render frames, resolve external texture packs, or establish fidelity.
   but CLI parser/shader analysis and missing external texture-pack accounting
   remain unrun. Animated PNG/WebP and additional unsupported historical image
   formats remain explicit import failures.
-- OS-level compiler/driver process/device hang containment, browser-process OOM
+- Desktop helper process containment is implemented in PlezyNG PR #82, with
+  fault-regression sources and platform packaging; execution is unverified.
+  Mobile/TV local-driver and device-wide GPU hang containment, browser-process OOM
   isolation for native codec internals, recovery qualification, long-run
   resource/performance and accessibility evidence. Worker termination only bounds JS-side decoder
   waiting; it cannot sandbox browser-process memory failure or a wedged GPU driver.
@@ -386,3 +388,21 @@ preset-relative fallback.
 ## 2026-10-30 native mouse host input
 
 The native C ABI now accepts validated per-frame pointer state and latches rising button edges through one successful render, including a down/up pair between frames. Coordinates are normalized and clamped to [0, 1], button state must be 0 or 1, and non-finite inputs fail. Native renders pass the stored input into MilkRust's shared equation runtime, so the existing `mousex`, `mousey`, `mousedown`, and rising-edge `mouseclick` bindings are available to a host. The shared PlezyNG adapter and Flutter visualizer now route pointer state from inline and fullscreen surfaces through Android, Apple, Linux, and Windows hosts. Coalesced motion deltas accumulate until the next rendered frame, then are consumed once. Quick button-down edges are latched for one rendered frame so short taps still raise `mouseclick`; pausing clears held or pending input. Native regression execution and device input checks remain pending. The browser SDK also validates/clamps pointer fields, accumulates motion deltas, and latches short button-down edges until the next render.
+
+## 2026-10-30 static resource helper specialization
+
+Resource and sampler-state helper inputs now specialize at global bindings before
+resource lowering. Nested calls retain static point/linear/address profiles and
+legacy `sampler_state` bindings, while ordinary arguments stay single-evaluation
+function inputs. Literal-indexed global resource arrays, direct fields and forward
+prototypes use the same path. Expansion is capped at 64 instances and 512 KiB;
+recursion, ambiguous overloads, dynamic opaque inputs and identifier capture fail
+explicitly. A sampler declaration loop also now declares its changing cursor
+mutable, correcting a source-level Rust compilation error. Native and browser
+regression sources were added; compiler and pixel execution remain unrun.
+
+PlezyNG's desktop containment source is committed at
+`eb8e9f857826cab1e8d1a538eb423b933a3bfeb2`: Linux MilkRust/projectM and Windows/macOS
+MilkRust run inside packaged helpers with bounded native IPC and process
+termination. Mobile/TV local drivers and device-wide GPU/kernel failure remain
+separate limits. This is not a claim of tested recovery or universal completion.

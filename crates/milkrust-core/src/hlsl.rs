@@ -1,4 +1,7 @@
 //! MilkDrop shader environment for the typed legacy HLSL compiler.
+#[path = "hlsl_resource_helpers.rs"]
+mod resource_helpers;
+
 use crate::milk2;
 use std::collections::BTreeMap;
 
@@ -413,6 +416,7 @@ fn splice_bounded_resource_expansion(
 /// Function-local arrays, nested resource structs and advanced sampler states
 /// need different host binding models and fail explicitly.
 fn lower_modern_resource_syntax(tokens: &mut Vec<String>) -> Result<(), String> {
+    resource_helpers::specialize(tokens)?;
     let struct_ranges = hlsl_struct_ranges(tokens)?;
     let mut resource_shapes = BTreeMap::<String, Option<ResourceShape>>::new();
     let mut resource_arrays = BTreeMap::<String, usize>::new();
@@ -691,7 +695,7 @@ fn lower_modern_resource_syntax(tokens: &mut Vec<String>) -> Result<(), String> 
             } else {
                 sampler_state_names.insert(name.clone());
             }
-            let declarator = if initializer.is_some() { tokens.len() } else { index + 2 };
+            let mut declarator = if initializer.is_some() { tokens.len() } else { index + 2 };
             while tokens.get(declarator).map(String::as_str) == Some(",") {
                 let candidate = declarator + 1;
                 let next = tokens.get(candidate + 1).map(String::as_str);
@@ -1162,6 +1166,34 @@ fn lower_modern_resource_syntax(tokens: &mut Vec<String>) -> Result<(), String> 
             rewritten.push(match resource_shape.width { 1 => "x", 2 => "xy", _ => "xyz" }.into());
         }
         index = end;
+    }
+    // Supported state arguments have disappeared with their texture methods.
+    // Any remaining value use would erase state when lowered to the int marker.
+    if !sampler_state_profiles.is_empty() {
+        let mut state_declarations = BTreeMap::<String, usize>::new();
+        for index in 0..rewritten.len() {
+            if index >= 2 && rewritten[index - 1] == "." {
+                if sampler_state_instances.get(&rewritten[index - 2]).and_then(Option::as_ref)
+                    .and_then(|structure| sampler_state_fields.get(structure))
+                    .is_some_and(|fields| fields.contains(&rewritten[index])) {
+                    return Err("SamplerState fields cannot escape supported texture methods or static helpers".into());
+                }
+                continue;
+            }
+            if !sampler_state_names.contains(&rewritten[index]) { continue; }
+            let start = rewritten[..index].iter().rposition(|token| matches!(token.as_str(), ";" | "{" | "}" | "(" | ")"))
+                .map_or(0, |boundary| boundary + 1);
+            let prefix = &rewritten[start..index];
+            let declaration = (index > 0 && rewritten[index - 1] == "int")
+                || (prefix.iter().any(|token| token == "int")
+                    && prefix.iter().all(|token| is_identifier(token) || token == ","));
+            if !declaration || !matches!(rewritten.get(index + 1).map(String::as_str), Some(";") | Some(",") | Some(")") | Some(":")) {
+                return Err("SamplerState values cannot escape supported texture methods or static helpers".into());
+            }
+            let count = state_declarations.entry(rewritten[index].clone()).or_default();
+            *count += 1;
+            if *count > 1 { return Err("Shadowed SamplerState declarations are unsupported".into()); }
+        }
     }
     // Static legacy sampler declarations bind a resource and sampler state in
     // one effect-file block. Rewrite only direct tex* sampler arguments so an
@@ -1713,6 +1745,67 @@ fn adapt_output(glsl: &str, feedback: bool) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn helper_parameters_preserve_static_texture_and_sampler_bindings() {
+        let source = r#"
+            Texture2D<float4> sampler_art;
+            SamplerState point { Filter=MIN_MAG_MIP_POINT; AddressU=Clamp; AddressV=Mirror; };
+            SamplerState linear { Filter=MIN_MAG_MIP_LINEAR; };
+            float4 fetch(Texture2D<float4> image, SamplerState state, float2 p) { return image.Sample(state,p); }
+            float4 forward(Texture2D<float4> image, SamplerState state, float2 p) { return fetch(image,state,p); }
+            shader_body { ret=(forward(sampler_art,point,uv)+forward(sampler_art,linear,uv)).rgb; }
+        "#;
+        let names = sampler_names(source).unwrap();
+        assert!(names.iter().any(|name| name == "sampler_hlsl_1cmw_art"));
+        assert!(names.iter().any(|name| name == "sampler_hlsl_bwww_art"));
+        assert!(!names.iter().any(|name| name.ends_with("_image")));
+        compile(source, false).expect("forwarded state must compile against the actual global image");
+    }
+    #[test]
+    fn specializes_legacy_state_and_literal_resource_array_arguments() {
+        let legacy = r#"
+            sampler2D saved = sampler_state { Texture=<art>; MinFilter=Point; MagFilter=Linear; MipFilter=None; };
+            float4 fetch(sampler2D image, float2 p) { return tex2D(image,p); }
+            shader_body { ret=fetch(saved,uv).rgb; }
+        "#;
+        assert_eq!(sampler_names(legacy).unwrap(), vec!["sampler_hlsl_3www_art"]);
+        compile(legacy, false).unwrap();
+        let array = r#"
+            Texture2D<float4> sampler_art[2]; SamplerState state;
+            float4 fetch(Texture2D<float4> image, SamplerState s, float2 p);
+            float4 fetch(Texture2D<float4> image, SamplerState s, float2 p) { return image.SampleLevel(s,p,0); }
+            shader_body { ret=fetch(sampler_art[1],state,uv).rgb; }
+        "#;
+        compile(array, false).expect("literal array bindings and forward prototypes must survive specialization");
+    }
+    #[test]
+    fn resource_specialization_rejects_recursion_mutation_and_capture() {
+        for source in [
+            "float4 f(sampler2D s,float2 p){return f(s,p);} shader_body {ret=f(sampler_main,uv).rgb;}",
+            "float4 f(sampler2D s,float2 p){s=sampler_main; return tex2D(s,p);} shader_body {ret=f(sampler_main,uv).rgb;}",
+            "float4 f(sampler2D s,float2 p){return tex2D(s,p);} shader_body {float sampler_main=0; ret=f(sampler_main,uv).rgb;}",
+            "float4 f(sampler2D s,float2 p){float x=0,sampler_main=0; return tex2D(s,p);} shader_body {ret=f(sampler_main,uv).rgb;}",
+            "Texture2D t[2]; SamplerState state; float4 f(Texture2D s,SamplerState v,float2 p){return s.Sample(v,p);} shader_body {int i=0; ret=f(t[i++],state,uv).rgb;}",
+            "Texture2D t; SamplerState point {Filter=MIN_MAG_MIP_POINT;}; shader_body {SamplerState local; local=point; ret=t.Sample(local,uv).rgb;}",
+            "Texture2D t; SamplerState point {Filter=MIN_MAG_MIP_POINT;}; shader_body {int point=1; ret=t.Sample(point,uv).rgb;}",
+        ] {
+            let source = format!("SamplerState specializationTrigger {{Filter=MIN_MAG_MIP_POINT;}}; {source}");
+            assert!(sampler_names(&source).is_err(), "unsafe resource helper accepted: {source}");
+        }
+    }
+    #[test]
+    fn bounds_resource_helper_specialization_depth() {
+        let mut source = String::from("SamplerState specializationTrigger {Filter=MIN_MAG_MIP_POINT;}; ");
+        for index in 0..65 {
+            source.push_str(&format!("float4 f{index}(sampler2D s,float2 p){{return f{}(s,p);}} ", index + 1));
+        }
+        source.push_str("float4 f65(sampler2D s,float2 p){return tex2D(s,p);} shader_body {ret=f0(sampler_main,uv).rgb;}");
+        assert!(sampler_names(&source).unwrap_err().contains("specialization limit"));
+    }
+    #[test]
+    fn ordinary_sampler_helper_overloads_keep_the_typed_path() {
+        compile("float4 f(sampler2D s,float2 p){return tex2D(s,p);} float4 f(sampler2D s,float3 p){return tex2D(s,p.xy);} shader_body {ret=(f(sampler_main,uv)+f(sampler_main,float3(uv,0))).rgb;}", false).unwrap();
+    }
     #[test]
     fn compiles_milkdrop_environment_and_distinct_main_sampler_modes() {
         let source = "shader_body { float3 p=mul(float4(uv,0,1),rot_s1); ret=GetMain(uv)+GetPixel(uv)+GetBlur2(uv); ret+=tex2d(sampler_PC_main,uv).rgb; ret+=float3(rad,ang/M_PI_2,mip_avg)+_c3.xyz+_qa.xyz+p+lum(ret); }";

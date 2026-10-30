@@ -442,3 +442,31 @@ but remains unrun under the source-only restriction.
 Representation follows ESSL 3.00 sections 4.1.8–4.1.9 and 6.1: arrays and structs
 can contain one another, and explicitly sized arrays can cross function
 boundaries. It does not enable opaque resource arrays through numeric layout.
+
+## Static resource helpers
+
+Helper functions with direct `SamplerState`, `Texture1D/2D/3D` or legacy
+`sampler/sampler2D/sampler3D` input parameters are specialized at their global
+bindings before texture methods are lowered when the source declares initialized
+sampling state. Without initialized state, the existing typed opaque-parameter
+path, including ordinary overloads, is preserved. Nested helper calls preserve the
+actual texture and static state, including legacy `sampler_state` blocks. Ordinary
+value arguments remain function arguments and are evaluated once. Global fields
+and literal-indexed global resource arrays can be arguments; existing static
+filter/address aliases and resource limits still apply. Forward declarations
+retain the specialized signatures at their original source positions.
+
+The pass permits at most 64 helper specializations and 512 KiB of generated
+source. Opaque arguments must resolve to a global binding without side effects.
+Recursive or overloaded resource helpers, output/array/default opaque parameters,
+local/dynamic opaque arguments, and substitutions that capture existing body or
+value-parameter names fail explicitly. Resource-bearing struct parameters,
+state assignment/arithmetic and dynamically selected state still require a
+separate binding model. This is a bounded pixel-shader profile, not every HLSL
+resource feature.
+
+Native regression sources cover binding reflection, nested forwarding, legacy
+state, literal resource arrays, prototypes, capture, recursion and expansion
+limits. The browser gate has authored pixel controls distinguishing point-clamp
+from point-wrap and checking that numeric argument side effects occur once.
+Neither compiler nor GPU controls have been executed for this checkpoint.
