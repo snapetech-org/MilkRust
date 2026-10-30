@@ -4,9 +4,13 @@ The `.milk`/`.milk2` importer now separates `[SPRITEn_BEGIN]`/`[SPRITEn_END]`
 records from preset equations. It retains the original records for export and
 selects the last definition of an index. Within a block, ordinary saved fields
 use their first occurrence while `SpriteName` uses its last occurrence.
-`.milk` sprite blocks execute by default; `sprite=0` disables them. In
-`.milk2`, a trailing saved sprite block executes only when the wrapper header
-explicitly contains `sprite=1`. A missing flag or `sprite=0` leaves the block
+Classic `.milk` saved sprites are enabled by default. The first standalone
+`sprite` property outside a saved sprite block controls the gate, so `sprite=0`
+disables sprites even when the property appears inside `[preset00]`. Records
+inside saved sprite blocks do not change that setting. In `.milk2`, a trailing
+saved sprite block executes only when the wrapper header explicitly contains
+`sprite=1`; duplicate header flags use their last value, and preset-body keys do
+not change that gate. A missing flag or `sprite=0` leaves the block
 preserved and inert. Disabled blocks are preserved without executing code or
 admitting image dependencies.
 Unknown active fields, mismatched/nested blocks, non-finite values and external
