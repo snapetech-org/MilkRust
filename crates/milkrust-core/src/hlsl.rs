@@ -800,7 +800,7 @@ fn lower_modern_resource_syntax(tokens: &mut Vec<String>) -> Result<(), String> 
             if resource_shapes.contains_key(&shape_name) {
                 let method = tokens.get(close_index + 2).map(String::as_str).unwrap_or("");
                 if tokens.get(close_index + 1).map(String::as_str) != Some(".")
-                    || !matches!(method, "Sample" | "SampleLevel" | "SampleBias" | "SampleGrad" | "Load" | "GetDimensions") {
+                    || !matches!(method, "Sample" | "SampleLevel" | "SampleBias" | "SampleGrad" | "Gather" | "GatherRed" | "GatherGreen" | "GatherBlue" | "GatherAlpha" | "Load" | "GetDimensions") {
                     return Err("HLSL texture array elements must use a supported resource method".into());
                 }
             }
@@ -820,7 +820,7 @@ fn lower_modern_resource_syntax(tokens: &mut Vec<String>) -> Result<(), String> 
             let method_index = close_index + 2;
             let method = tokens.get(method_index).map(String::as_str).unwrap_or("");
             if tokens.get(close_index + 1).map(String::as_str) != Some(".")
-                || !matches!(method, "Sample" | "SampleLevel" | "SampleBias" | "SampleGrad" | "Load" | "GetDimensions")
+                || !matches!(method, "Sample" | "SampleLevel" | "SampleBias" | "SampleGrad" | "Gather" | "GatherRed" | "GatherGreen" | "GatherBlue" | "GatherAlpha" | "Load" | "GetDimensions")
                 || tokens.get(method_index + 1).map(String::as_str) != Some("(") {
                 return Err("Dynamically indexed HLSL texture arrays must immediately call a supported texture method".into());
             }
@@ -874,7 +874,11 @@ fn lower_modern_resource_syntax(tokens: &mut Vec<String>) -> Result<(), String> 
                 continue;
             }
 
-            let width = shape.width;
+            let width = if matches!(method, "Gather" | "GatherRed" | "GatherGreen" | "GatherBlue" | "GatherAlpha") {
+                4
+            } else {
+                shape.width
+            };
             let mut replacement = vec!["(".into()];
             for element in 0..size {
                 replacement.extend(["int".into(), "(".into()]);
@@ -947,7 +951,7 @@ fn lower_modern_resource_syntax(tokens: &mut Vec<String>) -> Result<(), String> 
             continue;
         }
         let method = tokens[index + 1].as_str();
-        if !matches!(method, "Sample" | "SampleLevel" | "SampleBias" | "SampleGrad" | "Load" | "GetDimensions") {
+        if !matches!(method, "Sample" | "SampleLevel" | "SampleBias" | "SampleGrad" | "Gather" | "GatherRed" | "GatherGreen" | "GatherBlue" | "GatherAlpha" | "Load" | "GetDimensions") {
             if index > 0 && is_identifier(&tokens[index - 1]) {
                 let mut base_start = index - 1;
                 while base_start >= 2 && tokens[base_start - 1] == "." && is_identifier(&tokens[base_start - 2]) {
@@ -990,6 +994,16 @@ fn lower_modern_resource_syntax(tokens: &mut Vec<String>) -> Result<(), String> 
         }.ok_or_else(|| format!("HLSL resource method receiver {base_name} has no unambiguous Texture1D/Texture2D/Texture3D declaration"))?;
         let dimension = resource_shape.dimension;
         let (args, end) = split_hlsl_call(tokens, index + 2)?;
+        let gather_component = match method {
+            "Gather" | "GatherRed" => Some(0),
+            "GatherGreen" => Some(1),
+            "GatherBlue" => Some(2),
+            "GatherAlpha" => Some(3),
+            _ => None,
+        };
+        if gather_component.is_some() && (dimension != 2 || !matches!(args.len(), 2 | 3)) {
+            return Err("Texture2D Gather methods require a sampler, float2 location, and optional int2 offset".into());
+        }
         if method == "GetDimensions" {
             let expected = usize::from(dimension);
             let has_mip = args.len() == expected + 2;
@@ -1057,6 +1071,8 @@ fn lower_modern_resource_syntax(tokens: &mut Vec<String>) -> Result<(), String> 
             ("SampleBias", 3 | 4, 3) => ("tex3Dbias", args[1].clone()),
             ("SampleGrad", 4 | 5, 1 | 2) => ("tex2Dgrad", args[1].clone()),
             ("SampleGrad", 4 | 5, 3) => ("tex3Dgrad", args[1].clone()),
+            ("Gather" | "GatherRed" | "GatherGreen" | "GatherBlue" | "GatherAlpha", 2 | 3, 2) =>
+                ("milkrust_gather2D", args[1].clone()),
             ("Load", 1 | 2, 1 | 2) => ("tex2Dfetch", args[0].clone()),
             ("Load", 1 | 2, 3) => ("tex3Dfetch", args[0].clone()),
             _ => return Err(format!("Invalid argument count for HLSL texture method {method}")),
@@ -1160,8 +1176,18 @@ fn lower_modern_resource_syntax(tokens: &mut Vec<String>) -> Result<(), String> 
                 rewritten.extend(offset.clone());
             }
         }
+        if let Some(component) = gather_component {
+            rewritten.push(",".into());
+            if let Some(offset) = args.get(2) {
+                rewritten.extend(offset.clone());
+            } else {
+                rewritten.extend(["int2".into(), "(".into(), "0".into(), ",".into(), "0".into(), ")".into()]);
+            }
+            rewritten.push(",".into());
+            rewritten.push(component.to_string());
+        }
         rewritten.push(")".into());
-        if resource_shape.width < 4 {
+        if resource_shape.width < 4 && gather_component.is_none() {
             rewritten.push(".".into());
             rewritten.push(match resource_shape.width { 1 => "x", 2 => "xy", _ => "xyz" }.into());
         }
@@ -1624,6 +1650,9 @@ pub(crate) fn compile(source: &str, legacy_feedback: bool) -> Result<String, Str
         let kind = if crate::resources::texture_kind(name).is_volume() { "sampler3D" } else { "sampler2D" };
         preamble.push_str(&format!("{kind} shaderTexture{index};\n"));
     }
+    if tokens.iter().any(|token| token == "milkrust_gather2D") {
+        preamble.push_str("float4 milkrust_gather2D(sampler2D source, float2 location, int2 offset, int component);\n");
+    }
     for name in crate::resources::SCALAR_UNIFORMS { preamble.push_str(&format!("float {name};\n")); }
     for name in crate::resources::VECTOR_UNIFORMS { preamble.push_str(&format!("float4 {name};\n")); }
     for name in crate::resources::MATRIX_UNIFORMS { preamble.push_str(&format!("float4x3 {name};\n")); }
@@ -1730,6 +1759,32 @@ fn adapt_output(glsl: &str, feedback: bool) -> Result<String, String> {
     if !has_output || !has_main { return Err("Shader entry must write COLOR0".into()); }
     if !has_uv { output.push_str("in vec2 uv;\n"); }
     output.insert_str(output.find('\n').map_or(0, |i| i+1), "in highp vec2 originalUv;\n");
+    if glsl.contains("milkrust_gather2D") {
+        let mut cursor = 0usize;
+        let mut insertion = output.find('\n').map_or(0, |index| index + 1);
+        for line in output.split_inclusive('\n') {
+            let end = cursor + line.len();
+            if line.trim_start().starts_with("#version")
+                || line.trim_start().starts_with("#extension")
+                || line.trim_start().starts_with("precision ")
+            {
+                insertion = end;
+            }
+            cursor = end;
+        }
+        output.insert_str(insertion, r#"
+vec4 milkrust_gather2D(sampler2D source, vec2 location, ivec2 offset, int component) {
+    vec2 size = vec2(textureSize(source, 0));
+    vec2 low = floor(location * size - vec2(0.5)) + vec2(offset);
+    vec2 inv = vec2(1.0) / size;
+    vec4 c0 = textureLod(source, (low + vec2(0.5, 1.5)) * inv, 0.0);
+    vec4 c1 = textureLod(source, (low + vec2(1.5, 1.5)) * inv, 0.0);
+    vec4 c2 = textureLod(source, (low + vec2(1.5, 0.5)) * inv, 0.0);
+    vec4 c3 = textureLod(source, (low + vec2(0.5, 0.5)) * inv, 0.0);
+    return vec4(c0[component], c1[component], c2[component], c3[component]);
+}
+"#);
+    }
     output.push_str(milk2::GLSL_TRANSITION_MASK);
     // The driver may optimize an unused source uniform out. In GLSL it still
     // exists in the declaration stream emitted from our preamble.

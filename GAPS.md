@@ -212,7 +212,10 @@ render frames, resolve external texture packs, or establish fidelity.
   It still rejects texture types outside those three dimensions, integer/non-color texture
   element types, resource arrays in function scopes or nested resource-bearing
   structs, initialized resource instances, resource-bearing struct parameters,
-  comparison methods and gather methods. Global static `SamplerState` definitions
+  comparison sampling and `GatherCmp` variants. The five `Texture2D.Gather`
+  methods now read the four base-level texels in D3D order and use the selected
+  static sampler's address mode; reference-pixel comparison remains open.
+  Global static `SamplerState` definitions
   support all eight standard point/linear min/mag/mip `Filter` combinations and
   independent U/V/W Wrap, Clamp or Mirror addressing. Anisotropic filtering, border
   addressing, dynamic state expressions, and custom local/struct state initialization

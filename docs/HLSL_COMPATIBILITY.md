@@ -291,7 +291,11 @@ declared component width. Minimum-precision scalar, vector and matrix aliases
 (`min16float`, `min10float`, `min16int`, `min12int`, `min16uint`) widen to the
 matching `float`, `int` or `uint` types; their minimum precision is not retained.
 `Sample`, `SampleLevel`, `SampleBias`, `SampleGrad`, `Load`, and both base-level
-and mip-level `GetDimensions` lower to matching legacy operations. `Load`
+and mip-level `GetDimensions` lower to matching legacy operations. The five
+`Texture2D.Gather`, `GatherRed`, `GatherGreen`, `GatherBlue`, and
+`GatherAlpha` methods return the four base-level texels in D3D component order.
+They use explicit LOD-zero reads so GLSL ES 3.00 can preserve address modes while
+ignoring min/mag filtering as required by Gather. `Load`
 honors its optional static integer offset and returns zero for invalid mip or
 texel coordinates, matching the object-method contract. The mip-level
 `GetDimensions` overload also reports the complete mip-chain length; both hosts
@@ -322,7 +326,8 @@ from 1 through 15 lower to separately named bindings. Grouped resource
 declarators and direct array fields on globally declared resource structs are
 supported. Literal indices bind directly. Side-effect-free dynamic integer
 indices dispatch over each binding for texture `Sample`, `SampleLevel`,
-`SampleBias`, `SampleGrad`, `Load`, standalone `GetDimensions`, and legacy
+`SampleBias`, `SampleGrad`, all five 2D `Gather` methods, `Load`, standalone
+`GetDimensions`, and legacy
 `tex*` calls where the array access is the first intrinsic argument. A
 dynamic index outside the declared bound returns zero (or zero dimension
 outputs). Dynamic dispatch has a 512 KiB expansion budget and rejects function
@@ -330,8 +335,9 @@ calls, assignments and increment/decrement in index expressions. Direct assets
 use `<resource>_<index>` names (for example, `textures_0`); struct-field assets
 use `<object>_<field>_<index>`.
 `TextureCube`, `Texture*Array`, multisample resources, arrays inside function
-scopes or nested resource-bearing structs, initialized resource instances and
-resource-bearing struct parameters remain outside the profile. The separate
+scopes or nested resource-bearing structs, initialized resource instances,
+resource-bearing struct parameters, comparison sampling and `GatherCmp`
+variants remain outside the profile. The separate
 WGSL path remains limited; within its floating scalar/vector expression subset,
 HLSL `fmod` now lowers to WGSL's signed remainder operator. Integer/boolean and
 the separately rejected sampling operations still stay outside that path.
