@@ -28,14 +28,15 @@ impl ShaderResources {
         }};
         let mut result = Self { gl: gl.clone(), program, buffer, samplers: Vec::new(),
             noise: BTreeMap::new(), blur: Vec::new(), history: None, size: (0, 0) };
-        for index in 0..4 {
+        for index in 0..16 {
             let sampler = gl.create_sampler().ok_or_else(|| JsValue::from_str("Sampler allocation failed"))?;
+            let point = index & 1 != 0;
             gl.sampler_parameteri(&sampler, Gl::TEXTURE_MIN_FILTER,
-                if index & 1 != 0 { Gl::NEAREST_MIPMAP_NEAREST } else { Gl::LINEAR_MIPMAP_LINEAR } as i32);
+                if point { Gl::NEAREST_MIPMAP_NEAREST } else { Gl::LINEAR_MIPMAP_LINEAR } as i32);
             gl.sampler_parameteri(&sampler, Gl::TEXTURE_MAG_FILTER,
-                if index & 1 != 0 { Gl::NEAREST } else { Gl::LINEAR } as i32);
-            for axis in [Gl::TEXTURE_WRAP_S, Gl::TEXTURE_WRAP_T, Gl::TEXTURE_WRAP_R] {
-                gl.sampler_parameteri(&sampler, axis, if index & 2 != 0 { Gl::REPEAT } else { Gl::CLAMP_TO_EDGE } as i32);
+                if point { Gl::NEAREST } else { Gl::LINEAR } as i32);
+            for (axis, mask) in [(Gl::TEXTURE_WRAP_S, 2usize), (Gl::TEXTURE_WRAP_T, 4), (Gl::TEXTURE_WRAP_R, 8)] {
+                gl.sampler_parameteri(&sampler, axis, if index & mask != 0 { Gl::REPEAT } else { Gl::CLAMP_TO_EDGE } as i32);
             }
             result.samplers.push(sampler);
         }
@@ -124,7 +125,7 @@ impl ShaderResources {
                     edge[0], edge[1], edge[2], edge[3]);
                 gl.uniform1f(gl.get_uniform_location(&self.program, "blurHorizontal").as_ref(),
                     if pass == 0 { 1.0 } else { 0.0 });
-                gl.bind_sampler(0, self.samplers.get(2));
+                gl.bind_sampler(0, self.samplers.get(0));
                 gl.draw_arrays(Gl::TRIANGLE_STRIP, 0, 4);
                 source = target.texture.clone();
                 source_size = (level.width, level.height);
@@ -152,8 +153,7 @@ impl ShaderResources {
         }
     }
     pub fn bind_sampler(&self, unit: u32, name: &str) {
-        let (nearest, repeat) = resources::sampler_state(name);
-        self.gl.bind_sampler(unit, self.samplers.get(usize::from(nearest) + 2 * usize::from(repeat)));
+        self.gl.bind_sampler(unit, self.samplers.get(resources::sampler_index(name)));
     }
 }
 
