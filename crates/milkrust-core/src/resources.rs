@@ -195,7 +195,7 @@ fn interpolate_noise_texel(bytes: &mut [u8], destination: usize, samples: [usize
 }
 
 pub fn noise_texture(seed: u32, volume: bool) -> (u32, u32, u32, Vec<u8>) {
-    let width = if volume || seed != 4 { 256 } else { 32 };
+    let width = if volume || seed == 4 { 32 } else { 256 };
     let height = width;
     let depth = if volume { 32 } else { 1 };
     let zoom = match (volume, seed) {
