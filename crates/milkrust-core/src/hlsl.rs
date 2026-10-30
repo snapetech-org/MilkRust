@@ -86,8 +86,9 @@ fn split_hlsl_call(tokens: &[String], open: usize) -> Result<(Vec<Vec<String>>, 
 }
 
 /// Lower the common HLSL resource-object surface into the legacy sampler
-/// intrinsics already represented in the typed AST. Global 1D/2D texture arrays
-/// with constant element access are expanded into separately bound named textures.
+/// intrinsics already represented in the typed AST. Global 1D/2D texture and
+/// legacy sampler arrays with constant element access are expanded into separately
+/// bound named textures.
 /// Resource-bearing structs, dynamically indexed arrays and custom sampler-state
 /// objects need different host binding models and fail explicitly.
 fn lower_modern_resource_syntax(tokens: &mut Vec<String>) -> Result<(), String> {
@@ -214,6 +215,52 @@ fn lower_modern_resource_syntax(tokens: &mut Vec<String>) -> Result<(), String> 
             index = name_index + 1;
             continue;
         }
+        if matches!(tokens[index].as_str(), "sampler" | "sampler2D" | "sampler3D")
+            && tokens.get(index + 1).is_some_and(|name| is_identifier(name))
+            && tokens.get(index + 2).map(String::as_str) == Some("[") {
+            let type_index = index;
+            let name_index = index + 1;
+            if tokens[index] == "sampler3D" {
+                return Err("Sampler3D arrays cannot be represented by named MilkDrop image bindings".into());
+            }
+            if struct_ranges.iter().any(|(_, range)| range.contains(&type_index)) {
+                return Err("Sampler arrays inside structs are unsupported".into());
+            }
+            let mut parens = 0i32;
+            let mut braces = 0i32;
+            for token in &tokens[..type_index] {
+                if token == "(" { parens += 1; }
+                if token == ")" { parens -= 1; }
+                if token == "{" { braces += 1; }
+                if token == "}" { braces -= 1; }
+            }
+            if parens != 0 || braces != 0 {
+                return Err("Sampler arrays are supported only as global declarations".into());
+            }
+            let name = tokens[name_index].clone();
+            let size_token = tokens.get(name_index + 2).map(String::as_str).unwrap_or("");
+            let size = size_token.parse::<usize>().ok().filter(|size| (1..=15).contains(size))
+                .ok_or_else(|| "Global HLSL sampler arrays require a decimal literal bound from 1 through 15".to_string())?;
+            if tokens.get(name_index + 3).map(String::as_str) != Some("]") {
+                return Err("Global HLSL sampler array bounds must be a single decimal literal".into());
+            }
+            if tokens.get(name_index + 4).map(String::as_str) == Some(",") {
+                return Err("Grouped HLSL sampler-array declarations are unsupported".into());
+            }
+            let mut declaration = vec![tokens[type_index].clone()];
+            for element in 0..size {
+                let element_name = format!("{}_{}", name, element);
+                if tokens.iter().any(|token| token == &element_name) {
+                    return Err(format!("Generated HLSL sampler-array binding {element_name} collides with a user identifier"));
+                }
+                if element != 0 { declaration.push(",".into()); }
+                declaration.push(element_name);
+            }
+            resource_arrays.insert(name, size);
+            resource_array_edits.push((type_index..name_index + 4, declaration));
+            index = name_index + 4;
+            continue;
+        }
         if tokens[index] == "SamplerState" {
             let Some(name) = tokens.get(index + 1).filter(|token| is_identifier(token)) else {
                 return Err("Malformed HLSL SamplerState declaration".into());
@@ -320,23 +367,16 @@ fn lower_modern_resource_syntax(tokens: &mut Vec<String>) -> Result<(), String> 
             return Err("HLSL texture resource arrays require a single constant element index".into());
         }
         if element >= size { return Err("HLSL texture resource array index is out of bounds".into()); }
-        let method = tokens.get(index + 5).map(String::as_str).unwrap_or("");
-        if tokens.get(index + 4).map(String::as_str) != Some(".")
-            || !matches!(method, "Sample" | "SampleLevel" | "SampleBias" | "SampleGrad" | "Load" | "GetDimensions") {
-            return Err("HLSL texture array elements must use a supported resource method".into());
-        }
         let element_name = format!("{}_{}", tokens[index], element);
+        if resource_shapes.contains_key(&element_name) {
+            let method = tokens.get(index + 5).map(String::as_str).unwrap_or("");
+            if tokens.get(index + 4).map(String::as_str) != Some(".")
+                || !matches!(method, "Sample" | "SampleLevel" | "SampleBias" | "SampleGrad" | "Load" | "GetDimensions") {
+                return Err("HLSL texture array elements must use a supported resource method".into());
+            }
+        }
         tokens.splice(index..index + 4, [element_name]);
         index += 1;
-    }
-
-    // Reject sampler arrays in globals, function signatures, and structs
-    // before they can be lowered as one unrelated texture binding.
-    for index in 0..tokens.len().saturating_sub(2) {
-        if matches!(tokens[index].as_str(), "sampler" | "sampler2D" | "sampler3D")
-            && is_identifier(&tokens[index + 1]) && tokens[index + 2] == "[" {
-            return Err("HLSL texture resource arrays are unsupported".into());
-        }
     }
     let (resource_fields, _, resource_instances) = resource_struct_fields(tokens)?;
 
