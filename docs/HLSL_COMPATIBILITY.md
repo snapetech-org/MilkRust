@@ -484,18 +484,22 @@ Neither compiler nor GPU controls have been executed for this checkpoint.
 
 ## Bounded Texture2D GatherCmp
 
-`Texture2D.GatherCmp` is implemented for global, statically initialized
-`SamplerComparisonState` profiles on Texture2D resources. Supported
+`Texture2D.GatherCmp`, `GatherCmpRed` and `SampleCmpLevelZero` are implemented
+for global, statically initialized `SamplerComparisonState` profiles on
+Texture2D resources. Supported
 `COMPARISON_MIN_MAG_*` point/linear filter combinations are parsed, with
 NEVER, LESS, EQUAL, LESS_EQUAL, GREATER, NOT_EQUAL, GREATER_EQUAL and ALWAYS
 comparison functions. The shader compares the resource's red channel for four
 base-level texels in the same component order used by the bounded ordinary
-Gather helper, honoring the static U/V/W address profile and optional integer
+Gather helper, honoring the static U/V/W address profile and optional literal int2
 offset.
 
+SampleCmpLevelZero compares the red channel of each mip-zero texel before
+nearest or bilinear filtering. To keep minification/magnification selection
+unambiguous, this path requires equal point/linear filters for min and mag.
 The compiler rejects comparison states without an explicit ComparisonFunc,
-ordinary texture methods passed a comparison state, and GatherCmp calls without
-a comparison state. SampleCmp, SampleCmpLevelZero, dynamic comparison state,
-other texture dimensions and non-base-level comparison filtering remain
-unsupported. This is a bounded source path, not a reference-pixel claim; no
+ordinary texture methods passed a comparison state, and comparison calls without
+a static comparison state. SampleCmp with implicit LOD, dynamic comparison state,
+other texture dimensions and broader resource forms remain unsupported.
+Optional offsets are restricted to literal int2 constructors. This is a bounded source path, not a reference-pixel claim; no
 build, compiler test, render or device check was run for this update.
