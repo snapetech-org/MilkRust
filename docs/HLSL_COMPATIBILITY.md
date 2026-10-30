@@ -305,8 +305,8 @@ resource's default prefix. Legacy effect-file `sampler`, `sampler2D`, and
 `sampler3D` globals may initialize with `= sampler_state {}`. That subset
 accepts `Texture = <identifier>` (or a `sampler_*` variable as a fallback),
 independent `MinFilter = Point|Linear`, `MagFilter = Point|Linear`, and
-`MipFilter = None|Point|Linear` properties, plus `AddressU/V/W = Wrap` or
-`Clamp`. Unspecified filter fields default to linear; unspecified address fields
+`MipFilter = None|Point|Linear` properties, plus `AddressU/V/W = Wrap`,
+`Clamp`, or `Mirror`. Unspecified filter fields default to linear; unspecified address fields
 default to wrap. These legacy states lower to generated aliases when used as the
 first argument to a supported `tex*` intrinsic. Grouped declarations, dynamic
 state, helper/assignment escapes, local or struct initializers, and
