@@ -82,11 +82,60 @@ fn declarations(tokens: &[String]) -> Result<Vec<Function>, String> {
     Ok(functions)
 }
 
-fn opaque_name(parameter: &[String]) -> Result<Option<String>, String> {
+fn resource_struct_types(tokens: &[String]) -> BTreeSet<String> {
+    let mut structures = BTreeSet::new();
+    let mut index = 0usize;
+    let mut brace_depth = 0i32;
+    while index + 2 < tokens.len() {
+        if tokens[index] == "{" { brace_depth += 1; index += 1; continue; }
+        if tokens[index] == "}" { brace_depth -= 1; index += 1; continue; }
+        if brace_depth == 0 && tokens[index] == "struct"
+            && tokens.get(index + 1).is_some_and(|name| is_identifier(name)) {
+            let name = tokens[index + 1].clone();
+            let Some(open_offset) = tokens[index + 2..].iter().position(|token| token == "{") else {
+                index += 2;
+                continue;
+            };
+            let open = index + 2 + open_offset;
+            let mut nested = 1i32;
+            let mut close = open + 1;
+            while close < tokens.len() && nested > 0 {
+                if tokens[close] == "{" { nested += 1; }
+                if tokens[close] == "}" { nested -= 1; }
+                close += 1;
+            }
+            if nested == 0 {
+                let mut field_depth = 0i32;
+                let has_direct_resource = tokens[open + 1..close - 1].iter().any(|token| {
+                    if field_depth == 0 && matches!(token.as_str(),
+                        "Texture1D" | "Texture2D" | "Texture3D" | "SamplerState"
+                        | "SamplerComparisonState" | "sampler" | "sampler2D" | "sampler3D") {
+                        return true;
+                    }
+                    match token.as_str() {
+                        "{" => field_depth += 1,
+                        "}" => field_depth -= 1,
+                        _ => {}
+                    }
+                    false
+                });
+                if has_direct_resource { structures.insert(name); }
+                index = close;
+                continue;
+            }
+        }
+        index += 1;
+    }
+    structures
+}
+
+fn opaque_name(parameter: &[String], resource_structs: &BTreeSet<String>) -> Result<Option<String>, String> {
     let first = parameter.iter().position(|t| !matches!(t.as_str(), "in" | "const" | "uniform" | "out" | "inout"));
     let Some(first) = first else { return Ok(None); };
-    if !matches!(parameter[first].as_str(), "SamplerState" | "SamplerComparisonState" | "Texture1D" | "Texture2D" | "Texture3D"
-        | "sampler" | "sampler2D" | "sampler3D") { return Ok(None); }
+    let opaque_type = matches!(parameter[first].as_str(), "SamplerState" | "SamplerComparisonState" | "Texture1D" | "Texture2D" | "Texture3D"
+        | "sampler" | "sampler2D" | "sampler3D");
+    let resource_struct = resource_structs.contains(parameter[first].as_str());
+    if !opaque_type && !resource_struct { return Ok(None); }
     if parameter[..first].iter().any(|t| matches!(t.as_str(), "out" | "inout")) {
         return Err("HLSL resource helper parameters must be read-only inputs".into());
     }
@@ -243,14 +292,19 @@ impl Expansion<'_> {
 pub(super) fn specialize(tokens: &mut Vec<String>) -> Result<(), String> {
     // Preserve the existing typed opaque-parameter path (including overloads)
     // when no initialized state needs forwarding through a global alias.
-    let has_static_state = tokens.iter().enumerate().any(|(index, token)| token == "sampler_state"
+    let resource_structs = resource_struct_types(tokens);
+    let functions = declarations(tokens)?;
+    let has_resource_struct_parameter = functions.iter().flat_map(|function| &function.parameters).any(|parameter| {
+        let first = parameter.iter().position(|token| !matches!(token.as_str(), "in" | "const" | "uniform" | "out" | "inout"));
+        first.and_then(|index| parameter.get(index)).is_some_and(|ty| resource_structs.contains(ty))
+    });
+    let has_static_state = has_resource_struct_parameter || tokens.iter().enumerate().any(|(index, token)| token == "sampler_state"
         || matches!(token.as_str(), "SamplerState" | "SamplerComparisonState")
             && matches!(tokens.get(index + 2).map(String::as_str), Some("{") | Some("=")));
     if !has_static_state { return Ok(()); }
-    let functions = declarations(tokens)?;
     let mut templates = BTreeMap::<String, Vec<Template>>::new();
     for function in functions.iter().filter(|f| f.body.is_some()) {
-        let opaque = function.parameters.iter().map(|p| opaque_name(p)).collect::<Result<Vec<_>, _>>()?;
+        let opaque = function.parameters.iter().map(|p| opaque_name(p, &resource_structs)).collect::<Result<Vec<_>, _>>()?;
         if opaque.iter().any(Option::is_some) {
             templates.entry(function.name.clone()).or_default().push(Template { function: function.clone(), opaque });
         }

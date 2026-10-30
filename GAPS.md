@@ -212,7 +212,9 @@ render frames, resolve external texture packs, or establish fidelity.
   It still rejects texture types outside those three dimensions, integer/non-color texture
   element types, resource arrays in function scopes or nested resource-bearing
   structs, initialized resource instances, and resource-bearing struct
-  parameters. Comparison methods outside the bounded Texture2D
+  parameters with local/dynamic arguments. Direct resource-bearing struct helper
+  parameters specialize only when their argument is an unambiguous global
+  struct instance. Comparison methods outside the bounded Texture2D
   `GatherCmp`/`GatherCmpRed`/`GatherCmpGreen`/`GatherCmpBlue`/`GatherCmpAlpha` and Texture1D/Texture2D
   `SampleCmp`/`SampleCmpLevelZero` paths remain unsupported. Static `SamplerComparisonState` declarations lower supported
   comparison filters, all eight comparison functions and U/V/W

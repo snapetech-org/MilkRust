@@ -338,8 +338,9 @@ use `<resource>_<index>` names (for example, `textures_0`); struct-field assets
 use `<object>_<field>_<index>`.
 `TextureCube`, `Texture*Array`, multisample resources, arrays inside function
 scopes or nested resource-bearing structs, initialized resource instances,
-resource-bearing struct parameters and dynamic comparison-state propagation
-remain outside the profile. Texture2D GatherCmp/GatherCmpRed/GatherCmpGreen/GatherCmpBlue/GatherCmpAlpha, SampleCmp and
+resource-bearing struct parameters with local or dynamic arguments, and dynamic
+comparison-state propagation remain outside the profile. Direct resource-bearing
+struct parameters specialize only against an unambiguous global struct instance. Texture2D GatherCmp/GatherCmpRed/GatherCmpGreen/GatherCmpBlue/GatherCmpAlpha, SampleCmp and
 SampleCmpLevelZero use the bounded static comparison profile described below;
 other comparison resource forms remain outside. The separate
 WGSL path remains limited; within its floating scalar/vector expression subset,
@@ -459,10 +460,13 @@ boundaries. It does not enable opaque resource arrays through numeric layout.
 
 ## Static resource helpers
 
-Helper functions with direct `SamplerState`, `SamplerComparisonState`, `Texture1D/2D/3D` or legacy
-`sampler/sampler2D/sampler3D` input parameters are specialized at their global
-bindings before texture methods are lowered when the source declares initialized
-sampling state. Without initialized state, the existing typed opaque-parameter
+Helper functions with direct `SamplerState`, `SamplerComparisonState`, `Texture1D/2D/3D`,
+or legacy `sampler/sampler2D/sampler3D` input parameters are specialized at
+their global bindings when initialized sampling state must be forwarded.
+Resource-bearing struct input parameters are also specialized so their opaque
+fields bind to the actual global struct instance. Their argument must be an
+unambiguous global instance. Without initialized state, ordinary direct-resource
+helpers retain the typed opaque-parameter path and overloads. Without initialized state, the existing typed opaque-parameter
 path, including ordinary overloads, is preserved. Nested helper calls preserve the
 actual texture and static state, including legacy `sampler_state` blocks. Ordinary
 value arguments remain function arguments and are evaluated once. Global fields
@@ -482,10 +486,10 @@ Prototypes match the corresponding definition regardless
 of parameter names and remain at their original source positions. Mixed
 ordinary/resource overload sets and overloads that change opaque types/positions
 still fail explicitly. Recursive helpers, output/array/default opaque parameters,
-local/dynamic opaque arguments, and substitutions that capture existing body or
-value-parameter names fail explicitly. Resource-bearing struct parameters,
-state assignment/arithmetic and dynamically selected state still require a
-separate binding model. This is a bounded pixel-shader profile, not every HLSL
+local/dynamic opaque arguments, resource-bearing struct arguments that are not
+global instances, and substitutions that capture existing body or value-parameter
+names fail explicitly. Nested resource-bearing structs, state assignment/arithmetic
+and dynamically selected state still require a separate binding model. This is a bounded pixel-shader profile, not every HLSL
 resource feature.
 
 Native regression sources cover binding reflection, nested forwarding, legacy

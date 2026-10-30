@@ -2291,6 +2291,32 @@ mod tests {
         }
     }
     #[test]
+    fn resource_struct_helper_parameters_specialize_only_global_instances() {
+        let source = r#"
+            struct Surface { Texture2D<float4> image; };
+            Surface primary;
+            SamplerState linear { Filter=MIN_MAG_MIP_LINEAR; AddressU=Clamp; };
+            float4 sample_surface(Surface input, float2 point) {
+                return input.image.Sample(linear, point);
+            }
+            shader_body { ret=sample_surface(primary, uv); }
+        "#;
+        let names = sampler_names(source).unwrap();
+        assert!(names.iter().any(|name| name.contains("primary_image")), "{names:?}");
+        compile(source, false).expect("resource-bearing struct parameters should specialize to global instances");
+
+        let local = r#"
+            struct Surface { Texture2D<float4> image; };
+            Surface primary;
+            SamplerState linear { Filter=MIN_MAG_MIP_LINEAR; AddressU=Clamp; };
+            float4 sample_surface(Surface input, float2 point) {
+                return input.image.Sample(linear, point);
+            }
+            shader_body { Surface local; ret=sample_surface(local, uv); }
+        "#;
+        assert!(compile(local, false).is_err(), "local resource-bearing structs must fail closed");
+    }
+    #[test]
     fn static_sampler_state_aliases_preserve_profiles_and_reject_unresolved_targets() {
         let ordinary = "Texture2D<float4> sampler_art; SamplerState point{Filter=MIN_MAG_MIP_POINT;AddressU=Clamp;}; SamplerState alias=point; shader_body{ret=sampler_art.Sample(alias,uv).rgb;}";
         let names = sampler_names(ordinary).unwrap();
