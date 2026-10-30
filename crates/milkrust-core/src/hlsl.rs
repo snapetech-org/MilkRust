@@ -257,9 +257,10 @@ fn splice_bounded_resource_expansion(
 /// Lower HLSL resource objects into the legacy sampler intrinsics already
 /// represented in the typed AST. Bounded global 1D/2D/3D texture and legacy
 /// sampler arrays expand into named bindings; constant and side-effect-free
-/// dynamic indices dispatch over those names. Function-local arrays, nested
-/// resource structs and custom sampler-state objects need different host
-/// binding models and fail explicitly.
+/// dynamic indices dispatch over those names. Static global point/linear
+/// SamplerState definitions lower through the same legacy binding prefixes.
+/// Function-local arrays, nested resource structs and advanced sampler states
+/// need different host binding models and fail explicitly.
 fn lower_modern_resource_syntax(tokens: &mut Vec<String>) -> Result<(), String> {
     let struct_ranges = hlsl_struct_ranges(tokens)?;
     let mut resource_shapes = BTreeMap::<String, Option<ResourceShape>>::new();
@@ -491,7 +492,7 @@ fn lower_modern_resource_syntax(tokens: &mut Vec<String>) -> Result<(), String> 
                 let next = tokens.get(candidate + 1).map(String::as_str);
                 if !tokens.get(candidate).is_some_and(|token| is_identifier(token)) { break; }
                 if matches!(next, Some("[") | Some("=") | Some("{")) {
-                    return Err("SamplerState arrays and initialized/custom states are unsupported; use the preset sampler prefix".into());
+                    return Err("SamplerState arrays and grouped initializers are unsupported; declare each supported global state separately".into());
                 }
                 if !matches!(next, Some(",") | Some(";") | Some(")") | Some(":")) {
                     break;
@@ -508,10 +509,9 @@ fn lower_modern_resource_syntax(tokens: &mut Vec<String>) -> Result<(), String> 
         index += 1;
     }
 
-    // The lowered resource methods discard sampler-state arguments because
-    // address/filter selection comes from the MilkDrop binding name. Resolve
-    // declared struct instances and parameters before lowering so only actual
-    // SamplerState fields can be discarded; a same-named numeric member is not enough.
+    // The lowered resource methods translate supported state arguments into
+    // MilkDrop sampler prefixes. Resolve declared struct instances and
+    // parameters so a same-named numeric member is never treated as a state.
     let mut sampler_state_instances = BTreeMap::<String, Option<String>>::new();
     let record_sampler_state_instance = |instances: &mut BTreeMap<String, Option<String>>, name: &str, structure: &str| {
         instances.entry(name.to_string()).and_modify(|previous| {
