@@ -85,30 +85,15 @@ impl Pattern {
 }
 
 /// Compute the per-vertex `(a,c)` field from MilkDrop 3's saved pattern.
-#[derive(Clone, Copy)]
-struct MilkDropRandom { state: u32 }
-
-impl MilkDropRandom {
-    fn new(seed: u32) -> Self { Self { state: seed } }
-    fn next(&mut self) -> u32 {
-        self.state = self.state.wrapping_mul(214_013).wrapping_add(2_531_011);
-        (self.state >> 16) & 0x7fff
-    }
-    fn unit(&mut self) -> f32 { (self.next() % 7_381) as f32 / 7_380.0 }
-}
-
-fn fill_vertices(pattern: Pattern, direction: i32, random: [f32; 5], has_randoms: bool, field_seed: u32,
-    aspect: (f32, f32), out: &mut [[f32; 2]]) {
+fn fill_vertices(pattern: Pattern, direction: i32, random: [f32; 5], aspect: (f32, f32), out: &mut [[f32; 2]]) {
     let gx = GRID_X;
     let gy = GRID_Y;
     let width = gx + 1;
     let (ax, ay) = aspect;
     let (gxf, gyf) = (gx as f32, gy as f32);
-    let mut rng = MilkDropRandom::new(field_seed);
-    // MD3 uses a midpoint draw for analytic patterns when the header has no
-    // random records. A partial random block is active, so its omitted slots
-    // stay zero. Plasma's no-record path uses the seeded legacy PRNG below.
-    let [r1, r2, r3, r4, _r5] = if has_randoms { random } else { [0.5; 5] };
+    // Missing saved keys use the carried header values, which are zero at
+    // process start. Partial blocks have already inherited their other slots.
+    let [r1, r2, r3, r4, _r5] = random;
     let flip = direction == -1;
     let sqrt2 = 2.0f32.sqrt();
     let band = r1 * 0.14 + 0.02 + r2 * 0.34;
@@ -141,38 +126,25 @@ fn fill_vertices(pattern: Pattern, direction: i32, random: [f32; 5], has_randoms
             each(out, &|x, y| band_entry(inverse, 1.0 + width, wipe(x * ax, y * ay, vx, vy)));
         }
         Pattern::Plasma | Pattern::Plasma2 | Pattern::Plasma3 => {
-            // MilkDrop's saved block supplies random_1 as the band input and
-            // random_2..5 as the four plasma corners. Without any saved random
-            // records its loader takes the deterministic legacy PRNG path.
-            let variant = match pattern { Pattern::Plasma => 0, Pattern::Plasma2 => 2, _ => 1 };
-            let (width, dt) = if has_randoms {
-                (if variant == 0 { 0.12 + 0.13 * random[0] } else { 0.25 + 0.15 * random[0] },
-                    if variant == 1 { 0.75 } else { 0.25 })
-            } else {
-                let _ = rng.next(); // RandomizeBlendPattern's overridden mixtype draw.
-                (0.12 + 0.13 * rng.unit(), if variant == 1 { 0.75 } else { 0.25 })
+            let (width, dt) = match pattern {
+                Pattern::Plasma => (0.12 + 0.13 * r1, 0.25),
+                Pattern::Plasma2 => (0.25 + 0.15 * r1, 0.25),
+                _ => (0.25 + 0.15 * r1, 0.75),
             };
             let inverse = 1.0 / width;
             let mut values = vec![0.0f32; (gx + 1) * (gy + 1)];
             for index in 0..4 {
-                values[[0, gx, gy * width_of_grid(), gy * width_of_grid() + gx][index]] = if has_randoms {
-                    random[index + 1]
-                } else {
-                    rng.unit()
-                };
+                values[[0, gx, gy * width_of_grid(), gy * width_of_grid() + gx][index]] = random[index + 1];
             }
-            gen_plasma(&mut values, gx, (ax, ay), has_randoms.then_some(random), &mut rng,
+            gen_plasma(&mut values, gx, (ax, ay), random,
                 Span { x0: 0, x1: gx, y0: 0, y1: gy }, dt);
-            let seed = if variant == 1 { 0.5 * values[0] } else { values[0] };
+            let seed = if matches!(pattern, Pattern::Plasma3) { 0.5 * values[0] } else { values[0] };
             let (minimum, maximum) = extent(seed, values.iter().copied());
             for (value, vertex) in values.iter().zip(out.iter_mut()) {
-                let range = maximum - minimum;
-                let t = if range <= f32::EPSILON {
-                    0.0
-                } else if variant == 0 {
-                    (value - minimum) * (1.0 / range)
+                let t = if matches!(pattern, Pattern::Plasma) {
+                    (value - minimum) * (1.0 / (maximum - minimum))
                 } else {
-                    ((value - minimum) * 2.0 / range).sin()
+                    ((value - minimum) * 2.0 / (maximum - minimum)).sin()
                 };
                 let c = band_entry(inverse, 0.0, t)[1];
                 *vertex = [(1.0 + width) / width, c];
@@ -294,8 +266,7 @@ fn width_of_grid() -> usize { GRID_X + 1 }
 #[derive(Clone, Copy)]
 struct Span { x0: usize, x1: usize, y0: usize, y1: usize }
 
-fn gen_plasma(values: &mut [f32], gx: usize, aspect: (f32, f32), random: Option<[f32; 5]>,
-    rng: &mut MilkDropRandom, span: Span, dt: f32) {
+fn gen_plasma(values: &mut [f32], gx: usize, aspect: (f32, f32), random: [f32; 5], span: Span, dt: f32) {
     let Span { x0, x1, y0, y1 } = span;
     let (ax, ay) = aspect;
     let width = gx + 1;
@@ -305,23 +276,23 @@ fn gen_plasma(values: &mut [f32], gx: usize, aspect: (f32, f32), random: Option<
 
     if y1 - y0 >= 2 {
         if x0 == 0 {
-            let r = random.map_or_else(|| rng.unit(), |random| random[0]);
+            let r = random[0];
             values[my * width + x0] = 0.5 * (t00 + t10) + (r * 2.0 - 1.0) * dt * ay;
         }
-        let r = random.map_or_else(|| rng.unit(), |random| random[1]);
+        let r = random[1];
         values[my * width + x1] = 0.5 * (t01 + t11) + (r * 2.0 - 1.0) * dt * ay;
     }
     if x1 - x0 >= 2 {
         if y0 == 0 {
-            let r = random.map_or_else(|| rng.unit(), |random| random[2]);
+            let r = random[2];
             values[y0 * width + mx] = 0.5 * (t00 + t01) + (r * 2.0 - 1.0) * dt * ax;
         }
-        let r = random.map_or_else(|| rng.unit(), |random| random[3]);
+        let r = random[3];
         values[y1 * width + mx] = 0.5 * (t10 + t11) + (r * 2.0 - 1.0) * dt * ax;
     }
     if y1 - y0 >= 2 && x1 - x0 >= 2 {
         let (left, right, top, bottom) = (at(values, x0, my), at(values, x1, my), at(values, mx, y0), at(values, mx, y1));
-        let r = random.map_or_else(|| rng.unit(), |random| random[4]);
+        let r = random[4];
         values[my * width + mx] = 0.25 * (top + bottom + left + right) + (r * 2.0 - 1.0) * dt;
         let half = dt * 0.5;
         for quadrant in [
@@ -359,8 +330,7 @@ pub(super) fn generate(key: TransitionMaskKey) -> Result<Vec<u8>, String> {
     }
     let aspect = ((key.width as f32 / key.height as f32).max(1.0), (key.height as f32 / key.width as f32).max(1.0));
     let mut vertices = vec![[0.0f32; 2]; (GRID_X + 1) * (GRID_Y + 1)];
-    fill_vertices(Pattern::from_code(key.pattern).expect("validated pattern"), key.direction, random,
-        key.has_randoms, key.field_seed, aspect, &mut vertices);
+    fill_vertices(Pattern::from_code(key.pattern).expect("validated pattern"), key.direction, random, aspect, &mut vertices);
     let mut packed = Vec::with_capacity(vertices.len() * 4);
     for [a, c] in vertices {
         let alpha = (a * progress + c).clamp(0.0, 1.0);
