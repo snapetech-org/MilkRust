@@ -196,7 +196,8 @@ pub extern "C" fn milkrust_set_clock(handle: u64, year: i32, month: u32, day: u3
 }
 
 /// Update normalized pointer input for following frames. Call on the render thread.
-/// mouse_down is exactly 0 or 1; non-finite values are rejected.
+/// mouse_down is exactly 0 or 1; non-finite values are rejected. Rising button edges
+/// are latched through one successful render, including down/up pairs between frames.
 #[no_mangle]
 pub extern "C" fn milkrust_set_mouse(handle: u64, mouse_down: i32, mouse_x: f64,
     mouse_y: f64, mouse_dx: f64, mouse_dy: f64) -> i32 {
