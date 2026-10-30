@@ -60,6 +60,7 @@ const LEGACY_SAMPLER_INTRINSICS: &[&str] = &[
     "tex", "tex2d", "tex3d", "tex2D", "tex2Dlod", "tex2Dbias", "tex2Dgrad", "tex2Dproj", "tex2Doffset",
     "tex3D", "tex3Dlod", "tex3Dbias", "tex3Dgrad", "tex3Dproj", "tex3Doffset", "tex2Dfetch", "tex3Dfetch",
     "tex2Dsize", "tex3Dsize",
+    "milkRustInternalGather2D", "milkRustInternalGatherCmp2D", "milkRustInternalSampleCmp2D",
 ];
 
 impl SamplerStateProfile {
@@ -474,6 +475,76 @@ fn splice_bounded_resource_expansion(
     Ok(())
 }
 
+// Split global resource groups before static-state/helper lowering. Each
+// declarator keeps its own array, register annotation and initializer; commas
+// inside a register expression or sampler_state body are never separators.
+fn split_global_resource_declarations(tokens: &mut Vec<String>) -> Result<(), String> {
+    let mut index = 0;
+    let (mut braces, mut parens) = (0i32, 0i32);
+    let mut expanded_bytes = 0;
+    while index < tokens.len() {
+        if braces == 0 && parens == 0 && matches!(tokens[index].as_str(),
+            "Texture1D" | "Texture2D" | "Texture3D" | "SamplerState" | "SamplerComparisonState" | "sampler" | "sampler2D" | "sampler3D") {
+            let mut name = index + 1;
+            if tokens.get(name).map(String::as_str) == Some("<") {
+                name = tokens[name + 1..].iter().position(|t| t == ">")
+                    .map(|offset| name + offset + 2).ok_or("Unterminated resource element type")?;
+            }
+            if tokens.get(name).is_some_and(|t| is_identifier(t))
+                && tokens.get(name + 1).map(String::as_str) != Some("(") {
+                let mut start = index;
+                while start > 0 && matches!(tokens[start - 1].as_str(), "uniform" | "static" | "const" | "extern" | "shared") { start -= 1; }
+                let prefix = tokens[start..name].to_vec();
+                let (mut curly, mut round, mut square) = (0i32, 0i32, 0i32);
+                let mut parts = Vec::new();
+                let mut part = name;
+                let mut cursor = name;
+                while cursor < tokens.len() {
+                    match tokens[cursor].as_str() {
+                        ";" if curly == 0 && round == 0 && square == 0 => break,
+                        "," if curly == 0 && round == 0 && square == 0 => {
+                            parts.push(part..cursor); part = cursor + 1;
+                        }
+                        "{" => curly += 1,
+                        "}" => curly -= 1,
+                        "(" => round += 1,
+                        ")" => round -= 1,
+                        "[" => square += 1,
+                        "]" => square -= 1,
+                        _ => {}
+                    }
+                    if curly < 0 || round < 0 || square < 0 { return Err("Unbalanced global resource declaration".into()); }
+                    cursor += 1;
+                }
+                if cursor == tokens.len() { return Err("Unterminated global resource declaration".into()); }
+                if !parts.is_empty() {
+                    parts.push(part..cursor);
+                    let mut replacement = Vec::new();
+                    for part in parts {
+                        if part.is_empty() || !is_identifier(&tokens[part.start]) {
+                            return Err("Malformed grouped resource declarator".into());
+                        }
+                        replacement.extend(prefix.iter().cloned());
+                        replacement.extend(tokens[part].iter().cloned());
+                        replacement.push(";".into());
+                    }
+                    let next = start + replacement.len();
+                    splice_bounded_resource_expansion(tokens, start..cursor + 1, replacement, &mut expanded_bytes)?;
+                    index = next;
+                } else { index = cursor + 1; }
+                continue;
+            }
+        }
+        match tokens[index].as_str() {
+            "{" => braces += 1, "}" => braces -= 1,
+            "(" => parens += 1, ")" => parens -= 1,
+            _ => {}
+        }
+        index += 1;
+    }
+    Ok(())
+}
+
 /// Lower HLSL resource objects into the legacy sampler intrinsics already
 /// represented in the typed AST. Bounded global 1D/2D/3D texture and legacy
 /// sampler arrays expand into named bindings; constant and side-effect-free
@@ -483,6 +554,7 @@ fn splice_bounded_resource_expansion(
 /// Function-local arrays, nested resource structs and advanced sampler states
 /// need different host binding models and fail explicitly.
 fn lower_modern_resource_syntax(tokens: &mut Vec<String>) -> Result<(), String> {
+    split_global_resource_declarations(tokens)?;
     resource_helpers::specialize(tokens)?;
     let struct_ranges = hlsl_struct_ranges(tokens)?;
     let mut resource_shapes = BTreeMap::<String, Option<ResourceShape>>::new();
@@ -868,7 +940,7 @@ fn lower_modern_resource_syntax(tokens: &mut Vec<String>) -> Result<(), String> 
             if resource_shapes.contains_key(&shape_name) {
                 let method = tokens.get(close_index + 2).map(String::as_str).unwrap_or("");
                 if tokens.get(close_index + 1).map(String::as_str) != Some(".")
-                    || !matches!(method, "Sample" | "SampleLevel" | "SampleBias" | "SampleGrad" | "Gather" | "GatherRed" | "GatherGreen" | "GatherBlue" | "GatherAlpha" | "Load" | "GetDimensions") {
+                    || !matches!(method, "Sample" | "SampleLevel" | "SampleBias" | "SampleGrad" | "Gather" | "GatherRed" | "GatherGreen" | "GatherBlue" | "GatherAlpha" | "GatherCmp" | "GatherCmpRed" | "SampleCmp" | "SampleCmpLevelZero" | "Load" | "GetDimensions") {
                     return Err("HLSL texture array elements must use a supported resource method".into());
                 }
             }
@@ -888,7 +960,7 @@ fn lower_modern_resource_syntax(tokens: &mut Vec<String>) -> Result<(), String> 
             let method_index = close_index + 2;
             let method = tokens.get(method_index).map(String::as_str).unwrap_or("");
             if tokens.get(close_index + 1).map(String::as_str) != Some(".")
-                || !matches!(method, "Sample" | "SampleLevel" | "SampleBias" | "SampleGrad" | "Gather" | "GatherRed" | "GatherGreen" | "GatherBlue" | "GatherAlpha" | "Load" | "GetDimensions")
+                || !matches!(method, "Sample" | "SampleLevel" | "SampleBias" | "SampleGrad" | "Gather" | "GatherRed" | "GatherGreen" | "GatherBlue" | "GatherAlpha" | "GatherCmp" | "GatherCmpRed" | "SampleCmp" | "SampleCmpLevelZero" | "Load" | "GetDimensions")
                 || tokens.get(method_index + 1).map(String::as_str) != Some("(") {
                 return Err("Dynamically indexed HLSL texture arrays must immediately call a supported texture method".into());
             }
@@ -942,8 +1014,10 @@ fn lower_modern_resource_syntax(tokens: &mut Vec<String>) -> Result<(), String> 
                 continue;
             }
 
-            let width = if matches!(method, "Gather" | "GatherRed" | "GatherGreen" | "GatherBlue" | "GatherAlpha") {
+            let width = if matches!(method, "Gather" | "GatherRed" | "GatherGreen" | "GatherBlue" | "GatherAlpha" | "GatherCmp" | "GatherCmpRed") {
                 4
+            } else if matches!(method, "SampleCmp" | "SampleCmpLevelZero") {
+                1
             } else {
                 shape.width
             };
@@ -1709,7 +1783,7 @@ pub(crate) fn compile(source: &str, legacy_feedback: bool) -> Result<String, Str
     // Rename any user entry before the emitter adds its GLSL main.
     aliases.insert("main".into(), "milkrust_user_entry".into());
     let mut tokens = milkrust_hlsl::tokenize(&source)?;
-    if tokens.iter().any(|token| matches!(token.as_str(), "milkRustInternalGather2D" | "milkRustInternalGatherCmp2D" | "milkRustInternalSampleCmp2D")) {
+    if tokens.iter().any(|token| token.starts_with("milkRustInternal")) {
         return Err("Shader uses a reserved compiler identifier".into());
     }
     lower_modern_resource_syntax(&mut tokens)?;
@@ -2038,7 +2112,7 @@ mod tests {
             "Texture2D t; SamplerState point {Filter=MIN_MAG_MIP_POINT;}; shader_body {int point=1; ret=t.Sample(point,uv).rgb;}",
         ] {
             let source = format!("SamplerState specializationTrigger {{Filter=MIN_MAG_MIP_POINT;}}; {source}");
-            assert!(sampler_names(&source).is_err(), "unsafe resource helper accepted: {source}");
+            assert!(compile(&source, false).is_err(), "unsafe resource helper accepted: {source}");
         }
     }
     #[test]
@@ -2053,6 +2127,96 @@ mod tests {
     #[test]
     fn ordinary_sampler_helper_overloads_keep_the_typed_path() {
         compile("float4 f(sampler2D s,float2 p){return tex2D(s,p);} float4 f(sampler2D s,float3 p){return tex2D(s,p.xy);} shader_body {ret=(f(sampler_main,uv)+f(sampler_main,float3(uv,0))).rgb;}", false).unwrap();
+    }
+    #[test]
+    fn static_resource_overloads_keep_numeric_types_and_prototype_positions() {
+        let source = r#"
+            Texture2D<float4> sampler_art;
+            SamplerState point { Filter=MIN_MAG_MIP_POINT; AddressU=Clamp; };
+            float4 fetch(Texture2D<float4> image, SamplerState state, float3 position, float once);
+            float4 fetch(Texture2D<float4> image, SamplerState state, float2 position, float once);
+            float4 forward(Texture2D<float4> image, SamplerState state, float3 p, float once) {
+                return fetch(image,state,p,once);
+            }
+            float4 fetch(Texture2D<float4> texture, SamplerState mode, float2 p, float value) {
+                return texture.SampleLevel(mode,p,0)+value*0;
+            }
+            float4 fetch(Texture2D<float4> texture, SamplerState mode, float3 p, float value) {
+                return fetch(texture,mode,p.xy,value)*p.z;
+            }
+            float4 fetch(Texture2D<float4> texture, SamplerState mode, float2 p) {
+                return texture.SampleLevel(mode,p,0);
+            }
+            shader_body { float n=0; ret=(forward(sampler_art,point,float3(uv,0.5),++n)
+                +fetch(sampler_art,point,uv,++n)+fetch(sampler_art,point,uv)).rgb; }
+        "#;
+        assert!(sampler_names(source).unwrap().iter().any(|name| name == "sampler_hlsl_1cww_art"));
+        compile(source, false).expect("value overloads, arities and forward declarations must preserve static state");
+    }
+    #[test]
+    fn grouped_resource_initializers_keep_each_binding_and_profile() {
+        let source = r#"
+            Texture2D<float4> sampler_art, sampler_detail[2];
+            SamplerState plain, point { Filter=MIN_MAG_MIP_POINT; AddressU=Clamp; },
+                linear { Filter=MIN_MAG_MIP_LINEAR; AddressV=Mirror; };
+            uniform sampler2D saved = sampler_state { Texture=<art>; MinFilter=Point; MagFilter=Point; MipFilter=None; },
+                second = sampler_state { Texture=<detail>; MinFilter=Linear; MagFilter=Point; MipFilter=None; };
+            shader_body { ret=(sampler_art.Sample(point,uv)+sampler_detail[1].Sample(linear,uv)
+                +tex2D(saved,uv)+tex2D(second,uv)+sampler_art.Sample(plain,uv)).rgb; }
+        "#;
+        let names = sampler_names(source).unwrap();
+        for expected in ["sampler_hlsl_1cww_art", "sampler_hlsl_bwmw_detail_1", "sampler_hlsl_0www_art", "sampler_hlsl_6www_detail"] {
+            assert!(names.iter().any(|name| name == expected), "missing {expected}: {names:?}");
+        }
+        compile(source, false).expect("each grouped resource must retain its independent initializer");
+    }
+    #[test]
+    fn static_resource_overloads_reject_ambiguous_opaque_layouts_and_bad_prototypes() {
+        for source in [
+            "float4 f(sampler2D s,float2 p){return tex2D(s,p);} float4 f(float2 p,sampler2D s){return tex2D(s,p);}",
+            "float4 f(sampler2D s,float2 p){return tex2D(s,p);} float4 f(float p,float2 q){return p;}",
+            "float4 f(sampler2D s,float3 p); float4 f(sampler2D s,float2 p){return tex2D(s,p);}",
+        ] {
+            let source = format!("SamplerState trigger {{Filter=MIN_MAG_MIP_POINT;}}; {source} shader_body {{ret=f(sampler_main,uv).rgb;}}");
+            assert!(sampler_names(&source).is_err(), "ambiguous opaque call accepted: {source}");
+        }
+        for source in ["SamplerState a{Filter=Point;},;", "sampler2D a=sampler_state{Texture=<art>;}, =sampler_state{};"] {
+            assert!(sampler_names(source).is_err(), "malformed resource group accepted: {source}");
+        }
+    }
+    #[test]
+    fn gather_and_comparison_helpers_reflect_their_static_bindings() {
+        let source = r#"
+            Texture2D<float4> sampler_art;
+            SamplerComparisonState point { Filter=COMPARISON_MIN_MAG_MIP_POINT; ComparisonFunc=LESS; AddressU=Clamp; },
+                linear { Filter=COMPARISON_MIN_MAG_MIP_LINEAR; ComparisonFunc=GREATER_EQUAL; AddressV=Mirror; };
+            float sample(Texture2D<float4> image, SamplerComparisonState state, float2 p) {
+                return image.SampleCmpLevelZero(state,p,0.75);
+            }
+            float sample(Texture2D<float4> image, SamplerComparisonState state, float3 p) {
+                return sample(image,state,p.xy)*p.z;
+            }
+            shader_body { ret=float3(sample(sampler_art,point,float3(uv,0.5)),
+                sample(sampler_art,linear,uv),sampler_art.GatherCmp(linear,uv,0.5,int2(0,0)).x); }
+        "#;
+        let names = sampler_names(source).unwrap();
+        for expected in ["sampler_hlsl_1cww_art", "sampler_hlsl_bwmw_art"] {
+            assert!(names.iter().any(|name| name == expected), "missing comparison binding {expected}: {names:?}");
+        }
+        compile(source, false).expect("comparison-only state must activate helper specialization and reflection");
+        let ordinary = "Texture2D<float4> sampler_art; SamplerState point{Filter=MIN_MAG_MIP_POINT; AddressU=Clamp;}; shader_body{ret=sampler_art.Gather(point,uv).xyz;}";
+        assert!(sampler_names(ordinary).unwrap().iter().any(|name| name == "sampler_hlsl_1cww_art"));
+        compile(ordinary, false).unwrap();
+    }
+    #[test]
+    fn comparison_resource_arrays_dispatch_with_scalar_or_gather_result_types() {
+        for method in ["SampleCmp", "SampleCmpLevelZero", "GatherCmp", "GatherCmpRed"] {
+            for index in ["1", "index"] {
+                let selection = if matches!(method, "SampleCmp" | "SampleCmpLevelZero") { "" } else { ".x" };
+                let source = format!("Texture2D<float4> sampler_art[2]; SamplerComparisonState point{{Filter=COMPARISON_MIN_MAG_MIP_POINT; ComparisonFunc=LESS;}}; shader_body{{int index=int(uv.x*2); ret=sampler_art[{index}].{method}(point,uv,0.5){selection};}}");
+                compile(&source, false).expect("literal and dynamic comparison arrays must retain their actual result width");
+            }
+        }
     }
     #[test]
     fn compiles_milkdrop_environment_and_distinct_main_sampler_modes() {

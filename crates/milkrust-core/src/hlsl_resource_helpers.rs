@@ -105,15 +105,37 @@ fn opaque_name(parameter: &[String]) -> Result<Option<String>, String> {
 
 #[derive(Clone)]
 struct Template { function: Function, opaque: Vec<Option<String>> }
-struct Instance { template: String, name: String, signature: Vec<String>, body: Vec<String> }
+// Match prototypes to definitions without depending on parameter names. Numeric
+// overload resolution stays in the typed compiler after opaque substitution.
+fn parameter_key(parameter: &[String]) -> Vec<String> {
+    let end = parameter.iter().position(|t| matches!(t.as_str(), ":" | "=")).unwrap_or(parameter.len());
+    let mut result = parameter[..end].to_vec();
+    let mut direction = "in";
+    while result.first().is_some_and(|t| matches!(t.as_str(), "in" | "out" | "inout" | "const" | "uniform")) {
+        if result[0] == "out" { direction = "out"; }
+        if result[0] == "inout" { direction = "inout"; }
+        result.remove(0);
+    }
+    if result.first().map(String::as_str) == Some("unsigned") {
+        result[0] = "uint".into();
+        if result.get(1).map(String::as_str) == Some("int") { result.remove(1); }
+    }
+    let name_end = result.iter().position(|t| t == "[").unwrap_or(result.len());
+    if name_end > 1 && is_identifier(&result[name_end - 1]) { result.remove(name_end - 1); }
+    result.insert(0, direction.into());
+    result
+}
+fn signature_key(function: &Function) -> Vec<Vec<String>> {
+    function.parameters.iter().map(|p| parameter_key(p)).collect()
+}
+struct Instance { template: usize, name: String, signature: Vec<String>, body: Vec<String> }
 struct Expansion<'a> {
-    templates: BTreeMap<String, Template>,
+    templates: BTreeMap<String, Vec<Template>>,
     globals: BTreeSet<String>,
     source: &'a [String],
     shadowed: BTreeSet<String>,
     instances: Vec<Instance>,
-    keys: BTreeMap<(String, Vec<Vec<String>>), usize>,
-    active: BTreeSet<String>,
+    keys: BTreeMap<(String, usize, Vec<Vec<String>>), Vec<usize>>,
     bytes: usize,
 }
 
@@ -135,11 +157,12 @@ impl Expansion<'_> {
         let mut index = 0;
         while index + 1 < tokens.len() {
             if tokens[index + 1] != "(" || (index > 0 && tokens[index - 1] == ".") { index += 1; continue; }
-            let Some(template) = self.templates.get(&tokens[index]).cloned() else { index += 1; continue; };
+            let Some(overloads) = self.templates.get(&tokens[index]).cloned() else { index += 1; continue; };
             let (arguments, end) = split_hlsl_call(tokens, index + 1)?;
-            if arguments.len() != template.opaque.len() {
-                return Err(format!("Resource helper {} requires {} arguments", template.function.name, template.opaque.len()));
-            }
+            let candidates: Vec<_> = overloads.iter().filter(|t| t.opaque.len() == arguments.len()).collect();
+            let Some(template) = candidates.first().copied() else {
+                return Err(format!("No resource helper overload of {} accepts {} arguments", tokens[index], arguments.len()));
+            };
             let mut bindings = Vec::new();
             let mut ordinary = Vec::new();
             for (argument, opaque) in arguments.iter().zip(&template.opaque) {
@@ -148,58 +171,66 @@ impl Expansion<'_> {
                     bindings.push(argument.clone());
                 } else { ordinary.push(argument.clone()); }
             }
-            let key = (template.function.name.clone(), bindings.clone());
-            if self.active.contains(&template.function.name) { return Err("Recursive resource helpers are unsupported".into()); }
-            let instance = if let Some(instance) = self.keys.get(&key) { *instance } else {
-                if self.instances.len() >= MAX_SPECIALIZATIONS { return Err("HLSL resource helper specialization limit exceeded".into()); }
-                let instance = self.instances.len();
-                let name = format!("milkrust_resource_helper_{instance}");
+            let key = (template.function.name.clone(), arguments.len(), bindings.clone());
+            let instances = if let Some(instances) = self.keys.get(&key) { instances.clone() } else {
+                if self.instances.len() + candidates.len() > MAX_SPECIALIZATIONS { return Err("HLSL resource helper specialization limit exceeded".into()); }
+                let name = format!("milkrust_resource_helper_{}", self.instances.len());
                 if self.source.iter().any(|token| token == &name) { return Err("Generated resource helper name collides with user code".into()); }
-                let mut signature = template.function.prefix.clone(); signature.extend([name.clone(), "(".into()]);
-                let mut first = true;
-                for (parameter, opaque) in template.function.parameters.iter().zip(&template.opaque) {
-                    if opaque.is_some() { continue; }
-                    if !first { signature.push(",".into()); } first = false;
-                    signature.extend(parameter.iter().cloned());
-                }
-                signature.push(")".into()); signature.extend(template.function.suffix.iter().cloned());
-                for (parameter, opaque) in template.function.parameters.iter().zip(&template.opaque) {
-                    if opaque.is_none() && parameter.iter().any(|name| bindings.iter().any(|binding| binding.first() == Some(name))) {
-                        return Err("A value parameter hides a specialized resource binding".into());
+                let mut instances = Vec::new();
+                for template in candidates {
+                    let mut signature = template.function.prefix.clone(); signature.extend([name.clone(), "(".into()]);
+                    let mut first = true;
+                    for (parameter, opaque) in template.function.parameters.iter().zip(&template.opaque) {
+                        if opaque.is_some() { continue; }
+                        if !first { signature.push(",".into()); } first = false;
+                        signature.extend(parameter.iter().cloned());
                     }
-                }
-                let replacements: BTreeMap<_, _> = template.opaque.iter().filter_map(Option::as_ref).cloned().zip(bindings).collect();
-                let original = template.function.body.as_ref().ok_or("Resource helper has no definition")?;
-                for value in replacements.values() {
-                    let root = &value[0];
-                    if !replacements.contains_key(root) && original.iter().any(|token| token == root) {
-                        return Err("A resource helper binding would capture an existing body identifier".into());
+                    signature.push(")".into()); signature.extend(template.function.suffix.iter().cloned());
+                    for (parameter, opaque) in template.function.parameters.iter().zip(&template.opaque) {
+                        if opaque.is_none() && parameter.iter().any(|name| bindings.iter().any(|binding| binding.first() == Some(name))) {
+                            return Err("A value parameter hides a specialized resource binding".into());
+                        }
                     }
-                }
-                let mut body = Vec::new();
-                for (position, token) in original.iter().enumerate() {
-                    if let Some(value) = replacements.get(token).filter(|_| position == 0 || original[position - 1] != ".") {
-                        if position > 0 && is_identifier(&original[position - 1]) && original[position - 1] != "return" {
-                            return Err("Shadowed resource helper parameters are unsupported".into());
+                    let replacements: BTreeMap<_, _> = template.opaque.iter().filter_map(Option::as_ref).cloned().zip(bindings.iter().cloned()).collect();
+                    let original = template.function.body.as_ref().ok_or("Resource helper has no definition")?;
+                    for value in replacements.values() {
+                        let root = &value[0];
+                        if !replacements.contains_key(root) && original.iter().any(|token| token == root) {
+                            return Err("A resource helper binding would capture an existing body identifier".into());
                         }
-                        if original.get(position + 1).is_some_and(|t| matches!(t.as_str(), "=" | "+=" | "-=" | "*=" | "/=" | "%=" | "&=" | "|=" | "^=" | "<<=" | ">>=" | "++" | "--"))
-                            || position > 0 && matches!(original[position - 1].as_str(), "++" | "--") {
-                            return Err("Resource helper arguments cannot be reassigned".into());
-                        }
-                        body.extend(value.iter().cloned());
-                    } else { body.push(token.clone()); }
+                    }
+                    let mut body = Vec::new();
+                    for (position, token) in original.iter().enumerate() {
+                        if let Some(value) = replacements.get(token).filter(|_| position == 0 || original[position - 1] != ".") {
+                            if position > 0 && is_identifier(&original[position - 1]) && original[position - 1] != "return" {
+                                return Err("Shadowed resource helper parameters are unsupported".into());
+                            }
+                            if original.get(position + 1).is_some_and(|t| matches!(t.as_str(), "=" | "+=" | "-=" | "*=" | "/=" | "%=" | "&=" | "|=" | "^=" | "<<=" | ">>=" | "++" | "--"))
+                                || position > 0 && matches!(original[position - 1].as_str(), "++" | "--") {
+                                return Err("Resource helper arguments cannot be reassigned".into());
+                            }
+                            body.extend(value.iter().cloned());
+                        } else { body.push(token.clone()); }
+                    }
+                    self.bytes = self.bytes.saturating_add(signature.iter().chain(&body).map(|t| t.len() + 1).sum::<usize>());
+                    if self.bytes > MAX_EXPANSION_BYTES { return Err("HLSL resource helper expansion exceeds 512 KiB".into()); }
+                    if self.instances.len() >= MAX_SPECIALIZATIONS { return Err("HLSL resource helper specialization limit exceeded".into()); }
+                    let instance = self.instances.len();
+                    self.instances.push(Instance { template: template.function.span.start, name: name.clone(), signature, body });
+                    instances.push(instance);
                 }
-                self.bytes = self.bytes.saturating_add(signature.iter().chain(&body).map(|t| t.len() + 1).sum::<usize>());
-                if self.bytes > MAX_EXPANSION_BYTES { return Err("HLSL resource helper expansion exceeds 512 KiB".into()); }
-                self.instances.push(Instance { template: template.function.name.clone(), name, signature, body: Vec::new() });
-                self.keys.insert(key, instance);
-                self.active.insert(template.function.name.clone());
-                self.expand(&mut body)?;
-                self.active.remove(&template.function.name);
-                self.instances[instance].body = body;
-                instance
+                // Publish the whole overload set before forwarding calls. An
+                // overload may call another overload of the same name. The
+                // typed compiler checks cycles after resolving those calls.
+                self.keys.insert(key, instances.clone());
+                for &instance in &instances {
+                    let mut body = std::mem::take(&mut self.instances[instance].body);
+                    self.expand(&mut body)?;
+                    self.instances[instance].body = body;
+                }
+                instances
             };
-            let mut call = vec![self.instances[instance].name.clone(), "(".into()];
+            let mut call = vec![self.instances[instances[0]].name.clone(), "(".into()];
             for (argument, values) in ordinary.into_iter().enumerate() {
                 if argument > 0 { call.push(",".into()); } call.extend(values);
             }
@@ -213,20 +244,39 @@ pub(super) fn specialize(tokens: &mut Vec<String>) -> Result<(), String> {
     // Preserve the existing typed opaque-parameter path (including overloads)
     // when no initialized state needs forwarding through a global alias.
     let has_static_state = tokens.iter().enumerate().any(|(index, token)| token == "sampler_state"
-        || token == "SamplerState" && matches!(tokens.get(index + 2).map(String::as_str), Some("{") | Some("=")));
+        || matches!(token.as_str(), "SamplerState" | "SamplerComparisonState")
+            && matches!(tokens.get(index + 2).map(String::as_str), Some("{") | Some("=")));
     if !has_static_state { return Ok(()); }
     let functions = declarations(tokens)?;
-    let mut templates = BTreeMap::new();
+    let mut templates = BTreeMap::<String, Vec<Template>>::new();
     for function in functions.iter().filter(|f| f.body.is_some()) {
         let opaque = function.parameters.iter().map(|p| opaque_name(p)).collect::<Result<Vec<_>, _>>()?;
         if opaque.iter().any(Option::is_some) {
-            if functions.iter().filter(|f| f.name == function.name && f.body.is_some()).count() != 1 {
-                return Err("Overloaded resource helpers require distinct function names".into());
-            }
-            templates.insert(function.name.clone(), Template { function: function.clone(), opaque });
+            templates.entry(function.name.clone()).or_default().push(Template { function: function.clone(), opaque });
         }
     }
     if templates.is_empty() { return Ok(()); }
+    for (name, overloads) in &templates {
+        for function in functions.iter().filter(|f| &f.name == name) {
+            if function.body.is_some() && !overloads.iter().any(|t| t.function.span.start == function.span.start) {
+                return Err("Mixed resource and ordinary helper overloads require distinct names".into());
+            }
+            if function.body.is_none() && !overloads.iter().any(|t| signature_key(&t.function) == signature_key(function)) {
+                return Err(format!("Resource helper prototype {name} has no matching definition"));
+            }
+        }
+        for (index, first) in overloads.iter().enumerate() {
+            for other in &overloads[index + 1..] {
+                if first.opaque.len() != other.opaque.len() { continue; }
+                for (position, (left, right)) in first.opaque.iter().zip(&other.opaque).enumerate() {
+                    if left.is_some() != right.is_some() || left.is_some()
+                        && parameter_key(&first.function.parameters[position]) != parameter_key(&other.function.parameters[position]) {
+                        return Err("Resource overloads of one arity must use the same opaque parameter types and positions".into());
+                    }
+                }
+            }
+        }
+    }
     let mut globals = BTreeSet::new();
     let mut index = 0;
     while index < tokens.len() {
@@ -258,19 +308,23 @@ pub(super) fn specialize(tokens: &mut Vec<String>) -> Result<(), String> {
         }
     }
     let source = tokens.clone();
-    let mut expansion = Expansion { templates, globals, source: &source, shadowed, instances: Vec::new(), keys: BTreeMap::new(), active: BTreeSet::new(), bytes: 0 };
+    let mut expansion = Expansion { templates, globals, source: &source, shadowed, instances: Vec::new(), keys: BTreeMap::new(), bytes: 0 };
     let mut slots = Vec::new();
     for function in functions.iter().rev().filter(|f| expansion.templates.contains_key(&f.name)) {
         let slot = format!("milkrust_resource_slot_{}", slots.len());
         if source.iter().any(|token| token == &slot) { return Err("Generated resource slot collides with user code".into()); }
-        slots.push((slot.clone(), function.name.clone(), function.body.is_some()));
+        let definitions: Vec<_> = expansion.templates[&function.name].iter().filter(|t|
+            if function.body.is_some() { t.function.span.start == function.span.start }
+            else { signature_key(&t.function) == signature_key(function) }
+        ).map(|t| t.function.span.start).collect();
+        slots.push((slot.clone(), definitions, function.body.is_some()));
         tokens.splice(function.span.clone(), [slot]);
     }
     expansion.expand(tokens)?;
     let mut result = Vec::new();
     for token in tokens.iter() {
-        if let Some((_, template, definition)) = slots.iter().find(|(slot, _, _)| slot == token) {
-            for instance in expansion.instances.iter().filter(|i| &i.template == template) {
+        if let Some((_, templates, definition)) = slots.iter().find(|(slot, _, _)| slot == token) {
+            for instance in expansion.instances.iter().filter(|i| templates.contains(&i.template)) {
                 result.extend(instance.signature.iter().cloned());
                 if *definition { result.extend(instance.body.iter().cloned()); } else { result.push(";".into()); }
             }

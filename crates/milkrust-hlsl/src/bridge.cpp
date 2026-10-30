@@ -8,6 +8,39 @@
 #include <cstring>
 #include <string>
 #include <exception>
+#include <map>
+
+// Check the resolved call graph, not function-name tokens: overload forwarding
+// is legal, while a direct or indirect cycle cannot be an ESSL shader.
+class ValidateFunctionCalls : public M4::HLSLTreeVisitor {
+    std::map<const M4::HLSLFunction*, unsigned> states;
+    void Check(const M4::HLSLFunction* function) {
+        if (!function || function->intrinsic) return;
+        M4::DepthGuard depth;
+        unsigned forwards = 0;
+        while (function->forward) {
+            M4::CheckBudget();
+            if (++forwards > 4096) throw std::length_error("HLSL forward-declaration chain limit exceeded");
+            function = function->forward;
+        }
+        M4::CheckBudget();
+        auto found = states.find(function);
+        if (found != states.end()) {
+            if (found->second == 1) throw std::invalid_argument("Recursive HLSL function calls are unsupported");
+            return;
+        }
+        if (states.size() >= 4096) throw std::length_error("HLSL call graph exceeds 4096 functions");
+        states.emplace(function, 1);
+        M4::HLSLTreeVisitor::VisitFunction(const_cast<M4::HLSLFunction*>(function));
+        states[function] = 2;
+    }
+public:
+    void VisitFunction(M4::HLSLFunction* function) override { Check(function); }
+    void VisitFunctionCall(M4::HLSLFunctionCall* call) override {
+        M4::HLSLTreeVisitor::VisitFunctionCall(call);
+        Check(call->function);
+    }
+};
 
 class ValidateArrayBounds : public M4::HLSLTreeVisitor {
     M4::HLSLTree& tree;
@@ -56,6 +89,8 @@ extern "C" int milkrust_hlsl_compile(const char* source, size_t size,
         }
         ValidateArrayBounds bounds(tree);
         bounds.VisitRoot(tree.GetRoot());
+        ValidateFunctionCalls calls;
+        calls.VisitRoot(tree.GetRoot());
         M4::GLSLIdentifiers identifiers(tree);
         identifiers.VisitRoot(tree.GetRoot());
         M4::HLSLArrayLayout arrays(tree);

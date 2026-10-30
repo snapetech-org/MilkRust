@@ -37,6 +37,7 @@ const invalid = [
   '#include "private.h"\nshader_body { ret=1; }',
   'float4 main(float3 p:NORMAL):COLOR0 { return float4(p,1); }',
   '#error deliberate compile failure\nshader_body { ret=1; }',
+  'float f(float p){return f(p);} shader_body {ret=f(uv.x);}',
 ];
 const server = createServer(async (req, res) => {
   try {
@@ -82,6 +83,39 @@ try {
       sampler2D wrapState = sampler_state { Texture=<art>; MinFilter=Point; MagFilter=Point; MipFilter=None; AddressU=Wrap; };
       float4 fetch(sampler2D image, float2 p) { return tex2D(image,p); }
       shader_body { ret=float3(fetch(clampState,float2(1.125,0.5)).r,fetch(wrapState,float2(1.125,0.5)).r,0.5); }
+    ` });
+    cases.push({ id: 'grouped-state-numeric-overloads', expected: [0,191,128], textures: {art: legacyTexture}, shader: `
+      Texture2D<float4> sampler_art;
+      SamplerState clampState { Filter=MIN_MAG_MIP_POINT; AddressU=Clamp; }, wrapState { Filter=MIN_MAG_MIP_POINT; };
+      float4 fetch(Texture2D<float4> texture, SamplerState mode, float3 position, float once);
+      float4 fetch(Texture2D<float4> texture, SamplerState mode, float2 position, float once);
+      float4 fetch(Texture2D<float4> image, SamplerState state, float2 p, float value) { return image.SampleLevel(state,p,0)+value*0; }
+      float4 fetch(Texture2D<float4> image, SamplerState state, float3 p, float value) { return fetch(image,state,p.xy,value)*p.z; }
+      shader_body { float n=0; float a=fetch(sampler_art,clampState,float2(1.125,0.5),++n).r;
+        float b=fetch(sampler_art,wrapState,float3(1.125,0.5,0.75),++n).r; ret=float3(a,b,n/4); }
+    ` });
+    cases.push({ id: 'grouped-legacy-state-overloads', expected: [0,191,128], textures: {art: legacyTexture}, shader: `
+      uniform sampler2D clampState = sampler_state { Texture=<art>; MinFilter=Point; MagFilter=Point; MipFilter=None; AddressU=Clamp; },
+        wrapState = sampler_state { Texture=<art>; MinFilter=Point; MagFilter=Point; MipFilter=None; AddressU=Wrap; };
+      float4 fetch(sampler2D image, float2 p) { return tex2D(image,p); }
+      float4 fetch(sampler2D image, float3 p) { return fetch(image,p.xy)*p.z; }
+      shader_body { ret=float3(fetch(clampState,float2(1.125,0.5)).r,fetch(wrapState,float3(1.125,0.5,0.75)).r,0.5); }
+    ` });
+    cases.push({ id: 'gather-components-and-binding', expected: [64,191,128], textures: {art: legacyTexture}, shader: `
+      Texture2D<float4> sampler_art;
+      SamplerState linear { Filter=MIN_MAG_MIP_LINEAR; AddressU=Clamp; AddressV=Clamp; };
+      shader_body { float4 weights=float4(0.125,0.25,0.5,0.125); float2 p=float2(0.5,0.5);
+        ret=float3(dot(sampler_art.Gather(linear,p),weights), dot(sampler_art.GatherGreen(linear,p),weights),
+          dot(sampler_art.GatherAlpha(linear,p),weights)/2); }
+    ` });
+    cases.push({ id: 'comparison-state-forwarding-and-filter-order', expected: [128,0,64], textures: {art: legacyTexture}, shader: `
+      Texture2D<float4> sampler_art;
+      SamplerComparisonState point { Filter=COMPARISON_MIN_MAG_MIP_POINT; ComparisonFunc=LESS; AddressU=Clamp; AddressV=Clamp; },
+        linear { Filter=COMPARISON_MIN_MAG_MIP_LINEAR; ComparisonFunc=LESS; AddressU=Clamp; AddressV=Clamp; };
+      float sample(Texture2D<float4> image, SamplerComparisonState state, float2 p) { return image.SampleCmpLevelZero(state,p,0.75); }
+      float sample(Texture2D<float4> image, SamplerComparisonState state, float3 p) { return sample(image,state,p.xy)*p.z; }
+      shader_body { float2 p=float2(0.5,0.5); ret=float3((sample(sampler_art,linear,float3(p,1))+sampler_art.SampleCmp(linear,p,0.75))/2,
+        sample(sampler_art,point,p),dot(sampler_art.GatherCmp(linear,p,0.75),float4(0.125,0.25,0.5,0.125))); }
     ` });
     const rows = [];
     const spriteRows = [];

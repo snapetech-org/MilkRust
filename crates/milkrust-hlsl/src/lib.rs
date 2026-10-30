@@ -75,6 +75,22 @@ mod tests {
     }
 
     #[test]
+    fn typed_call_graph_distinguishes_overload_forwarding_from_recursion() {
+        compile("float f(float2 p){return p.x;} float f(float3 p){return f(p.xy)*p.z;} float4 main(float2 uv:TEXCOORD0):COLOR0{return f(float3(uv,0.5));}", "main")
+            .expect("an overload may call another resolved overload");
+        compile("float f(float2 p); float g(float3 p){return f(p.xy);} float f(float2 p){return p.x;} float4 main(float2 uv:TEXCOORD0):COLOR0{return g(float3(uv,0));}", "main")
+            .expect("forward declarations must resolve to their definitions");
+        for source in [
+            "float f(float p){return f(p);} float4 main(float2 uv:TEXCOORD0):COLOR0{return f(uv.x);}",
+            "float f(float p); float g(float p){return f(p);} float f(float p){return g(p);} float4 main(float2 uv:TEXCOORD0):COLOR0{return f(uv.x);}",
+            "float f(float2 p); float f(float3 p){return f(p.xy);} float f(float2 p){return f(float3(p,0));} float4 main(float2 uv:TEXCOORD0):COLOR0{return f(uv);}",
+        ] {
+            let reason = compile(source, "main").expect_err("recursive shader must fail before driver compilation");
+            assert!(reason.contains("Recursive HLSL"), "unexpected recursion diagnostic: {reason}");
+        }
+    }
+
+    #[test]
     fn legacy_intrinsic_contract_compiles() {
         compile(include_str!("../tests/fixtures/intrinsics.hlsl"), "main")
             .expect("legacy intrinsic control must reach GLSL generation");

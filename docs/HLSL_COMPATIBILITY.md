@@ -316,8 +316,8 @@ independent `MinFilter = Point|Linear`, `MagFilter = Point|Linear`, and
 `MipFilter = None|Point|Linear` properties, plus `AddressU/V/W = Wrap`,
 `Clamp`, or `Mirror`. Unspecified filter fields default to linear; unspecified address fields
 default to wrap. These legacy states lower to generated aliases when used as the
-first argument to a supported `tex*` intrinsic. Grouped declarations, dynamic
-state, helper/assignment escapes, local or struct initializers, and
+first argument to a supported `tex*` intrinsic. Grouped global declarations retain
+each initializer independently. Dynamic state, assignment escapes, local or struct initializers, and
 anisotropic filtering and border addressing remain unsupported. `Texture1D` sampling lowers to a 2D lookup at
 the center of the bound image row; use a one-row asset when the original shader
 expects true 1D storage. Global `Texture1D`/`Texture2D`/`Texture3D`
@@ -457,7 +457,7 @@ boundaries. It does not enable opaque resource arrays through numeric layout.
 
 ## Static resource helpers
 
-Helper functions with direct `SamplerState`, `Texture1D/2D/3D` or legacy
+Helper functions with direct `SamplerState`, `SamplerComparisonState`, `Texture1D/2D/3D` or legacy
 `sampler/sampler2D/sampler3D` input parameters are specialized at their global
 bindings before texture methods are lowered when the source declares initialized
 sampling state. Without initialized state, the existing typed opaque-parameter
@@ -470,7 +470,16 @@ retain the specialized signatures at their original source positions.
 
 The pass permits at most 64 helper specializations and 512 KiB of generated
 source. Opaque arguments must resolve to a global binding without side effects.
-Recursive or overloaded resource helpers, output/array/default opaque parameters,
+Resource helpers may overload their ordinary numeric parameters or use different
+arities. For any one arity, their opaque parameter types and positions must agree;
+the generated functions retain one overload name and the typed compiler selects
+the numeric signature. Overloads may forward to another overload of the same
+name. A bounded AST call-graph pass follows resolved function/forward-declaration
+identities and rejects actual direct or indirect recursion before GLSL generation.
+Prototypes match the corresponding definition regardless
+of parameter names and remain at their original source positions. Mixed
+ordinary/resource overload sets and overloads that change opaque types/positions
+still fail explicitly. Recursive helpers, output/array/default opaque parameters,
 local/dynamic opaque arguments, and substitutions that capture existing body or
 value-parameter names fail explicitly. Resource-bearing struct parameters,
 state assignment/arithmetic and dynamically selected state still require a
@@ -482,6 +491,30 @@ state, literal resource arrays, prototypes, capture, recursion and expansion
 limits. The browser gate has authored pixel controls distinguishing point-clamp
 from point-wrap and checking that numeric argument side effects occur once.
 Neither compiler nor GPU controls have been executed for this checkpoint.
+
+## Grouped resource declarations and numeric helper overloads
+
+Global texture/sampler groups are split before resource lowering. Each declarator
+keeps its own array extent, register annotation and state initializer. This also
+handles a default `SamplerState` followed by initialized states, and separate
+legacy `sampler_state` blocks in one declaration. Initializer/property bodies are
+not split at their internal punctuation. Existing resource/expansion limits and
+unsupported property diagnostics remain in force.
+
+The native compiler cases cover grouped state and resource arrays, numeric
+helper overloads, different arities, prototypes with different parameter names,
+nested forwarding and rejected opaque layouts. Browser pixel controls distinguish
+clamp/wrap state, the selected numeric overload and single evaluation of value
+arguments. JavaScript syntax and whitespace were checked; compiler, browser and
+GPU execution remain pending on compatible private ephemeral JIT runners.
+
+Comparison-state declarations also trigger specialization and grouped-declaration
+normalization. The generated Gather/GatherCmp/SampleCmp/SampleCmpLevelZero calls participate
+in binding reflection, so their filter/address aliases reach both renderer hosts.
+Literal and side-effect-free dynamic Texture2D resource-array selection supports
+these comparison methods, retaining scalar results for SampleCmp/SampleCmpLevelZero and
+four-component results for GatherCmp. Added pixel controls check Gather component
+order, comparison before bilinear filtering and comparison-state forwarding.
 
 
 ## Bounded Texture2D comparison sampling

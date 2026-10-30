@@ -231,7 +231,8 @@ render frames, resolve external texture packs, or establish fidelity.
   bind one `Texture = <identifier>` and support independent Point/Linear min and
   mag filters plus None/Point/Linear mip filtering and per-axis Wrap/Clamp/Mirror.
   Direct `tex*` first arguments and statically specialized resource helpers are
-  supported. Grouped declarations and state assignment remain explicit failures.
+  supported. Grouped global declarations retain independent initializers. State
+  assignment remains an explicit failure.
   Dynamic array dispatch is limited to side-effect-free indices, supported
   sampling/load methods, standalone `GetDimensions`, and legacy `tex*` calls
   with the array element as their first argument. Direct `SamplerState` fields
@@ -466,6 +467,25 @@ remains in the disposable browser worker.
 The decoder, ABI and import paths are source-complete. Decoder, upload,
 malformed-input, disposal/loop and reference-pixel checks remain unrun; no
 platform or visual qualification is claimed.
+
+## 2026-10-30 grouped state and resource-helper overloads
+
+Global texture/sampler groups now retain separate array extents and static state
+initializers through normalization. Resource helpers support numeric overloads
+and different arities; overloads of a given arity must have identical opaque
+parameter types/positions. Numeric resolution remains in the typed compiler.
+Forward declarations match the correct definition despite different parameter
+names, nested and same-name overload forwarding preserve state, and numeric
+arguments are evaluated once. A bounded typed call-graph pass resolves forward
+declarations and rejects direct/indirect recursion before GLSL generation.
+Recursion, opaque-layout ambiguity, mixed ordinary/resource overload sets
+and existing binding/expansion limits still produce explicit diagnostics.
+Native compiler and browser pixel regression sources are added and unrun.
+
+PlezyNG PR #82 also implements private Android/Android TV services, packaged
+Tizen/webOS helpers and iOS/tvOS lifecycle/interruption recovery. Mobile Apple
+driver calls remain in-process; device-wide GPU/kernel faults and physical
+recovery remain qualification limits. No private build or test run is recorded.
 
 
 ## 2026-10-30 bounded Texture2D comparison-sampling source path
