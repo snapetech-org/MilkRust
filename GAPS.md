@@ -381,3 +381,8 @@ PlezyNG's native adapter supplies the device's local clock; the browser SDK
 refreshes it from the user's local `Date` before each frame. Direct WASM/stateless
 callers that omit the setter retain zero calendar fields and the deterministic
 preset-relative fallback.
+
+
+## 2026-10-30 native mouse host input
+
+The native C ABI now accepts validated per-frame pointer state. Coordinates are normalized and clamped to [0, 1], button state must be 0 or 1, and non-finite inputs fail. Native renders pass the stored input into MilkRust's shared equation runtime, so the existing `mousex`, `mousey`, `mousedown`, and rising-edge `mouseclick` bindings are available to a host. The shared PlezyNG adapter exposes this setter for platform hosts; platform pointer-event wiring and native regression execution remain pending.
