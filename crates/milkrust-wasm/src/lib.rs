@@ -7,7 +7,7 @@ use milkrust_core::{
     parse_milkrust_fragment, parse_milkrust_preset_set, parse_milkrust_sample_csv,
     milkrust_preset_name, milkrust_webgpu_batch_summary_json, serialize_milkrust_fragment,
     serialize_milkrust_preset_set, validate_milkrust_webgl_import as validate_milkrust_import,
-    validate_milkrust_webgl_import_with_state, MilkRustFrameSetRuntime,
+    validate_milkrust_webgl_import_with_state, MilkRustClockState, MilkRustFrameSetRuntime,
     MilkRustIndexedEntry, MilkRustInputState, MilkRustValue,
 };
 use wasm_bindgen::{prelude::*, JsCast};
@@ -410,6 +410,25 @@ impl WasmMilkRustEngine {
             "webGpu": web_gpu_status
         })
         .to_string()
+    }
+
+    /// Set local wall-clock fields used by MilkDrop date/time EEL variables.
+    /// Hosts should refresh this before each rendered frame.
+    #[wasm_bindgen(js_name = setClockState)]
+    pub fn set_clock_state(
+        &mut self,
+        year: i32,
+        month: u32,
+        day: u32,
+        weekday: u32,
+        hour: u32,
+        minute: u32,
+        second: u32,
+        milliseconds: u32,
+    ) -> Result<(), JsValue> {
+        self.runtime.set_clock_state(MilkRustClockState {
+            year, month, day, weekday, hour, minute, second, milliseconds,
+        }).map_err(|error| JsValue::from_str(&error))
     }
 
     /// Stereo PCM is analyzed with exactly the native FFT and channel policy.
