@@ -23,6 +23,7 @@ struct Session {
     runtime: MilkRustFrameSetRuntime,
     audio: Audio,
     input: MilkRustInputState,
+    mouse_click_pending: bool,
     source: String,
     texture_names: String,
     last_time: Option<f64>,
@@ -82,7 +83,7 @@ pub unsafe extern "C" fn milkrust_create(loader: Option<gl::Loader>, gles: i32) 
             let handle = NEXT_HANDLE.fetch_add(1, Ordering::Relaxed);
             if handle == 0 { return Err("Native session identity exhausted".into()); }
             sessions.insert(handle, Session { renderer, runtime: MilkRustFrameSetRuntime::default(),
-                audio: Audio::default(), input: MilkRustInputState::default(), source: String::new(),
+                audio: Audio::default(), input: MilkRustInputState::default(), mouse_click_pending: false, source: String::new(),
                 texture_names: String::new(), last_time: None, failed: false });
             Ok(handle)
         })
@@ -128,6 +129,7 @@ pub unsafe extern "C" fn milkrust_load(handle: u64, text_bytes: *const u8, lengt
         session.runtime = MilkRustFrameSetRuntime::default();
         session.runtime.restore_milk2_header_state(header_state)?;
         session.source = source.to_string(); session.last_time = None; session.failed = false;
+        session.mouse_click_pending = false;
         Ok(())
     })
 }
@@ -203,6 +205,7 @@ pub extern "C" fn milkrust_set_mouse(handle: u64, mouse_down: i32, mouse_x: f64,
             || !mouse_dx.is_finite() || !mouse_dy.is_finite() {
             return Err("Invalid native mouse input".into());
         }
+        if mouse_down == 1 && session.input.mouse_down == 0.0 { session.mouse_click_pending = true; }
         session.input = MilkRustInputState {
             mouse_down: f64::from(mouse_down),
             mouse_x: mouse_x.clamp(0.0, 1.0),
@@ -236,10 +239,17 @@ fn render_session(session: &mut Session, elapsed: f64,
     }
     let audio = session.audio.analyze(elapsed);
     session.runtime.set_stereo_audio(audio.stereo)?;
+    let mut input = session.input.clone();
+    if session.mouse_click_pending { input.mouse_down = 1.0; }
     let result = session.runtime.try_render_source_with_audio_and_input(&session.source, elapsed,
-        audio.bands[0], audio.bands[1], audio.bands[2], &audio.waveform, &audio.spectrum, session.input.clone())
+        audio.bands[0], audio.bands[1], audio.bands[2], &audio.waveform, &audio.spectrum, input)
         .and_then(|frames| draw(&mut session.renderer, &frames));
-    if result.is_err() { session.failed = true; } else { session.last_time = Some(elapsed); }
+    if result.is_err() {
+        session.failed = true;
+    } else {
+        session.last_time = Some(elapsed);
+        session.mouse_click_pending = false;
+    }
     result
 }
 
