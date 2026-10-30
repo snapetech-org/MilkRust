@@ -4,6 +4,8 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 out_dir="${1:-$repo_root/pkg}"
 
+bash "$repo_root/tools/build-hlsl-wasm.sh" "$out_dir"
+
 cargo build \
   --manifest-path "$repo_root/Cargo.toml" \
   -p milkrust-wasm \
@@ -30,3 +32,8 @@ mkdir -p "$out_dir"
   "$repo_root/target/wasm32-unknown-unknown/release/milkrust_wasm.wasm" \
   --target web \
   --out-dir "$out_dir"
+
+cp "$repo_root/crates/milkrust-wasm/texture_decoder_worker.js" \
+  "$out_dir/milkrust_texture_decoder.js"
+cp "$repo_root/crates/milkrust-core/THIRD_PARTY_NOTICES.md" \
+  "$out_dir/MILKRUST-THIRD-PARTY-NOTICES.txt"

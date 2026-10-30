@@ -1,0 +1,13 @@
+[preset00]
+name=Crystal Current 2
+decay=0.94
+wave_r=0.15
+wave_g=0.45
+wave_b=0.8
+wave_a=0.15
+wave_scale=0.6
+zoom=1.0
+rot=0.0
+per_frame_1=q1=0.2+0.3*bass_att;
+warp_shader_1=shader_body { ret=tex2D(sampler_main,uv).rgb*0.94; }
+comp_shader_1=shader_body { float2 p=uv-0.5; float v=sin((p.x+p.y)*24+0.65)*sin((p.x-p.y)*24-time*0.2); float3 fog=GetBlur2(uv); ret=lerp(float3(0.2+0.4*v,0.5+0.3*v,0.65-0.2*v),fog,0.2); ret=saturate(ret*(0.75+q1)); }

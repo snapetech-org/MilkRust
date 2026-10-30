@@ -523,7 +523,9 @@ const render = () => {
   if (window.__milkrustCollectStats) {
     window.__milkrustPlayerStats = readCanvasStats();
   }
-  if (update?.presetName) setStatus(update.presetName);
+  if (update?.error) setStatus(`Renderer stopped: ${update.error}`);
+  else if (update?.waitingForTextures) setStatus('Loading preset textures…');
+  else if (update?.presetName) setStatus(update.presetName);
   animationFrame = requestAnimationFrame(render);
 };
 

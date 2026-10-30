@@ -1,0 +1,293 @@
+{
+  "schemaVersion": 1,
+  "id": "milkrust-geometric-studies",
+  "name": "Milkrust Geometric Studies",
+  "version": "0.1.0",
+  "author": "MilkRust contributors",
+  "license": "CC0-1.0",
+  "licenseFiles": [
+    "licenses/CC0-1.0.txt"
+  ],
+  "distributionStatus": "redistributable",
+  "contentNotice": "Newly authored mathematical studies. No third-party preset or texture source was copied. Source implementation is unqualified; release requires the per-target rendering evidence policy.",
+  "sourceUrls": [
+    "https://github.com/snapetech-org/MilkRust/tree/main/content/original-packs/milkrust-geometric-studies"
+  ],
+  "presets": [
+    {
+      "id": "polar-garden-1",
+      "title": "Polar Garden 1",
+      "file": "presets/polar-garden-1.milk",
+      "sourceFormat": "milk",
+      "tags": [
+        "original",
+        "study",
+        "polar-garden"
+      ],
+      "thumbnail": ""
+    },
+    {
+      "id": "polar-garden-2",
+      "title": "Polar Garden 2",
+      "file": "presets/polar-garden-2.milk",
+      "sourceFormat": "milk",
+      "tags": [
+        "original",
+        "study",
+        "polar-garden"
+      ],
+      "thumbnail": ""
+    },
+    {
+      "id": "polar-garden-3",
+      "title": "Polar Garden 3",
+      "file": "presets/polar-garden-3.milk",
+      "sourceFormat": "milk",
+      "tags": [
+        "original",
+        "study",
+        "polar-garden"
+      ],
+      "thumbnail": ""
+    },
+    {
+      "id": "amber-rings-1",
+      "title": "Amber Rings 1",
+      "file": "presets/amber-rings-1.milk",
+      "sourceFormat": "milk",
+      "tags": [
+        "original",
+        "study",
+        "amber-rings"
+      ],
+      "thumbnail": ""
+    },
+    {
+      "id": "amber-rings-2",
+      "title": "Amber Rings 2",
+      "file": "presets/amber-rings-2.milk",
+      "sourceFormat": "milk",
+      "tags": [
+        "original",
+        "study",
+        "amber-rings"
+      ],
+      "thumbnail": ""
+    },
+    {
+      "id": "amber-rings-3",
+      "title": "Amber Rings 3",
+      "file": "presets/amber-rings-3.milk",
+      "sourceFormat": "milk",
+      "tags": [
+        "original",
+        "study",
+        "amber-rings"
+      ],
+      "thumbnail": ""
+    },
+    {
+      "id": "tessellated-dawn-1",
+      "title": "Tessellated Dawn 1",
+      "file": "presets/tessellated-dawn-1.milk",
+      "sourceFormat": "milk",
+      "tags": [
+        "original",
+        "study",
+        "tessellated-dawn"
+      ],
+      "thumbnail": ""
+    },
+    {
+      "id": "tessellated-dawn-2",
+      "title": "Tessellated Dawn 2",
+      "file": "presets/tessellated-dawn-2.milk",
+      "sourceFormat": "milk",
+      "tags": [
+        "original",
+        "study",
+        "tessellated-dawn"
+      ],
+      "thumbnail": ""
+    },
+    {
+      "id": "tessellated-dawn-3",
+      "title": "Tessellated Dawn 3",
+      "file": "presets/tessellated-dawn-3.milk",
+      "sourceFormat": "milk",
+      "tags": [
+        "original",
+        "study",
+        "tessellated-dawn"
+      ],
+      "thumbnail": ""
+    },
+    {
+      "id": "orbital-lines-1",
+      "title": "Orbital Lines 1",
+      "file": "presets/orbital-lines-1.milk",
+      "sourceFormat": "milk",
+      "tags": [
+        "original",
+        "study",
+        "orbital-lines"
+      ],
+      "thumbnail": ""
+    },
+    {
+      "id": "orbital-lines-2",
+      "title": "Orbital Lines 2",
+      "file": "presets/orbital-lines-2.milk",
+      "sourceFormat": "milk",
+      "tags": [
+        "original",
+        "study",
+        "orbital-lines"
+      ],
+      "thumbnail": ""
+    },
+    {
+      "id": "orbital-lines-3",
+      "title": "Orbital Lines 3",
+      "file": "presets/orbital-lines-3.milk",
+      "sourceFormat": "milk",
+      "tags": [
+        "original",
+        "study",
+        "orbital-lines"
+      ],
+      "thumbnail": ""
+    }
+  ],
+  "textures": [],
+  "fragments": [],
+  "plugins": [],
+  "assets": [
+    {
+      "path": "presets/polar-garden-1.milk",
+      "kind": "preset",
+      "author": "MilkRust contributors",
+      "license": "CC0-1.0",
+      "licenseFile": "licenses/CC0-1.0.txt",
+      "sourceUrl": "https://github.com/snapetech-org/MilkRust/blob/main/content/original-packs/milkrust-geometric-studies/presets/polar-garden-1.milk",
+      "notice": "Original source authored for MilkRust; no third-party source or textures."
+    },
+    {
+      "path": "presets/polar-garden-2.milk",
+      "kind": "preset",
+      "author": "MilkRust contributors",
+      "license": "CC0-1.0",
+      "licenseFile": "licenses/CC0-1.0.txt",
+      "sourceUrl": "https://github.com/snapetech-org/MilkRust/blob/main/content/original-packs/milkrust-geometric-studies/presets/polar-garden-2.milk",
+      "notice": "Original source authored for MilkRust; no third-party source or textures."
+    },
+    {
+      "path": "presets/polar-garden-3.milk",
+      "kind": "preset",
+      "author": "MilkRust contributors",
+      "license": "CC0-1.0",
+      "licenseFile": "licenses/CC0-1.0.txt",
+      "sourceUrl": "https://github.com/snapetech-org/MilkRust/blob/main/content/original-packs/milkrust-geometric-studies/presets/polar-garden-3.milk",
+      "notice": "Original source authored for MilkRust; no third-party source or textures."
+    },
+    {
+      "path": "presets/amber-rings-1.milk",
+      "kind": "preset",
+      "author": "MilkRust contributors",
+      "license": "CC0-1.0",
+      "licenseFile": "licenses/CC0-1.0.txt",
+      "sourceUrl": "https://github.com/snapetech-org/MilkRust/blob/main/content/original-packs/milkrust-geometric-studies/presets/amber-rings-1.milk",
+      "notice": "Original source authored for MilkRust; no third-party source or textures."
+    },
+    {
+      "path": "presets/amber-rings-2.milk",
+      "kind": "preset",
+      "author": "MilkRust contributors",
+      "license": "CC0-1.0",
+      "licenseFile": "licenses/CC0-1.0.txt",
+      "sourceUrl": "https://github.com/snapetech-org/MilkRust/blob/main/content/original-packs/milkrust-geometric-studies/presets/amber-rings-2.milk",
+      "notice": "Original source authored for MilkRust; no third-party source or textures."
+    },
+    {
+      "path": "presets/amber-rings-3.milk",
+      "kind": "preset",
+      "author": "MilkRust contributors",
+      "license": "CC0-1.0",
+      "licenseFile": "licenses/CC0-1.0.txt",
+      "sourceUrl": "https://github.com/snapetech-org/MilkRust/blob/main/content/original-packs/milkrust-geometric-studies/presets/amber-rings-3.milk",
+      "notice": "Original source authored for MilkRust; no third-party source or textures."
+    },
+    {
+      "path": "presets/tessellated-dawn-1.milk",
+      "kind": "preset",
+      "author": "MilkRust contributors",
+      "license": "CC0-1.0",
+      "licenseFile": "licenses/CC0-1.0.txt",
+      "sourceUrl": "https://github.com/snapetech-org/MilkRust/blob/main/content/original-packs/milkrust-geometric-studies/presets/tessellated-dawn-1.milk",
+      "notice": "Original source authored for MilkRust; no third-party source or textures."
+    },
+    {
+      "path": "presets/tessellated-dawn-2.milk",
+      "kind": "preset",
+      "author": "MilkRust contributors",
+      "license": "CC0-1.0",
+      "licenseFile": "licenses/CC0-1.0.txt",
+      "sourceUrl": "https://github.com/snapetech-org/MilkRust/blob/main/content/original-packs/milkrust-geometric-studies/presets/tessellated-dawn-2.milk",
+      "notice": "Original source authored for MilkRust; no third-party source or textures."
+    },
+    {
+      "path": "presets/tessellated-dawn-3.milk",
+      "kind": "preset",
+      "author": "MilkRust contributors",
+      "license": "CC0-1.0",
+      "licenseFile": "licenses/CC0-1.0.txt",
+      "sourceUrl": "https://github.com/snapetech-org/MilkRust/blob/main/content/original-packs/milkrust-geometric-studies/presets/tessellated-dawn-3.milk",
+      "notice": "Original source authored for MilkRust; no third-party source or textures."
+    },
+    {
+      "path": "presets/orbital-lines-1.milk",
+      "kind": "preset",
+      "author": "MilkRust contributors",
+      "license": "CC0-1.0",
+      "licenseFile": "licenses/CC0-1.0.txt",
+      "sourceUrl": "https://github.com/snapetech-org/MilkRust/blob/main/content/original-packs/milkrust-geometric-studies/presets/orbital-lines-1.milk",
+      "notice": "Original source authored for MilkRust; no third-party source or textures."
+    },
+    {
+      "path": "presets/orbital-lines-2.milk",
+      "kind": "preset",
+      "author": "MilkRust contributors",
+      "license": "CC0-1.0",
+      "licenseFile": "licenses/CC0-1.0.txt",
+      "sourceUrl": "https://github.com/snapetech-org/MilkRust/blob/main/content/original-packs/milkrust-geometric-studies/presets/orbital-lines-2.milk",
+      "notice": "Original source authored for MilkRust; no third-party source or textures."
+    },
+    {
+      "path": "presets/orbital-lines-3.milk",
+      "kind": "preset",
+      "author": "MilkRust contributors",
+      "license": "CC0-1.0",
+      "licenseFile": "licenses/CC0-1.0.txt",
+      "sourceUrl": "https://github.com/snapetech-org/MilkRust/blob/main/content/original-packs/milkrust-geometric-studies/presets/orbital-lines-3.milk",
+      "notice": "Original source authored for MilkRust; no third-party source or textures."
+    }
+  ],
+  "playlist": [
+    "polar-garden-1",
+    "polar-garden-2",
+    "polar-garden-3",
+    "amber-rings-1",
+    "amber-rings-2",
+    "amber-rings-3",
+    "tessellated-dawn-1",
+    "tessellated-dawn-2",
+    "tessellated-dawn-3",
+    "orbital-lines-1",
+    "orbital-lines-2",
+    "orbital-lines-3"
+  ],
+  "automationDefaults": {
+    "transitionSeconds": 8,
+    "randomizeOnBeat": false
+  }
+}

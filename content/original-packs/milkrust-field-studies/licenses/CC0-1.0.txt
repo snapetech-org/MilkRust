@@ -1,0 +1,8 @@
+MilkRust Original Studies — CC0 1.0 Universal
+
+These newly authored preset files and their pack metadata are dedicated to the
+public domain under CC0 1.0 Universal. No community presets, textures or audio
+were copied into this collection. This dedication does not change the license
+of the MilkRust engine or vendored compiler.
+
+https://creativecommons.org/publicdomain/zero/1.0/legalcode

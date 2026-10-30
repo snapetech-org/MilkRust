@@ -6,6 +6,8 @@ MilkRust is the standalone Rust/WASM visualizer engine extracted from slskR.
 
 This repository is being prepared as the home for:
 
+- `milkrust-hlsl`: bounded typed legacy HLSL compiler, native and browser builds.
+- `milkrust-native`: GL/GLES renderer and C ABI for platform hosts.
 - `milkrust-core`: preset parsing, expression evaluation, runtime frame generation, compatibility reports, geometry, and WebGPU batch builders.
 - `milkrust-pack`: portable preset pack manifests, loading, and validation.
 - `milkrust-renderer-core`: renderer backend contracts and capability types.
@@ -24,7 +26,14 @@ This repository is being prepared as the home for:
 - `tools`: smoke, compatibility, and performance checks.
 - `examples`: small browser clients used for SDK verification.
 
-The current migration keeps legacy `.milk` and `.milk2` preset formats compatible while removing product naming from the engine identity.
+The naming migration preserves legacy `.milk` and `.milk2` document readers.
+WebGL and native GL/GLES source paths now implement distinct warp/composite
+stages, shader-aware per-pixel meshes, bounded legacy HLSL resources, saved
+`.milk2` transition masks and saved sprite modes. This is source implementation,
+not rendering qualification. Full HLSL semantics and reference-exact transition
+and sprite pixels remain open; no new build, driver run or reference capture has
+been claimed in this source-only work.
+See [GAPS.md](GAPS.md) for the current engine and integration gates.
 
 See [`docs/ROADMAP.md`](docs/ROADMAP.md) for the expanded plan covering the core engine, renderer backends, web SDK, CLI, preset packs, plugins, standalone player, Studio tooling, language SDKs, and host integrations. See [`docs/PLUGIN_API.md`](docs/PLUGIN_API.md), [`docs/PRESET_PACKS.md`](docs/PRESET_PACKS.md), [`docs/THIRD_PARTY_CONTENT_POLICY.md`](docs/THIRD_PARTY_CONTENT_POLICY.md), [`docs/THIRD_PARTY_CONTENT_AUDIT.generated.md`](docs/THIRD_PARTY_CONTENT_AUDIT.generated.md), [`docs/SOURCE_IMPORT_AUDIT.md`](docs/SOURCE_IMPORT_AUDIT.md), [`docs/RENDERER_AND_PLAYER_IMPORT_PLAN.md`](docs/RENDERER_AND_PLAYER_IMPORT_PLAN.md), and [`archive/slskdn-js-milkdrop-port`](archive/slskdn-js-milkdrop-port) for the current pack format, content policy, preserved slskdN JavaScript port, and import checklist.
 
@@ -42,7 +51,12 @@ cargo check -p milkrust-wasm --target wasm32-unknown-unknown
 npm run build:wasm
 ```
 
-`npm run build:wasm` requires the `wasm-bindgen` CLI and writes browser package files to `pkg/`.
+`npm run build:wasm` requires wasm-bindgen 0.2.120 and Emscripten 3.1.64, and
+writes the Rust module, HLSL compiler JS/WASM and notices to `pkg/`. Native builds
+require a target C++11 compiler in addition to Rust. These commands run only on
+approved private ephemeral JIT runners under `AGENTS.md`. See
+[the compiler profile](docs/HLSL_COMPATIBILITY.md) for the implemented language
+and resource limits; a build does not establish universal preset compatibility.
 
 ## Apps
 
@@ -115,6 +129,8 @@ cargo run -p milkrust-cli -- pack-inspect examples/sample-pack
 cargo run -p milkrust-cli -- pack-validate examples/sample-pack
 ```
 
+`compat` reports whether a preset passes the currently analyzed parser/function/shader subset; its `renderStatus` remains `not-run` and `fidelityStatus` remains `not-assessed`. `render-stats` reports generated geometry counts only. Neither command is evidence of visual compatibility.
+
 ## Content Catalog
 
 ```bash
@@ -124,7 +140,7 @@ npm run content:report-community:compat
 npm run content:validate
 ```
 
-Third-party packs live in [`content/catalog.json`](content/catalog.json). Vetted redistributable content goes in `content/third-party`; aggressive public community imports with unclear/no explicit licenses go in [`content/community-unlicensed`](content/community-unlicensed) and are excluded from default builds unless a distribution opts in. The repo currently vendors the MIT-licensed [`butterchurn-presets@2.4.7`](content/third-party/butterchurn-presets-2.4.7) converted preset package plus public projectM community preset/texture packs.
+Third-party packs live in [`content/catalog.json`](content/catalog.json). Vetted redistributable content goes in `content/third-party`; historical public community imports with unclear/no explicit licenses go in [`content/community-unlicensed`](content/community-unlicensed) for compatibility analysis and are excluded from default builds and downloadable packs. The repo vendors the MIT-licensed [`butterchurn-presets@2.4.7`](content/third-party/butterchurn-presets-2.4.7) converted preset package; projectM community source copies remain in the separately marked community-unlicensed lane.
 
 ## Local security scanning
 

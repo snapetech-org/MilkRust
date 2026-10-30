@@ -1,15 +1,50 @@
 mod renderer;
 
-use std::{cell::RefCell, collections::BTreeMap, rc::Rc};
+use std::{cell::{Cell, RefCell}, collections::BTreeMap, rc::Rc};
 
 pub use renderer::{milkrust_renderer, MilkRustRenderer};
 use milkrust_core::{
     parse_milkrust_fragment, parse_milkrust_preset_set, parse_milkrust_sample_csv,
     milkrust_preset_name, milkrust_webgpu_batch_summary_json, serialize_milkrust_fragment,
-    serialize_milkrust_preset_set, validate_milkrust_import, MilkRustFrameSetRuntime,
+    serialize_milkrust_preset_set, validate_milkrust_webgl_import as validate_milkrust_import,
+    validate_milkrust_webgl_import_with_state, MilkRustClockState, MilkRustFrameSetRuntime,
     MilkRustIndexedEntry, MilkRustInputState, MilkRustValue,
 };
-use wasm_bindgen::prelude::*;
+use wasm_bindgen::{prelude::*, JsCast};
+
+thread_local! {
+    pub(crate) static TEXTURE_DECODER_WORKER_URL: RefCell<Option<String>> = RefCell::new(None);
+}
+
+/// Set a same-origin static decoder worker URL before creating an engine.
+/// The web SDK configures this automatically when the package and page share
+/// an origin; direct wasm-bindgen clients may use this to satisfy a CSP that
+/// disallows `blob:` workers.
+#[wasm_bindgen(js_name = setTextureDecoderWorkerUrl)]
+pub fn set_texture_decoder_worker_url(url: &str) -> Result<(), JsValue> {
+    if url.len() > 2048 || url.chars().any(char::is_control) {
+        return Err(JsValue::from_str("Invalid image decoder worker URL"));
+    }
+    let parsed = web_sys::Url::new(url)?;
+    if !matches!(parsed.protocol().as_str(), "http:" | "https:") {
+        return Err(JsValue::from_str("Image decoder worker must use HTTP or HTTPS"));
+    }
+    let location = js_sys::Reflect::get(&js_sys::global(), &JsValue::from_str("location"))?;
+    let origin = js_sys::Reflect::get(&location, &JsValue::from_str("origin"))?
+        .as_string().ok_or_else(|| JsValue::from_str("Page origin is unavailable"))?;
+    if parsed.origin() != origin {
+        return Err(JsValue::from_str("Image decoder worker must be same-origin with the page"));
+    }
+    TEXTURE_DECODER_WORKER_URL.with(|current| *current.borrow_mut() = Some(url.to_string()));
+    Ok(())
+}
+
+/// Initialize the matching compiler module before importing shader presets.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen(js_name = initializeHlslCompiler)]
+pub fn initialize_hlsl_compiler(url: &str) -> js_sys::Promise {
+    milkrust_hlsl::initialize(url)
+}
 
 #[wasm_bindgen(js_name = milkrustWebGpuBatchSummaryJson)]
 pub fn wasm_milkrust_webgpu_batch_summary_json(
@@ -37,9 +72,18 @@ pub struct WasmMilkRustEngine {
     canvas: web_sys::HtmlCanvasElement,
     renderer: MilkRustRenderer,
     runtime: MilkRustFrameSetRuntime,
+    pending_frame: Option<milkrust_core::MilkRustFrameSet>,
+    audio: milkrust_core::audio::Analyzer,
+    pcm_frame: Option<milkrust_core::audio::Features>,
     source: String,
     texture_assets: Rc<RefCell<BTreeMap<String, String>>>,
     title: String,
+    render_error: Option<String>,
+    waiting_for_textures: bool,
+    context_lost: Rc<Cell<bool>>,
+    restore_requested: Rc<Cell<bool>>,
+    on_context_lost: Closure<dyn FnMut(web_sys::Event)>,
+    on_context_restored: Closure<dyn FnMut(web_sys::Event)>,
 }
 
 #[wasm_bindgen(js_class = MilkRustEngine)]
@@ -55,19 +99,61 @@ impl WasmMilkRustEngine {
             validate_milkrust_import(&source).unwrap_or_else(|_| milkrust_preset_name(&source));
         let texture_assets = Rc::new(RefCell::new(BTreeMap::new()));
         let renderer = milkrust_renderer(&canvas, texture_assets.clone())?;
+        let context_lost = Rc::new(Cell::new(false));
+        let restore_requested = Rc::new(Cell::new(false));
+        let lost = context_lost.clone();
+        let on_context_lost = Closure::<dyn FnMut(web_sys::Event)>::wrap(Box::new(move |event| {
+            // Opt into WebGL recovery; without preventDefault the browser may
+            // permanently abandon the context. Do not touch GPU state here.
+            event.prevent_default();
+            lost.set(true);
+        }));
+        let lost = context_lost.clone();
+        let restore = restore_requested.clone();
+        let on_context_restored = Closure::<dyn FnMut(web_sys::Event)>::wrap(Box::new(move |_event| {
+            lost.set(false);
+            restore.set(true);
+        }));
+        canvas.add_event_listener_with_callback("webglcontextlost", on_context_lost.as_ref().unchecked_ref())?;
+        if let Err(error) = canvas.add_event_listener_with_callback("webglcontextrestored", on_context_restored.as_ref().unchecked_ref()) {
+            let _ = canvas.remove_event_listener_with_callback("webglcontextlost", on_context_lost.as_ref().unchecked_ref());
+            return Err(error);
+        }
         Ok(Self {
             canvas,
             renderer,
             runtime: MilkRustFrameSetRuntime::default(),
+            pending_frame: None,
+            audio: milkrust_core::audio::Analyzer::default(),
+            pcm_frame: None,
             source,
             texture_assets,
             title,
+            render_error: None,
+            waiting_for_textures: false,
+            context_lost,
+            restore_requested,
+            on_context_lost,
+            on_context_restored,
         })
     }
 
     #[wasm_bindgen(js_name = rendererLabel)]
     pub fn renderer_label(&self) -> String {
-        self.renderer.label().to_string()
+        if self.context_lost.get() { "Waiting for graphics context recovery".to_string() }
+        else if self.restore_requested.get() { "Restoring graphics resources".to_string() }
+        else if let Some(error) = &self.render_error { format!("Renderer stopped: {error}") }
+        else if self.waiting_for_textures { "Waiting for preset textures".to_string() }
+        else { self.renderer.label().to_string() }
+    }
+
+    #[wasm_bindgen(js_name = renderStatusJson)]
+    pub fn render_status_json(&self) -> String {
+        serde_json::json!({"state": if self.context_lost.get() { "context-lost" }
+            else if self.restore_requested.get() { "recovering-context" }
+            else if self.render_error.is_some() { "failed" }
+            else if self.waiting_for_textures { "waiting-textures" } else { "preview" },
+            "error": self.render_error, "fidelity": "not-assessed"}).to_string()
     }
 
     #[wasm_bindgen(js_name = loadPresetText)]
@@ -77,7 +163,9 @@ impl WasmMilkRustEngine {
         file_name: &str,
         texture_assets_json: &str,
     ) -> Result<String, JsValue> {
-        let title = validate_milkrust_import(source).map_err(|error| JsValue::from_str(&error))?;
+        let title = validate_milkrust_webgl_import_with_state(source, self.runtime.milk2_header_state())
+            .map_err(|error| JsValue::from_str(&error))?;
+        let texture_assets = Self::parse_texture_assets(texture_assets_json)?;
         self.source = source.to_string();
         self.title = if title.trim().is_empty() {
             if file_name.trim().is_empty() {
@@ -88,14 +176,22 @@ impl WasmMilkRustEngine {
         } else {
             title
         };
+        let header_state = self.runtime.milk2_header_state().clone();
         self.runtime = MilkRustFrameSetRuntime::default();
-        self.replace_texture_assets(texture_assets_json);
+        self.runtime.restore_milk2_header_state(header_state)
+            .map_err(|error| JsValue::from_str(&error))?;
+        self.pending_frame = None;
+        self.renderer.reset();
+        *self.texture_assets.borrow_mut() = texture_assets;
+        self.render_error = None;
+        self.waiting_for_textures = false;
         Ok(self.title.clone())
     }
 
     #[wasm_bindgen(js_name = inspectPresetText)]
     pub fn inspect_preset_text(&self, source: &str, file_name: &str) -> Result<String, JsValue> {
-        let title = validate_milkrust_import(source).map_err(|error| JsValue::from_str(&error))?;
+        let title = validate_milkrust_webgl_import_with_state(source, self.runtime.milk2_header_state())
+            .map_err(|error| JsValue::from_str(&error))?;
         Ok(serde_json::json!({
             "title": if title.trim().is_empty() {
                 if file_name.trim().is_empty() { "Imported MilkRust preset" } else { file_name }
@@ -116,6 +212,9 @@ impl WasmMilkRustEngine {
     ) -> Result<String, JsValue> {
         let mut parsed = self.parsed_source();
         let fragment = parse_milkrust_fragment(source, file_name, requested_type);
+        if !fragment.parse_errors.is_empty() {
+            return Err(JsValue::from_str(&fragment.parse_errors.join("; ")));
+        }
         let Some(target) = parsed.presets.first_mut() else {
             return Err(JsValue::from_str("MilkRust preset is empty"));
         };
@@ -298,6 +397,8 @@ impl WasmMilkRustEngine {
             "parameters": self.preset_parameter_summary_value(),
             "presetCount": parsed.presets.len(),
             "renderer": self.renderer_label(),
+            "renderError": self.render_error,
+            "fidelity": "not-assessed",
             "shaderSections": {
                 "comp": primary.is_some_and(|preset| !preset.comp_shader.trim().is_empty()),
                 "warp": primary.is_some_and(|preset| !preset.warp_shader.trim().is_empty())
@@ -309,6 +410,37 @@ impl WasmMilkRustEngine {
             "webGpu": web_gpu_status
         })
         .to_string()
+    }
+
+    /// Set local wall-clock fields used by MilkDrop date/time EEL variables.
+    /// Hosts should refresh this before each rendered frame.
+    #[wasm_bindgen(js_name = setClockState)]
+    pub fn set_clock_state(
+        &mut self,
+        year: i32,
+        month: u32,
+        day: u32,
+        weekday: u32,
+        hour: u32,
+        minute: u32,
+        second: u32,
+        milliseconds: u32,
+    ) -> Result<(), JsValue> {
+        self.runtime.set_clock_state(MilkRustClockState {
+            year, month, day, weekday, hour, minute, second, milliseconds,
+        }).map_err(|error| JsValue::from_str(&error))
+    }
+
+    /// Stereo PCM is analyzed with exactly the native FFT and channel policy.
+    /// It applies to the next render only; mono callers need not call this.
+    #[wasm_bindgen(js_name = setPcmStereo)]
+    pub fn set_pcm_stereo(&mut self, samples: &[f32], time_seconds: f64) -> Result<(), JsValue> {
+        if !time_seconds.is_finite() || time_seconds < 0.0 {
+            return Err(JsValue::from_str("PCM time must be finite and nonnegative"));
+        }
+        self.audio.push(samples, 0).map_err(|error| JsValue::from_str(&error))?;
+        self.pcm_frame = Some(self.audio.analyze(time_seconds));
+        Ok(())
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -327,6 +459,25 @@ impl WasmMilkRustEngine {
         mouse_dx: f64,
         mouse_dy: f64,
     ) {
+        if self.context_lost.get() { return; }
+        if self.restore_requested.replace(false) {
+            // Recreate every GPU handle and texture from retained source/assets.
+            // CPU equation state survives; unavailable feedback history restarts.
+            match milkrust_renderer(&self.canvas, self.texture_assets.clone()) {
+                Ok(renderer) => {
+                    self.renderer = renderer;
+                    self.render_error = None;
+                    self.waiting_for_textures = false;
+                },
+                Err(error) => {
+                    self.render_error = Some(error.as_string().unwrap_or_else(|| "Graphics context recovery failed".into()));
+                },
+            }
+        }
+        if self.render_error.is_some() { return; }
+        if let Err(error) = self.runtime.set_viewport(self.canvas.width().max(1), self.canvas.height().max(1)) {
+            self.render_error = Some(error); return;
+        }
         let input = MilkRustInputState {
             mouse_down,
             mouse_dx,
@@ -334,25 +485,65 @@ impl WasmMilkRustEngine {
             mouse_x,
             mouse_y,
         };
-        let waveform = parse_milkrust_sample_csv(waveform_csv);
-        let spectrum = parse_milkrust_sample_csv(spectrum_csv);
-        let frame_set = self.runtime.render_source_with_audio_and_input(
+        let mono_waveform = parse_milkrust_sample_csv(waveform_csv);
+        let mono_spectrum = parse_milkrust_sample_csv(spectrum_csv);
+        let pcm = self.pcm_frame.take();
+        let (waveform, spectrum, bass, mid, treble) = match &pcm {
+            Some(audio) => (audio.waveform.as_slice(), audio.spectrum.as_slice(), audio.bands[0], audio.bands[1], audio.bands[2]),
+            None => (mono_waveform.as_slice(), mono_spectrum.as_slice(), bass, mid, treble),
+        };
+        if let Some(audio) = pcm.as_ref().filter(|_| self.pending_frame.is_none()) {
+            if let Err(error) = self.runtime.set_stereo_audio(audio.stereo.clone()) {
+                self.render_error = Some(error); return;
+            }
+        }
+        // Hold the evaluated frame while image codecs are loading. Advancing
+        // again could retire a one-frame sprite before it ever reaches the GPU.
+        let frame_set = if let Some(frame) = self.pending_frame.take() { Ok(frame) } else { self.runtime.try_render_source_with_audio_and_input(
             &self.source,
             time_seconds,
             bass,
             mid,
             treble,
-            &waveform,
-            &spectrum,
+            waveform,
+            spectrum,
             input,
-        );
-        self.renderer.render_frame_set(&frame_set, time_seconds);
+        ) };
+        let frame_set = match frame_set {
+            Ok(frame) => frame,
+            Err(error) => {
+                self.waiting_for_textures = false;
+                self.render_error = Some(error);
+                return;
+            }
+        };
+        match self.renderer.render_frame_set(&frame_set, time_seconds) {
+            Ok(rendered) => {
+                self.waiting_for_textures = !rendered;
+                if !rendered { self.pending_frame = Some(frame_set); }
+            },
+            Err(error) => {
+                self.waiting_for_textures = false;
+                self.render_error = Some(error.as_string().unwrap_or_else(|| "Native WebGL operation failed".to_string()));
+            }
+        }
     }
 
     #[wasm_bindgen(js_name = resize)]
     pub fn resize(&self, width: u32, height: u32) {
-        self.canvas.set_width(width.max(1));
-        self.canvas.set_height(height.max(1));
+        let scale = (4096.0 / width.max(1) as f64).min(4096.0 / height.max(1) as f64)
+            .min((8.0 * 1024.0 * 1024.0 / (width.max(1) as f64 * height.max(1) as f64)).sqrt()).min(1.0);
+        let width = (width.max(1) as f64 * scale).floor().max(1.0) as u32;
+        let height = (height.max(1) as f64 * scale).floor().max(1.0) as u32;
+        if self.canvas.width() != width { self.canvas.set_width(width); }
+        if self.canvas.height() != height { self.canvas.set_height(height); }
+    }
+}
+
+impl Drop for WasmMilkRustEngine {
+    fn drop(&mut self) {
+        let _ = self.canvas.remove_event_listener_with_callback("webglcontextlost", self.on_context_lost.as_ref().unchecked_ref());
+        let _ = self.canvas.remove_event_listener_with_callback("webglcontextrestored", self.on_context_restored.as_ref().unchecked_ref());
     }
 }
 
@@ -364,26 +555,30 @@ impl WasmMilkRustEngine {
         )
     }
 
-    fn replace_texture_assets(&self, texture_assets_json: &str) {
-        let Ok(value) = serde_json::from_str::<serde_json::Value>(texture_assets_json) else {
-            return;
-        };
-        let Some(object) = value.as_object() else {
-            return;
-        };
-        let mut assets = self.texture_assets.borrow_mut();
-        assets.clear();
+    fn parse_texture_assets(texture_assets_json: &str) -> Result<BTreeMap<String, String>, JsValue> {
+        if texture_assets_json.len() > 32 * 1024 * 1024 {
+            return Err(JsValue::from_str("Embedded texture map exceeds 32 MiB"));
+        }
+        let value = serde_json::from_str::<serde_json::Value>(texture_assets_json)
+            .map_err(|_| JsValue::from_str("Malformed texture map"))?;
+        let object = value.as_object().ok_or_else(|| JsValue::from_str("Texture map must be an object"))?;
+        if object.len() > 64 { return Err(JsValue::from_str("Texture map exceeds 64 images")); }
+        let mut assets = BTreeMap::new();
         for (name, data_url) in object {
-            let Some(data_url) = data_url.as_str() else {
-                continue;
-            };
-            if !data_url.starts_with("data:image/") {
-                continue;
+            let data_url = data_url.as_str().ok_or_else(|| JsValue::from_str("Texture value must be an embedded image"))?;
+            if name.is_empty() || name.len() > 240 || data_url.len() > 24 * 1024 * 1024 ||
+                !["png", "jpeg", "gif", "webp", "bmp"].iter().any(|kind|
+                    data_url.starts_with(&format!("data:image/{kind};base64,"))) {
+                return Err(JsValue::from_str("Unsupported texture name, size or embedded raster format"));
             }
             for alias in milkrust_core::get_milkrust_texture_name_aliases(name) {
+                if assets.get(&alias).is_some_and(|existing| existing != data_url) {
+                    return Err(JsValue::from_str("Texture names have conflicting aliases"));
+                }
                 assets.insert(alias, data_url.to_string());
             }
         }
+        Ok(assets)
     }
 
     fn preset_parameter_summary_value(&self) -> serde_json::Value {
@@ -554,6 +749,7 @@ mod tests {
             ]),
             equations: milkrust_core::MilkRustEquations::default(),
             initialized: false,
+            ..MilkRustIndexedEntry::default()
         };
         let label = milkrust_fragment_entry_label(&entry, 0, "shape");
         assert_eq!(label, "Shape 1: MyShape");
@@ -565,6 +761,7 @@ mod tests {
             base_values: std::collections::BTreeMap::new(),
             equations: milkrust_core::MilkRustEquations::default(),
             initialized: false,
+            ..MilkRustIndexedEntry::default()
         };
         let label = milkrust_fragment_entry_label(&entry, 3, "shape");
         assert_eq!(label, "Shape 4");
@@ -576,6 +773,7 @@ mod tests {
             base_values: std::collections::BTreeMap::new(),
             equations: milkrust_core::MilkRustEquations::default(),
             initialized: false,
+            ..MilkRustIndexedEntry::default()
         };
         let label = milkrust_fragment_entry_label(&entry, 1, "wave");
         assert_eq!(label, "Wave 2");
@@ -590,6 +788,7 @@ mod tests {
             ]),
             equations: milkrust_core::MilkRustEquations::default(),
             initialized: false,
+            ..MilkRustIndexedEntry::default()
         };
         let label = milkrust_fragment_entry_label(&entry, 0, "shape");
         assert_eq!(label, "Shape 1: NameText");
@@ -603,6 +802,7 @@ mod tests {
             ]),
             equations: milkrust_core::MilkRustEquations::default(),
             initialized: false,
+            ..MilkRustIndexedEntry::default()
         };
         let label = milkrust_fragment_entry_label(&entry, 2, "wave");
         assert_eq!(label, "Wave 3: 64 samples");
@@ -616,6 +816,7 @@ mod tests {
             ]),
             equations: milkrust_core::MilkRustEquations::default(),
             initialized: false,
+            ..MilkRustIndexedEntry::default()
         };
         let label = milkrust_fragment_entry_label(&entry, 0, "shape");
         assert_eq!(label, "Shape 1: 8 sides");

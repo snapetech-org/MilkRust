@@ -1,12 +1,14 @@
 use std::{
     fs,
+    io::{self, Read},
     path::{Path, PathBuf},
 };
 
 use milkrust_core::{
     build_milkrust_compatibility_entry, parse_milkrust_preset_set,
-    milkrust_frame_set_from_source_with_audio, milkrust_preset_name,
+    MilkRustFrameSetRuntime, MilkRustInputState, milkrust_preset_name,
     summarize_milkrust_compatibility_matrix, validate_milkrust_import,
+    MilkRustCompatibilityEntry,
 };
 use milkrust_pack::{load_milkrust_pack_manifest, validate_milkrust_pack_dir};
 use milkrust_renderer_core::MilkRustRenderer;
@@ -110,7 +112,7 @@ pub fn run_milkrust_cli(args: &[String]) -> MilkRustCliResult {
         "pack-validate" => pack_validate_command(args.get(1)),
         "render-stats" => match read_one_path(args.get(1)) {
             Ok((path, source)) => {
-                let frame_set = milkrust_frame_set_from_source_with_audio(
+                let frame_set = MilkRustFrameSetRuntime::default().try_render_source_with_audio_and_input(
                     &source,
                     1.0,
                     0.55,
@@ -118,7 +120,12 @@ pub fn run_milkrust_cli(args: &[String]) -> MilkRustCliResult {
                     0.25,
                     &[-1.0, -0.25, 0.0, 0.25, 1.0],
                     &[0.0, 0.2, 0.7, 1.0, 0.4],
+                    MilkRustInputState::default(),
                 );
+                let frame_set = match frame_set {
+                    Ok(frame) => frame,
+                    Err(error) => return MilkRustCliResult::err(1, format!("preset equation evaluation failed: {error}\n")),
+                };
                 let batches = create_headless_batches(&frame_set);
                 let mut renderer = MilkRustHeadlessRenderer::new();
                 let stats = match renderer.render_frame_set(&frame_set) {
@@ -134,6 +141,8 @@ pub fn run_milkrust_cli(args: &[String]) -> MilkRustCliResult {
                         "pointVertices": stats.point_vertices,
                         "texturedVertices": stats.textured_vertices,
                         "triangleVertices": stats.triangle_vertices,
+                        "renderStatus": "not-run",
+                        "resultKind": "geometry-statistics-only",
                         "batches": {
                             "filledVertices": batches.filled_vertices.len() / 6,
                             "lineVertices": batches.line_vertices.len() / 6,
@@ -156,39 +165,134 @@ fn compat_command(path: Option<&String>) -> MilkRustCliResult {
         return MilkRustCliResult::err(2, usage());
     };
     let path = PathBuf::from(path);
-    let Ok(files) = collect_preset_files(&path) else {
-        return MilkRustCliResult::err(1, format!("failed to read {}\n", path.display()));
-    };
-    if files.is_empty() {
-        return MilkRustCliResult::err(
-            1,
-            format!("no .milk or .milk2 files in {}\n", path.display()),
-        );
-    }
-
+    let collection = collect_preset_files(&path);
+    let files = collection.files;
+    let discovery_errors = collection.discovery_errors;
+    let file_accounting_complete = discovery_errors.is_empty() && !collection.scan_truncated;
+    let mut file_read_errors = Vec::new();
+    let mut input_rejections = Vec::new();
+    let mut encoding_warnings = Vec::new();
+    let mut source_read_statuses = Vec::with_capacity(files.len());
     let entries = files
         .iter()
-        .filter_map(|file| {
-            let source = fs::read_to_string(file).ok()?;
-            Some(build_milkrust_compatibility_entry(
-                file
-                    .file_stem()
-                    .and_then(|stem| stem.to_str())
-                    .unwrap_or("preset"),
-                &file.display().to_string(),
-                &source,
-                file.extension()
-                    .and_then(|extension| extension.to_str())
-                    .is_some_and(|extension| extension.eq_ignore_ascii_case("milk2")),
-            ))
+        .map(|file| {
+            let file_name = file.display().to_string();
+            let id = file
+                .file_stem()
+                .and_then(|stem| stem.to_str())
+                .unwrap_or("preset")
+                .to_string();
+            let is_milk2 = file
+                .extension()
+                .and_then(|extension| extension.to_str())
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("milk2"));
+            match read_bounded_preset(file) {
+                Ok(bytes) => match milkrust_core::text::decode_preset(&bytes) {
+                    Ok(decoded) => {
+                        source_read_statuses.push(if decoded.encoding == "utf-8" { "readable-utf8" } else { "readable-decoded" });
+                        if decoded.encoding != "utf-8" {
+                            encoding_warnings.push(serde_json::json!({
+                                "fileName": file_name, "encoding": decoded.encoding,
+                                "status": "decoded-losslessly",
+                            }));
+                        }
+                        let source = decoded.source;
+                        build_milkrust_compatibility_entry(
+                            &id,
+                            &file_name,
+                            &source,
+                            is_milk2,
+                        )
+                    }
+                    Err(error) => {
+                        source_read_statuses.push("decode-failed");
+                        encoding_warnings.push(serde_json::json!({
+                            "fileName": file_name,
+                            "error": error,
+                        }));
+                        let source = String::from_utf8_lossy(&bytes);
+                        let mut entry = build_milkrust_compatibility_entry(
+                            &id,
+                            &file_name,
+                            &source,
+                            is_milk2,
+                        );
+                        entry.supported = false;
+                        entry.webgpu_supported = false;
+                        for report in &mut entry.preset_reports {
+                            let encoding_diagnostic =
+                                "source encoding could not be decoded without loss";
+                            if !report.error.contains(encoding_diagnostic) {
+                                if !report.error.is_empty() {
+                                    report.error.push_str("; ");
+                                }
+                                report.error.push_str(encoding_diagnostic);
+                            }
+                            report.webgpu_supported = false;
+                        }
+                        entry
+                    }
+                },
+                Err(error) if matches!(error.kind(), io::ErrorKind::InvalidData | io::ErrorKind::InvalidInput) => {
+                    let status = if error.kind() == io::ErrorKind::InvalidData {
+                        "input-limit-rejected"
+                    } else {
+                        "invalid-file-type"
+                    };
+                    source_read_statuses.push(status);
+                    input_rejections.push(serde_json::json!({
+                        "fileName": file_name,
+                        "status": status,
+                        "error": error.to_string(),
+                    }));
+                    MilkRustCompatibilityEntry {
+                        file_name,
+                        format: if is_milk2 { "milk2" } else { "milk" }.to_string(),
+                        id,
+                        supported: false,
+                        webgpu_supported: false,
+                        ..MilkRustCompatibilityEntry::default()
+                    }
+                }
+                Err(error) => {
+                    source_read_statuses.push("read-failed");
+                    file_read_errors.push(serde_json::json!({
+                        "fileName": file_name,
+                        "error": error.to_string(),
+                    }));
+                    MilkRustCompatibilityEntry {
+                        file_name,
+                        format: if is_milk2 { "milk2" } else { "milk" }.to_string(),
+                        id,
+                        supported: false,
+                        webgpu_supported: false,
+                        ..MilkRustCompatibilityEntry::default()
+                    }
+                }
+            }
         })
         .collect::<Vec<_>>();
     let summary = summarize_milkrust_compatibility_matrix(&entries);
     MilkRustCliResult::ok(format!(
         "{}\n",
         serde_json::json!({
+            "reportSchemaVersion": 3,
             "source": path.display().to_string(),
+            "analysisScope": "static parser/function/shader-subset/render-feature analysis only",
+            "renderStatus": "not-run",
+            "fidelityStatus": "not-assessed",
+            "renderedCount": 0,
+            "visuallyReviewedCount": 0,
             "totalCount": summary.total_count,
+            "fileAccountingComplete": file_accounting_complete,
+            "discoveryErrorCount": discovery_errors.len(),
+            "discoveryErrors": discovery_errors,
+            "fileReadErrorCount": file_read_errors.len(),
+            "fileReadErrors": file_read_errors,
+            "inputRejectionCount": input_rejections.len(),
+            "inputRejections": input_rejections,
+            "encodingWarningCount": encoding_warnings.len(),
+            "encodingWarnings": encoding_warnings,
             "presetCount": summary.preset_count,
             "supportedCount": summary.supported_count,
             "unsupportedCount": summary.unsupported_count,
@@ -200,18 +304,64 @@ fn compat_command(path: Option<&String>) -> MilkRustCliResult {
             "maxQRegisterIndex": summary.max_q_register_index,
             "qRegisters": summary.q_registers,
             "unsupportedFunctions": summary.unsupported_functions,
+            "shaderDiagnostics": summary.shader_diagnostics,
+            "unsupportedRendererFeatures": summary.unsupported_renderer_features,
             "unsupportedShaderSections": summary.unsupported_shader_sections,
+            "webGpuUnsupportedRendererFeatures": summary.webgpu_unsupported_renderer_features,
             "webGpuUnsupportedShaderSections": summary.webgpu_unsupported_shader_sections,
-            "entries": entries.iter().map(|entry| serde_json::json!({
+            "entries": entries.iter().enumerate().map(|(index, entry)| serde_json::json!({
                 "id": entry.id,
                 "fileName": entry.file_name,
                 "format": entry.format,
+                "sourceReadStatus": source_read_statuses[index],
+                "parseStatus": match source_read_statuses[index] {
+                    "read-failed" => "not-run",
+                    "input-limit-rejected" => "rejected-input-limits",
+                    "invalid-file-type" => "rejected-file-type",
+                    "decode-failed" => "lossy-diagnostic-only",
+                    _ if entry.preset_count == 0 => "no-presets-parsed",
+                    _ if entry.preset_reports.iter().any(|report| !report.parse_errors.is_empty()) => "rejected-input-limits",
+                    _ => "parsed",
+                },
+                "featureSubsetStatus": match source_read_statuses[index] {
+                    "read-failed" => "not-evaluated",
+                    "input-limit-rejected" => "rejected-input-limits",
+                    "invalid-file-type" => "rejected-file-type",
+                    "decode-failed" => "unsupported-encoding",
+                    _ if entry.preset_count == 0 => "no-presets-parsed",
+                    _ if entry.supported => "supported-by-current-static-subset",
+                    _ => "unsupported-by-current-static-subset",
+                },
+                "renderStatus": "not-run",
+                "fidelityStatus": "not-assessed",
+                "webGpuSupportScope": "shader-translation-subset-only",
                 "presetCount": entry.preset_count,
                 "supported": entry.supported,
                 "webGpuSupported": entry.webgpu_supported,
                 "unsupportedFunctions": entry.unsupported_functions,
+                "shaderDiagnostics": entry.shader_diagnostics,
+                "rendererFeatures": entry.renderer_features,
                 "shaderSections": entry.shader_sections,
+                "webGpuRendererFeatures": entry.webgpu_renderer_features,
                 "webGpuShaderSections": entry.webgpu_shader_sections,
+                "presetReports": entry.preset_reports.iter().map(|report| serde_json::json!({
+                    "index": report.index,
+                    "title": report.title,
+                    "error": report.error,
+                    "parseErrors": report.parse_errors,
+                    "supportedByCurrentSubset": report.error.is_empty(),
+                    "unsupportedFunctions": report.unsupported_functions,
+                    "shaderDiagnostics": report.shader_diagnostics,
+                    "rendererFeatures": report.renderer_features,
+                    "shaderSections": report.shader_sections,
+                    "webGpuRendererFeatures": report.webgpu_renderer_features,
+                    "webGpuShaderSections": report.webgpu_shader_sections,
+                    "webGpuShaderSubsetSupported": report.webgpu_supported,
+                    "shapeCount": report.metrics.shape_count,
+                    "spriteCount": report.metrics.sprite_count,
+                    "waveCount": report.metrics.wave_count,
+                    "qRegisters": report.metrics.q_registers,
+                })).collect::<Vec<_>>(),
             })).collect::<Vec<_>>(),
         })
     ))
@@ -227,6 +377,11 @@ fn pack_inspect_command(path: Option<&String>) -> MilkRustCliResult {
             serde_json::json!({
                 "manifestPath": manifest_path.display().to_string(),
                 "schemaVersion": manifest.schema_version,
+                "kind": manifest.kind,
+                "dependencies": manifest.dependencies.iter().map(|dependency| serde_json::json!({
+                    "id": dependency.id, "version": dependency.version,
+                    "integritySha256": dependency.integrity_sha256,
+                })).collect::<Vec<_>>(),
                 "id": manifest.id,
                 "name": manifest.name,
                 "version": manifest.version,
@@ -287,26 +442,88 @@ fn pack_validate_command(path: Option<&String>) -> MilkRustCliResult {
     }
 }
 
-fn collect_preset_files(path: &Path) -> Result<Vec<PathBuf>, std::io::Error> {
-    if path.is_file() {
-        return Ok(if is_preset_file(path) {
-            vec![path.to_path_buf()]
-        } else {
-            Vec::new()
-        });
+const MAX_COMPAT_SCAN_ENTRIES: usize = 250_000;
+const MAX_COMPAT_DISCOVERY_ERRORS: usize = 256;
+
+#[derive(Default)]
+struct PresetCollection {
+    files: Vec<PathBuf>,
+    discovery_errors: Vec<serde_json::Value>,
+    visited_entries: usize,
+    scan_truncated: bool,
+    errors_truncated: bool,
+}
+
+fn record_discovery_error(collection: &mut PresetCollection, path: &Path, error: impl ToString) {
+    if collection.discovery_errors.len() + 1 < MAX_COMPAT_DISCOVERY_ERRORS {
+        collection.discovery_errors.push(serde_json::json!({
+            "path": path.to_string_lossy().into_owned(),
+            "error": error.to_string(),
+        }));
+    } else if !collection.errors_truncated {
+        collection.discovery_errors.push(serde_json::json!({
+            "path": path.to_string_lossy().into_owned(),
+            "error": "additional discovery errors omitted after the diagnostic limit",
+        }));
+        collection.errors_truncated = true;
     }
-    let mut files = Vec::new();
-    for entry in fs::read_dir(path)? {
-        let entry = entry?;
-        let entry_path = entry.path();
-        if entry_path.is_dir() {
-            files.extend(collect_preset_files(&entry_path)?);
-        } else if is_preset_file(&entry_path) {
-            files.push(entry_path);
+}
+
+fn collect_preset_files(path: &Path) -> PresetCollection {
+    fn visit(path: &Path, collection: &mut PresetCollection) {
+        if collection.visited_entries >= MAX_COMPAT_SCAN_ENTRIES {
+            if !collection.scan_truncated {
+                collection.scan_truncated = true;
+                record_discovery_error(collection, path, format!(
+                    "preset scan stopped at the {MAX_COMPAT_SCAN_ENTRIES} entry limit"
+                ));
+            }
+            return;
+        }
+        collection.visited_entries += 1;
+        let metadata = match fs::symlink_metadata(path) {
+            Ok(metadata) => metadata,
+            Err(error) => {
+                record_discovery_error(collection, path, error);
+                return;
+            }
+        };
+        if metadata.file_type().is_symlink() {
+            record_discovery_error(collection, path, "symbolic links are not followed");
+            return;
+        }
+        if metadata.is_file() {
+            if is_preset_file(path) {
+                collection.files.push(path.to_path_buf());
+            }
+            return;
+        }
+        if !metadata.is_dir() {
+            if is_preset_file(path) {
+                record_discovery_error(collection, path, "preset path is not a regular file");
+            }
+            return;
+        }
+        let entries = match fs::read_dir(path) {
+            Ok(entries) => entries,
+            Err(error) => {
+                record_discovery_error(collection, path, error);
+                return;
+            }
+        };
+        for entry in entries {
+            match entry {
+                Ok(entry) => visit(&entry.path(), collection),
+                Err(error) => record_discovery_error(collection, path, error),
+            }
+            if collection.scan_truncated { break; }
         }
     }
-    files.sort();
-    Ok(files)
+
+    let mut collection = PresetCollection::default();
+    visit(path, &mut collection);
+    collection.files.sort();
+    collection
 }
 
 fn is_preset_file(path: &Path) -> bool {
@@ -318,12 +535,27 @@ fn is_preset_file(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
+fn read_bounded_preset(path: &Path) -> io::Result<Vec<u8>> {
+    const LIMIT: usize = milkrust_core::input_limits::MAX_PRESET_BYTES;
+    let file = fs::File::open(path)?;
+    if !file.metadata()?.is_file() {
+        return Err(io::Error::new(io::ErrorKind::InvalidInput, "Preset is not a regular file"));
+    }
+    let mut bytes = Vec::new();
+    file.take((LIMIT + 1) as u64).read_to_end(&mut bytes)?;
+    if bytes.len() > LIMIT {
+        return Err(io::Error::new(io::ErrorKind::InvalidData, "Preset exceeds 2 MiB"));
+    }
+    Ok(bytes)
+}
+
 fn read_one_path(path: Option<&String>) -> Result<(PathBuf, String), MilkRustCliResult> {
     let Some(path) = path else {
         return Err(MilkRustCliResult::err(2, usage()));
     };
     let path = PathBuf::from(path);
-    match fs::read_to_string(&path) {
+    match read_bounded_preset(&path).and_then(|bytes|
+        milkrust_core::text::decode_preset(&bytes).map(|decoded| decoded.source).map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))) {
         Ok(source) => Ok((path, source)),
         Err(error) => Err(MilkRustCliResult::err(
             1,
@@ -427,6 +659,8 @@ mod tests {
         assert_eq!(result.code, 0);
         let value: serde_json::Value = serde_json::from_str(&result.stdout).unwrap();
         assert_eq!(value["totalCount"], 1);
+        assert_eq!(value["fileAccountingComplete"], true);
+        assert_eq!(value["discoveryErrorCount"], 0);
         assert_eq!(value["entries"].as_array().unwrap().len(), 1);
     }
 
@@ -531,10 +765,11 @@ mod tests {
         fs::write(dir.join("test.milk2"), "name=test\n").unwrap();
         fs::write(dir.join("other.json"), "{}").unwrap();
 
-        let files = collect_preset_files(&dir).unwrap();
+        let collection = collect_preset_files(&dir);
         let _ = fs::remove_dir_all(&dir);
 
-        assert_eq!(files.len(), 2);
+        assert_eq!(collection.files.len(), 2);
+        assert!(collection.discovery_errors.is_empty());
     }
 
     #[test]
@@ -542,10 +777,54 @@ mod tests {
         let dir = temp_path("empty-dir");
         fs::create_dir_all(&dir).unwrap();
 
-        let files = collect_preset_files(&dir).unwrap();
+        let collection = collect_preset_files(&dir);
         let _ = fs::remove_dir_all(&dir);
 
-        assert!(files.is_empty());
+        assert!(collection.files.is_empty());
+        assert!(collection.discovery_errors.is_empty());
+    }
+
+    #[test]
+    fn compat_empty_directory_returns_complete_empty_report() {
+        let root = temp_path("empty-compat-root");
+        fs::create_dir_all(&root).unwrap();
+        let result = run_milkrust_cli(&["compat".to_string(), root.display().to_string()]);
+        let _ = fs::remove_dir_all(&root);
+        assert_eq!(result.code, 0);
+        let report: serde_json::Value = serde_json::from_str(&result.stdout).unwrap();
+        assert_eq!(report["totalCount"], 0);
+        assert_eq!(report["presetCount"], 0);
+        assert_eq!(report["fileAccountingComplete"], true);
+        assert_eq!(report["entries"].as_array().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn compat_preserves_root_discovery_errors_in_json() {
+        let path = temp_path("missing-compat-root");
+        let result = run_milkrust_cli(&["compat".to_string(), path.display().to_string()]);
+        assert_eq!(result.code, 0);
+        let report: serde_json::Value = serde_json::from_str(&result.stdout).unwrap();
+        assert_eq!(report["totalCount"], 0);
+        assert_eq!(report["fileAccountingComplete"], false);
+        assert_eq!(report["discoveryErrorCount"], 1);
+        assert!(report["discoveryErrors"][0]["path"].as_str().unwrap().contains("missing-compat-root"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn preset_collection_does_not_follow_symlinks() {
+        use std::os::unix::fs::symlink;
+        let root = temp_path("symlink-scan");
+        fs::create_dir_all(&root).unwrap();
+        let source = root.join("real.milk");
+        fs::write(&source, "name=real").unwrap();
+        let alias = root.join("alias.milk");
+        symlink(&source, &alias).unwrap();
+        let collection = collect_preset_files(&root);
+        let _ = fs::remove_dir_all(&root);
+        assert_eq!(collection.files.len(), 1);
+        assert_eq!(collection.discovery_errors.len(), 1);
+        assert!(collection.discovery_errors[0]["error"].as_str().unwrap().contains("symbolic links"));
     }
 
     #[test]
@@ -561,4 +840,26 @@ mod tests {
         assert_eq!(result.code, 2);
         assert!(result.stderr.contains("usage"));
     }
+    #[test]
+    fn compatibility_reports_resource_rejections_without_dropping_files() {
+        let root = temp_path("resource-limits");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("sparse.milk"), "shapecode_999999999_enabled=1").unwrap();
+        fs::write(root.join("oversized.milk"), vec![b'x'; milkrust_core::input_limits::MAX_PRESET_BYTES + 1]).unwrap();
+        let result = run_milkrust_cli(&["compat".to_string(), root.to_string_lossy().into_owned()]);
+        let report: serde_json::Value = serde_json::from_str(&result.stdout).unwrap();
+        assert_eq!(report["totalCount"], 2);
+        assert_eq!(report["unsupportedCount"], 2);
+        assert_eq!(report["fileReadErrorCount"], 0);
+        assert_eq!(report["inputRejectionCount"], 1);
+        assert_eq!(report["fileAccountingComplete"], true);
+        let entries = report["entries"].as_array().unwrap();
+        let sparse = entries.iter().find(|entry| entry["fileName"].as_str().unwrap().ends_with("sparse.milk")).unwrap();
+        assert_eq!(sparse["parseStatus"], "rejected-input-limits");
+        let oversized = entries.iter().find(|entry| entry["fileName"].as_str().unwrap().ends_with("oversized.milk")).unwrap();
+        assert_eq!(oversized["sourceReadStatus"], "input-limit-rejected");
+        assert_eq!(oversized["parseStatus"], "rejected-input-limits");
+        fs::remove_dir_all(root).unwrap();
+    }
+
 }

@@ -74,6 +74,26 @@ describe('createMilkRustEngine', () => {
     };
   });
 
+  it('initializes injected compiler modules and permits a failed download to retry', async () => {
+    let attempts = 0;
+    globalThis.__milkrustModule.initializeHlslCompiler = async (url) => {
+      assert.equal(url, 'https://example.test/engine/milkrust_hlsl.js');
+      if (++attempts === 1) throw new Error('compiler download interrupted');
+    };
+    const options = {
+      modulePath: 'https://example.test/engine/milkrust_wasm.js',
+      audioContext: { createAnalyser },
+      audioNode: { connect() {}, disconnect() {} },
+      canvas: {},
+    };
+    await assert.rejects(createMilkRustEngine(options), /download interrupted/);
+    const first = await createMilkRustEngine(options);
+    const second = await createMilkRustEngine(options);
+    assert.equal(attempts, 2);
+    first.dispose();
+    second.dispose();
+  });
+
   it('eases transition progress between renderer sets', () => {
     assert.equal(getMilkRustTransitionProgress(10, 2, 10), 0);
     assert.equal(getMilkRustTransitionProgress(10, 2, 11), 0.5);
@@ -139,51 +159,36 @@ describe('createMilkRustEngine', () => {
     ]);
   });
 
-  it('loads pack js plugins through dynamic import', async () => {
-    const jsPluginUrl = `data:text/javascript,${encodeURIComponent(`
-      globalThis.__milkrustTestJsPluginCalls = globalThis.__milkrustTestJsPluginCalls || 0;
-      export const onFrameStart = () => {
-        globalThis.__milkrustTestJsPluginCalls += 1;
-      };
-    `)}`;
-    const manifest = validateMilkRustPackManifest({
-      id: 'demo',
-      name: 'Demo',
-      version: '0.1.0',
-      plugins: [{ id: 'js-hook', kind: 'javascript', entry: jsPluginUrl }],
-      presets: [],
-    });
-
-    const pluginState = await loadMilkRustPackPlugins(manifest, {
-      fetchImpl: async () => ({ ok: false }),
-    });
-
-    assert.equal(pluginState.valid, true);
-    assert.equal(pluginState.plugins.length, 1);
-    assert.equal(pluginState.plugins[0].kind, 'js');
-    assert.equal(pluginState.plugins[0].source, 'module');
-    assert.equal(typeof pluginState.plugins[0].api?.onFrameStart, 'function');
-
-    const analyser = createAnalyser();
-    const audioNode = {
-      connect: mock.fn(),
-      disconnect: mock.fn(),
-    };
-    const engine = await createMilkRustEngine({
-      audioContext: {
-        createAnalyser: () => analyser,
-        currentTime: 1,
-      },
-      audioNode,
-      canvas: {},
-    });
-
+  it('rejects executable pack plugins without fetching or evaluating their module', async () => {
     globalThis.__milkrustTestJsPluginCalls = 0;
-    engine.loadPlugins(pluginState.plugins);
-    engine.render();
-
-    assert.equal(globalThis.__milkrustTestJsPluginCalls, 1);
+    const jsPluginUrl = `data:text/javascript,${encodeURIComponent('globalThis.__milkrustTestJsPluginCalls += 1; export default {};')}`;
+    const manifest = validateMilkRustPackManifest({
+      id: 'demo', name: 'Demo', version: '0.1.0', presets: [],
+      plugins: [{ id: 'js-hook', kind: 'javascript', entry: jsPluginUrl }],
+    });
+    const fetchImpl = mock.fn(async () => { throw new Error('Executable asset must not be fetched'); });
+    const result = await loadMilkRustPackPlugins(manifest, { fetchImpl });
+    assert.equal(result.valid, false);
+    assert.equal(result.plugins.length, 0);
+    assert.match(result.errors[0], /executable pack plugins are disabled/);
+    assert.equal(fetchImpl.mock.calls.length, 0);
+    assert.equal(globalThis.__milkrustTestJsPluginCalls, 0);
     delete globalThis.__milkrustTestJsPluginCalls;
+  });
+
+  it('propagates a blocked executable entry into the aggregate pack result', async () => {
+    const requests = [];
+    const result = await loadMilkRustPack('http://localhost/packs/demo/', {
+      fetchImpl: async (url) => {
+        requests.push(url);
+        assert.match(url, /manifest\.json$/);
+        return { ok: true, json: async () => ({ id: 'demo', name: 'Demo', version: '0.1.0',
+          presets: [], plugins: [{ id: 'blocked', kind: 'js', entry: 'plugins/run.js' }] }) };
+      },
+    });
+    assert.equal(result.valid, false);
+    assert.match(result.errors[0], /blocked/);
+    assert.equal(requests.length, 1);
   });
 
   it('marks failed plugin loads without crashing the pack load', async () => {
@@ -340,6 +345,70 @@ describe('createMilkRustEngine', () => {
     assert.equal(renderArgs[10], -0.1);
     assert.match(renderArgs[4], /-1/);
     assert.deepEqual(rustEngine.resize.mock.calls[0].arguments, [320, 180]);
+  });
+
+  it('keeps anti-phase stereo through the PCM bridge and disconnects its own graph', async () => {
+    rustEngine.setPcmStereo = mock.fn();
+    const mono = createAnalyser();
+    const left = { ...createAnalyser(), getFloatTimeDomainData: (data) => data.fill(0.25) };
+    const right = { ...createAnalyser(), getFloatTimeDomainData: (data) => data.fill(-0.25) };
+    const analysers = [mono, left, right];
+    const node = () => ({ connect: mock.fn(), disconnect: mock.fn() });
+    const input = node();
+    const splitter = node();
+    const source = node();
+    const engine = await createMilkRustEngine({
+      audioContext: { currentTime: 2, sampleRate: 48000, createAnalyser: () => analysers.shift(),
+        createChannelSplitter: () => splitter, createGain: () => input },
+      audioNode: source, canvas: {},
+    });
+    engine.render();
+    const [pcm, time] = rustEngine.setPcmStereo.mock.calls[0].arguments;
+    assert.equal(pcm.length, 1024);
+    assert.equal(time, 2);
+    assert.equal(pcm[0], 0.25);
+    assert.equal(pcm[1], -0.25);
+    assert.equal(input.channelCount, 2);
+    assert.equal(input.channelCountMode, 'explicit');
+    assert.deepEqual(splitter.connect.mock.calls.map((call) => call.arguments[1]), [0, 1]);
+    engine.dispose();
+    assert.equal(source.disconnect.mock.calls.length, 2);
+    assert.equal(splitter.disconnect.mock.calls.length, 2);
+  });
+
+  it('exposes renderer failures and clears the texture-loading state after upload', async () => {
+    let status = { state: 'failed', error: 'Composite shader failed' };
+    rustEngine.renderStatusJson = () => JSON.stringify(status);
+    const engine = await createMilkRustEngine({
+      audioContext: { createAnalyser, currentTime: 1 },
+      audioNode: { connect: mock.fn(), disconnect: mock.fn() }, canvas: {},
+    });
+    const onRenderFrame = mock.fn();
+    engine.loadPlugins([{ id: 'application-hook', api: { onRenderFrame } }]);
+    assert.deepEqual(engine.render(), { error: 'Composite shader failed', fidelity: 'not-assessed' });
+    assert.equal(onRenderFrame.mock.calls.length, 0);
+    status = { state: 'waiting-textures' };
+    assert.equal(engine.render().waitingForTextures, true);
+    status = { state: 'preview' };
+    assert.equal(engine.render().waitingForTextures, false);
+    assert.equal(engine.render(), null);
+    engine.dispose();
+  });
+
+  it('pauses frame work while the context is lost and reports recovery', async () => {
+    let status = { state: 'context-lost' };
+    rustEngine.renderStatusJson = () => JSON.stringify(status);
+    const engine = await createMilkRustEngine({
+      audioContext: { createAnalyser, currentTime: 1 },
+      audioNode: { connect: mock.fn(), disconnect: mock.fn() }, canvas: {},
+    });
+    const frames = rustEngine.render.mock.calls.length;
+    assert.equal(engine.render().waitingForContext, true);
+    assert.equal(rustEngine.render.mock.calls.length, frames);
+    status = { state: 'preview' };
+    assert.equal(engine.render().waitingForContext, false);
+    assert.equal(rustEngine.render.mock.calls.length, frames + 1);
+    engine.dispose();
   });
 
   it('fires plugin hooks for engine lifecycle events', async () => {

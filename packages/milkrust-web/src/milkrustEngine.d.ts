@@ -151,12 +151,18 @@ export interface MilkRustPresetResult {
 }
 
 export interface MilkRustFrame {
+  /** Optional normalized 44.1 kHz interleaved stereo for the shared analyzer. */
+  pcmStereo?: Float32Array;
   bands: { bass: number; mid: number; treble: number };
   samples: number[];
   spectrum: number[];
 }
 
 export interface MilkRustRenderState {
+  error?: string;
+  fidelity?: 'not-assessed';
+  waitingForTextures?: boolean;
+  waitingForContext?: boolean;
   presetName?: string;
   presetIndex?: number;
 }

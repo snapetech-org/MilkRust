@@ -17,3 +17,10 @@ npm run content:report-community:compat:full
 npm run desktop:plugin-report
 npm run desktop:plugin-report:catalog
 ```
+
+The checked-in community summary may be a historical snapshot until the full
+compatibility report is regenerated. The current report generator retains a
+compact result for each manifest preset, filesystem-discovered preset, and
+manifest path that is missing from the scan; it also preserves directory,
+read, input-limit, encoding and source-inventory diagnostics. These static
+results do not establish renderer or visual fidelity.

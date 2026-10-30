@@ -8,12 +8,20 @@
       "kind": "pack",
       "status": "vendored",
       "license": "CC0-1.0",
+      "distributionStatus": "redistributable",
+      "licenseFiles": ["examples/sample-pack/licenses/CC0-1.0.txt"],
       "copyPolicy": "include",
       "source": {
         "type": "local",
         "path": "examples/sample-pack"
       },
-      "notes": "MilkRust-owned fixture pack used by CLI, SDK, player, and Studio integration tests."
+      "archive": {
+        "path": "content/downloads/milkrust-sample-pack-0.1.0.rmpack",
+        "sha256": "175a042deb4edb224055a6334f67a1c492f32e447dc3c90a54f22849c43a27df",
+        "compressedBytes": 2927,
+        "expandedBytes": 5467
+      },
+      "notes": "MilkRust-owned fixture pack used by CLI, SDK, player, and Studio integration. Every content asset has author, license, source URL and shipped notice metadata."
     },
     {
       "id": "butterchurn-presets-2.4.7",
@@ -28,7 +36,7 @@
         "url": "https://www.npmjs.com/package/butterchurn-presets/v/2.4.7"
       },
       "licenseUrl": "https://raw.githubusercontent.com/jberg/butterchurn-presets/master/LICENSE",
-      "notes": "MIT-licensed converted Butterchurn preset package. Contains 1,754 converted JSON presets plus bundle files. This is not raw .milk source, but it is redistributable and useful for compatibility/import tooling."
+      "notes": "The upstream package declares MIT and contains converted MilkDrop presets. It is retained for compatibility and conversion review, but per-preset rights-holder chains are not independently confirmed; do not promote generated packs to public downloads until rights review is approved."
     },
     {
       "id": "projectm-cream-of-the-crop",

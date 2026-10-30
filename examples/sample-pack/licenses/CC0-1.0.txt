@@ -1,0 +1,12 @@
+MilkRust Sample Pack — CC0 1.0 Universal
+
+The MilkRust sample presets and pack metadata in this directory are dedicated
+to the public domain under the Creative Commons CC0 1.0 Universal dedication.
+You may copy, modify, distribute, and use these materials without asking
+permission. See the full legal text at:
+
+https://creativecommons.org/publicdomain/zero/1.0/legalcode
+
+This dedication applies only to the MilkRust-authored sample content in this
+pack. It does not change the license of MilkRust source code or any other
+third-party content.

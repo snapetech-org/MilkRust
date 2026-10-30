@@ -1,0 +1,13 @@
+[preset00]
+name=Amber Rings 1
+decay=0.94
+wave_r=0.15
+wave_g=0.45
+wave_b=0.8
+wave_a=0.15
+wave_scale=0.6
+zoom=1.0
+rot=0.0
+per_frame_1=q1=0.2+0.3*bass_att;
+warp_shader_1=shader_body { ret=tex2D(sampler_main,uv).rgb*0.94; }
+comp_shader_1=shader_body { float2 p=(uv-0.5)*2; float r=length(p); float edge=abs(frac(r*8-time*0.08+0.0)-0.5); float v=1-smoothstep(0.03,0.10,edge); ret=float3(v,0.2+v*0.5,0.08+r*0.15); ret=saturate(ret*(0.75+q1)); }

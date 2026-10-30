@@ -1,0 +1,26 @@
+# ng-runner-policy: private-jit-only-v1
+name: Catalog release preflight (no credentials)
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: milkrust-catalog-release-preflight
+  cancel-in-progress: false
+jobs:
+  preflight:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ${{ fromJSON(format('{{"group":"ng-shared-main-jit","labels":["self-hosted","linux","x64","ng-shared-main-milkrust","ng-main-run-{0}","gha-{0}-catalog-preflight"]}}', github.run_id)) }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Check source-controlled release preparation only
+        run: python3 tools/catalog_release_preflight.py --output "$RUNNER_TEMP/catalog-release-preflight.json"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: catalog-release-preflight-${{ github.sha }}
+          path: ${{ runner.temp }}/catalog-release-preflight.json
+          if-no-files-found: error
+          retention-days: 14

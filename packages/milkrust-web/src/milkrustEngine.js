@@ -1,3 +1,4 @@
+import { readMilkRustPresetResponse } from './presetText.js';
 const milkrustPresets = [
   {
     name: 'MilkRust grid smoke',
@@ -228,6 +229,9 @@ export const loadMilkRustPack = async (packUrl, { fetchImpl = globalThis.fetch }
   const plugins = await loadMilkRustPackPlugins(validation, { fetchImpl });
   return {
     ...validation,
+    valid: validation.valid && plugins.valid,
+    errors: [...(validation.errors || []), ...plugins.errors],
+    warnings: [...(validation.warnings || []), ...plugins.warnings],
     plugins,
     manifest: validation.manifest,
     presets,
@@ -262,7 +266,7 @@ export const loadMilkRustPackPresetSource = async (
   if (!response.ok) {
     throw new Error(`failed to load preset ${preset?.file || preset?.id || '<unknown>'}`);
   }
-  return response.text();
+  return readMilkRustPresetResponse(response);
 };
 
 export const loadMilkRustPackPlugins = async (
@@ -279,21 +283,8 @@ export const loadMilkRustPackPlugins = async (
   const plugins = await Promise.all(normalized.plugins.map(async (plugin) => {
     try {
       if (plugin.kind === 'js') {
-        if (!plugin.url) {
-          warnings.push(`plugin ${plugin.id || '<missing>'} has no url`);
-          return null;
-        }
-        const loaded = await import(/* @vite-ignore */ plugin.url);
-        const api = loaded?.default ?? loaded;
-        if (!api || (typeof api !== 'object' && typeof api !== 'function')) {
-          throw new Error(`plugin ${plugin.id || '<missing>'} has no export object`);
-        }
-        return {
-          ...plugin,
-          source: 'module',
-          api,
-          module: loaded,
-        };
+        errors.push(`plugin ${plugin.id || '<missing>'}: executable pack plugins are disabled; only data entries may be loaded from a pack`);
+        return null;
       }
 
       if (!plugin.url) {
@@ -329,33 +320,88 @@ export const loadMilkRustPackPlugins = async (
 
 let rustModulePromise;
 let rustModuleInitPromise;
+const hlslInitializations = new WeakMap();
 
 const loadMilkRustModule = async (modulePath = globalThis.__milkrustModulePath || '/milkrust_wasm.js') => {
-  if (globalThis.__milkrustModule) {
-    return globalThis.__milkrustModule;
+  let rustModule = globalThis.__milkrustModule;
+  if (!rustModule) {
+    if (!rustModulePromise) {
+      rustModulePromise = import(/* @vite-ignore */ modulePath).catch((error) => {
+        rustModulePromise = undefined;
+        throw error;
+      });
+    }
+    rustModule = await rustModulePromise;
+    if (typeof rustModule.default === 'function' && !rustModuleInitPromise) {
+      const wasmPath = modulePath.replace(/\.js(?:\?.*)?$/, '_bg.wasm');
+      rustModuleInitPromise = Promise.resolve(rustModule.default({ module_or_path: wasmPath })).catch((error) => {
+        rustModuleInitPromise = undefined;
+        throw error;
+      });
+    }
+    await rustModuleInitPromise;
   }
-  if (!rustModulePromise) {
-    rustModulePromise = import(/* @vite-ignore */ modulePath);
+  if (typeof rustModule.setTextureDecoderWorkerUrl === 'function') {
+    const decoderUrl = new URL('milkrust_texture_decoder.js', absoluteMilkRustUrl(modulePath)).href;
+    if (globalThis.location?.origin && new URL(decoderUrl).origin === globalThis.location.origin) {
+      rustModule.setTextureDecoderWorkerUrl(decoderUrl);
+    }
   }
-  const rustModule = await rustModulePromise;
-  if (typeof rustModule.default === 'function' && !rustModuleInitPromise) {
-    const wasmPath = modulePath.replace(/\.js(?:\?.*)?$/, '_bg.wasm');
-    rustModuleInitPromise = rustModule.default({ module_or_path: wasmPath });
+  if (typeof rustModule.initializeHlslCompiler === 'function' && !hlslInitializations.has(rustModule)) {
+    const compilerUrl = new URL('milkrust_hlsl.js', absoluteMilkRustUrl(modulePath)).href;
+    const ready = Promise.resolve().then(() => rustModule.initializeHlslCompiler(compilerUrl)).catch((error) => {
+      hlslInitializations.delete(rustModule);
+      throw error;
+    });
+    hlslInitializations.set(rustModule, ready);
   }
-  await rustModuleInitPromise;
+  await hlslInitializations.get(rustModule);
   return rustModule;
 };
 
-const createFrameReader = (audioContext, audioNode) => {
+const createFrameReader = (audioContext, audioNode, enableStereo = false) => {
   const analyser = audioContext.createAnalyser();
   analyser.fftSize = 2048;
   audioNode.connect(analyser);
 
   const waveform = new Uint8Array(analyser.fftSize);
   const frequency = new Uint8Array(analyser.frequencyBinCount);
+  const stereoConnections = [];
+  let stereoAnalysers = null;
+  let channelData = null;
+  if (enableStereo && typeof audioContext.createChannelSplitter === 'function' &&
+      typeof audioContext.createGain === 'function') {
+    try {
+      const channels = [audioContext.createAnalyser(), audioContext.createAnalyser()];
+      if (channels.every((channel) => typeof channel.getFloatTimeDomainData === 'function')) {
+        const input = audioContext.createGain();
+        // Upmix mono and downmix multichannel to the native stereo contract.
+        // The splitter itself stays discrete; the gain node performs the mix.
+        input.channelCount = 2;
+        input.channelCountMode = 'explicit';
+        input.channelInterpretation = 'speakers';
+        const splitter = audioContext.createChannelSplitter(2);
+        channels.forEach((channel) => { channel.fftSize = 4096; });
+        const connect = (from, to, output = 0) => {
+          from.connect(to, output, 0);
+          stereoConnections.push([from, to]);
+        };
+        connect(audioNode, input);
+        connect(input, splitter);
+        channels.forEach((channel, index) => connect(splitter, channel, index));
+        stereoAnalysers = channels;
+        channelData = channels.map((channel) => new Float32Array(channel.fftSize));
+      }
+    } catch (error) {
+      stereoConnections.forEach(([from, to]) => { try { from.disconnect(to); } catch {} });
+      try { audioNode.disconnect(analyser); } catch {}
+      throw error;
+    }
+  }
 
   return {
     disconnect: () => {
+      stereoConnections.forEach(([from, to]) => { try { from.disconnect(to); } catch {} });
       try {
         audioNode.disconnect(analyser);
       } catch {
@@ -366,7 +412,23 @@ const createFrameReader = (audioContext, audioNode) => {
       analyser.getByteTimeDomainData(waveform);
       analyser.getByteFrequencyData(frequency);
       const spectrum = Array.from(frequency);
+      let pcmStereo;
+      if (stereoAnalysers) {
+        pcmStereo = new Float32Array(1024);
+        const ratio = (Number(audioContext.sampleRate) || 44100) / 44100;
+        stereoAnalysers.forEach((channel, index) => {
+          const data = channelData[index];
+          channel.getFloatTimeDomainData(data);
+          for (let frame = 0; frame < 512; frame += 1) {
+            const position = Math.max(0, data.length - 1 - (511 - frame) * ratio);
+            const lower = Math.floor(position);
+            const upper = Math.min(lower + 1, data.length - 1);
+            pcmStereo[frame * 2 + index] = data[lower] + (data[upper] - data[lower]) * (position - lower);
+          }
+        });
+      }
       return {
+        pcmStereo,
         bands: getAudioBands(spectrum),
         samples: Array.from(waveform, (value) => (value - 128) / 128),
         spectrum,
@@ -521,9 +583,11 @@ export const createMilkRustEngine = async ({
 }) => {
   const rustModule = await loadMilkRustModule(modulePath);
   const rustEngine = new rustModule.MilkRustEngine(canvas);
-  const frameReader = createFrameReader(audioContext, audioNode);
+  const frameReader = createFrameReader(audioContext, audioNode, typeof rustEngine.setPcmStereo === 'function');
   const webGpuStatus = getWebGpuStatus(rendererBackend);
   let presetIndex = 0;
+  let wasWaitingForTextures = false;
+  let wasWaitingForContext = false;
   let presetLibrary = [...milkrustPresets];
   let activePresetTitle = rustEngine.loadPresetText(
     presetLibrary[presetIndex].source,
@@ -540,6 +604,7 @@ export const createMilkRustEngine = async ({
     mouse_x: 0.5,
     mouse_y: 0.5,
   };
+  let mouseClickPending = false;
   let pluginHooks = createPluginHooks();
   let installedPlugins = [];
   let pluginState = {
@@ -844,10 +909,29 @@ export const createMilkRustEngine = async ({
       return result;
     },
     render: () => {
+      if (typeof rustEngine.renderStatusJson === 'function' &&
+          parseJson(rustEngine.renderStatusJson())?.state === 'context-lost') {
+        wasWaitingForContext = true;
+        return { presetName: activePresetTitle, waitingForContext: true };
+      }
+      const contextRecovered = wasWaitingForContext;
+      wasWaitingForContext = false;
       const now = audioContext.currentTime || 0;
+      const localClock = new Date();
+      rustEngine.setClockState(
+        localClock.getFullYear(),
+        localClock.getMonth() + 1,
+        localClock.getDate(),
+        localClock.getDay(),
+        localClock.getHours(),
+        localClock.getMinutes(),
+        localClock.getSeconds(),
+        localClock.getMilliseconds(),
+      );
       const frame = frameReader.read();
       runFrameHooks(now, frame);
       const automatedPresetName = maybeAdvanceAutomatedPreset(frame, now);
+      if (frame.pcmStereo) rustEngine.setPcmStereo(frame.pcmStereo, now);
       rustEngine.render(
         now,
         frame.bands.bass,
@@ -855,27 +939,66 @@ export const createMilkRustEngine = async ({
         frame.bands.treble,
         toCsv(frame.samples),
         toCsv(frame.spectrum.map((value) => value / 255)),
-        mouseState.mouse_down,
+        mouseState.mouse_down || mouseClickPending ? 1 : 0,
         mouseState.mouse_x,
         mouseState.mouse_y,
         mouseState.mouse_dx,
         mouseState.mouse_dy,
       );
+      mouseClickPending = false;
+      mouseState.mouse_dx = 0;
+      mouseState.mouse_dy = 0;
+      const renderStatus = typeof rustEngine.renderStatusJson === 'function'
+        ? parseJson(rustEngine.renderStatusJson()) : null;
+      if (renderStatus?.state === 'failed') {
+        return { error: renderStatus.error || 'Preset rendering failed', fidelity: 'not-assessed' };
+      }
+      const waitingForTextures = renderStatus?.state === 'waiting-textures';
+      const textureStateChanged = wasWaitingForTextures !== waitingForTextures;
+      wasWaitingForTextures = waitingForTextures;
       runPluginHooks('onRenderFrame', {
         now,
         frame,
         presetIndex,
         presetName: activePresetTitle,
       });
-      return automatedPresetName ? { presetName: automatedPresetName } : null;
+      return automatedPresetName || waitingForTextures || textureStateChanged || contextRecovered
+        ? { presetName: automatedPresetName || activePresetTitle, waitingForTextures,
+          ...(contextRecovered ? { waitingForContext: false } : {}) } : null;
     },
     resize: (width, height) => {
       rustEngine.resize(width, height);
     },
     setMouseState: (nextMouseState = {}) => {
+      if (!nextMouseState || typeof nextMouseState !== 'object' || Array.isArray(nextMouseState)) {
+        throw new TypeError('Mouse state must be an object');
+      }
+      const has = (key) => Object.prototype.hasOwnProperty.call(nextMouseState, key);
+      const finite = (key, current, minimum, maximum) => {
+        if (!has(key)) return current;
+        const value = nextMouseState[key];
+        if (typeof value !== 'number' || !Number.isFinite(value)) {
+          throw new TypeError(`Mouse ${key} must be finite`);
+        }
+        return Math.min(maximum, Math.max(minimum, value));
+      };
+      let mouseDown = mouseState.mouse_down;
+      if (has('mouse_down')) {
+        const value = nextMouseState.mouse_down;
+        if (value !== 0 && value !== 1) throw new TypeError('Mouse button state must be 0 or 1');
+        if (mouseDown === 0 && value === 1) mouseClickPending = true;
+        mouseDown = value;
+      }
+      const mouseDx = finite('mouse_dx', 0, -1, 1);
+      const mouseDy = finite('mouse_dy', 0, -1, 1);
       mouseState = {
         ...mouseState,
         ...nextMouseState,
+        mouse_down: mouseDown,
+        mouse_x: finite('mouse_x', mouseState.mouse_x, 0, 1),
+        mouse_y: finite('mouse_y', mouseState.mouse_y, 0, 1),
+        mouse_dx: Math.min(1, Math.max(-1, mouseState.mouse_dx + mouseDx)),
+        mouse_dy: Math.min(1, Math.max(-1, mouseState.mouse_dy + mouseDy)),
       };
       runPluginHooks('onInput', {
         state: mouseState,

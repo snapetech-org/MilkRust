@@ -2,7 +2,9 @@
 members = [
     "crates/milkrust-cli",
     "crates/milkrust-core",
+    "crates/milkrust-native",
     "crates/milkrust-expr",
+    "crates/milkrust-hlsl",
     "crates/milkrust-pack",
     "crates/milkrust-renderer-core",
     "crates/milkrust-renderer-headless",
@@ -16,7 +18,7 @@ edition = "2021"
 license = "AGPL-3.0-only"
 homepage = "https://github.com/snapetech/MilkRust"
 repository = "https://github.com/snapetech/MilkRust"
-rust-version = "1.76"
+rust-version = "1.80.1"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

@@ -1,0 +1,58 @@
+# ng-runner-policy: private-jit-only-v1
+name: Prepare preset pack review candidates
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: milkrust-cleared-pack-candidates
+  cancel-in-progress: false
+jobs:
+  prepare:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ${{ fromJSON(format('{{"group":"ng-shared-main-jit","labels":["self-hosted","linux","x64","ng-shared-main-milkrust","ng-main-run-{0}","gha-{0}-cleared-pack-candidates"]}}', github.run_id)) }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Convert bounded equations and shaders into non-promotable review candidates
+        env:
+          SOURCE_REVISION: ${{ github.sha }}
+        run: >-
+          python3 tools/build_cleared_pack_candidates.py
+          --source-revision "$SOURCE_REVISION"
+          --output "$RUNNER_TEMP/preset-pack-review-candidates"
+      - name: Package original CC0 studies and pending qualification inventories
+        env:
+          SOURCE_REVISION: ${{ github.sha }}
+        run: >-
+          python3 tools/build_original_pack_candidates.py
+          --source-revision "$SOURCE_REVISION"
+          --output "$RUNNER_TEMP/original-pack-candidates"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: original-pack-candidates-${{ github.sha }}
+          path: ${{ runner.temp }}/original-pack-candidates/
+          if-no-files-found: error
+          retention-days: 14
+      - name: Package explicitly licensed upstream presets with provenance checks
+        env:
+          SOURCE_REVISION: ${{ github.sha }}
+        run: >-
+          python3 tools/build_original_pack_candidates.py
+          --source-root content/licensed-packs
+          --source-revision "$SOURCE_REVISION"
+          --output "$RUNNER_TEMP/licensed-pack-candidates"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: preset-pack-review-candidates-${{ github.sha }}
+          path: ${{ runner.temp }}/preset-pack-review-candidates/
+          if-no-files-found: error
+          retention-days: 14
+      - uses: actions/upload-artifact@v7
+        with:
+          name: licensed-pack-candidates-${{ github.sha }}
+          path: ${{ runner.temp }}/licensed-pack-candidates/
+          if-no-files-found: error
+          retention-days: 14

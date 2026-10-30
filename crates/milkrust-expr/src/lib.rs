@@ -25,6 +25,12 @@
 use std::collections::BTreeMap;
 use std::fmt;
 
+mod butterchurn;
+pub use butterchurn::supports_function as is_butterchurn_function_supported;
+
+pub mod limits;
+use limits::{ExpressionBudget, MAX_EXPRESSION_TOKENS, validate_expression_source};
+
 /// Error returned by MilkRust expression evaluation.
 #[derive(Clone, Debug, PartialEq)]
 pub enum MilkRustError {
@@ -242,10 +248,23 @@ pub fn strip_milkrust_equation_comments(text: &str) -> String {
 /// assert_eq!(tokens.len(), 3);
 /// ```
 pub fn tokenize_milkrust_expression(expression: &str) -> Result<Vec<MilkRustToken>, MilkRustError> {
+    limits::check_frame_budget().map_err(|message| MilkRustError::Parse {
+        expression: expression.chars().take(256).collect(), message,
+    })?;
+    let result = tokenize_milkrust_expression_inner(expression);
+    if let Err(error) = &result { limits::record_frame_error(&error.to_string()); }
+    result
+}
+
+fn tokenize_milkrust_expression_inner(expression: &str) -> Result<Vec<MilkRustToken>, MilkRustError> {
+    validate_expression_source(expression).map_err(|message| MilkRustError::Tokenize {
+        expression: expression.chars().take(256).collect(), position: 0, message,
+    })?;
     let chars = expression.chars().collect::<Vec<_>>();
     let mut tokens = Vec::new();
     let mut index = 0usize;
     while index < chars.len() {
+        if tokens.len() > MAX_EXPRESSION_TOKENS { return Err(MilkRustError::Tokenize { expression: expression.chars().take(256).collect(), position: index, message: "Expression token limit exceeded".to_string() }); }
         let ch = chars[index];
         if ch.is_whitespace() {
             index += 1;
@@ -306,7 +325,7 @@ pub fn tokenize_milkrust_expression(expression: &str) -> Result<Vec<MilkRustToke
         if let Some(two) = two.as_deref().filter(|value| {
             matches!(
                 *value,
-                "&&" | "||" | "<<" | ">>" | "==" | "!=" | "<=" | ">=" | "+=" | "-=" | "*=" | "/="
+                "&&" | "||" | "<<" | ">>" | "==" | "!=" | "<=" | ">=" | "+=" | "-=" | "*=" | "/=" | "%=" | "^=" | "&=" | "|="
             )
         }) {
             tokens.push(MilkRustToken::Op(two.to_string()));
@@ -344,7 +363,29 @@ pub fn tokenize_milkrust_expression(expression: &str) -> Result<Vec<MilkRustToke
             message: format!("Unsupported character: '{}'", ch),
         });
     }
+    if tokens.len() > MAX_EXPRESSION_TOKENS { return Err(MilkRustError::Tokenize { expression: expression.chars().take(256).collect(), position: index, message: "Expression token limit exceeded".to_string() }); }
     Ok(tokens)
+}
+
+fn milkrust_truthy(value: f64) -> bool {
+    value.abs() > 0.00001
+}
+
+// checked_rem covers zero and i64::MIN % -1 without panicking on preset input.
+fn milkrust_remainder(left: f64, right: f64) -> f64 {
+    (left.trunc() as i64).checked_rem(right.trunc() as i64).unwrap_or(0) as f64
+}
+
+fn milkrust_pow(base: f64, exponent: f64) -> f64 {
+    if base.abs() < 0.00001 && exponent < 0.0 {
+        return 0.0;
+    }
+    let value = base.powf(exponent);
+    if value.is_finite() {
+        value
+    } else {
+        0.0
+    }
 }
 
 fn milkrust_number(scope: &BTreeMap<String, MilkRustValue>, name: &str) -> f64 {
@@ -412,13 +453,16 @@ fn milkrust_pseudo_random_unit(scope: &BTreeMap<String, MilkRustValue>, counter:
 }
 
 const RUSTYMILK_MAX_LOOP_ITERATIONS: usize = 200_000;
+const MILKRUST_MEMORY_LENGTH: usize = 8_388_608;
 
 struct MilkRustExpressionParser<'a> {
+    budget: ExpressionBudget,
     rand_counter: usize,
     scope: BTreeMap<String, MilkRustValue>,
     tokens: &'a [MilkRustToken],
     index: usize,
     expression: &'a str,
+    evaluate: bool,
 }
 
 impl<'a> MilkRustExpressionParser<'a> {
@@ -427,13 +471,16 @@ impl<'a> MilkRustExpressionParser<'a> {
         scope: BTreeMap<String, MilkRustValue>,
         rand_counter: usize,
         expression: &'a str,
+        evaluate: bool,
     ) -> Self {
         Self {
+            budget: ExpressionBudget::default(),
             rand_counter,
             scope,
             tokens,
             index: 0,
             expression,
+            evaluate,
         }
     }
 
@@ -477,6 +524,20 @@ impl<'a> MilkRustExpressionParser<'a> {
     }
 
     fn evaluate_arg_tokens(&mut self, tokens: &[MilkRustToken]) -> Result<f64, String> {
+        let _depth = self.budget.enter()?;
+        self.budget.spend(tokens.len())?;
+        if !self.evaluate {
+            let mut parser = MilkRustExpressionParser::new(
+                tokens,
+                self.scope.clone(),
+                self.rand_counter,
+                self.expression,
+                false,
+            );
+            parser.budget = self.budget.clone();
+            parser.parse()?;
+            return Ok(0.0);
+        }
         if let Some((target_tokens, operator, value_tokens)) = self.assignment_arg_parts(tokens) {
             let Some(key) = self.lvalue_key(target_tokens)? else {
                 return Err(format!("{operator} requires a variable or buffer target."));
@@ -492,7 +553,9 @@ impl<'a> MilkRustExpressionParser<'a> {
             self.scope.clone(),
             self.rand_counter,
             self.expression,
+            self.evaluate,
         );
+        parser.budget = self.budget.clone();
         let value = parser.parse()?;
         self.scope = parser.scope;
         self.rand_counter = parser.rand_counter;
@@ -509,7 +572,7 @@ impl<'a> MilkRustExpressionParser<'a> {
                 MilkRustToken::Op(value) if value == "(" => depth += 1,
                 MilkRustToken::Op(value) if value == ")" => depth = depth.saturating_sub(1),
                 MilkRustToken::Op(value)
-                    if depth == 0 && matches!(value.as_str(), "=" | "+=" | "-=" | "*=" | "/=") =>
+                    if depth == 0 && matches!(value.as_str(), "=" | "+=" | "-=" | "*=" | "/=" | "%=" | "^=" | "&=" | "|=") =>
                 {
                     return Some((&tokens[..index], value, &tokens[index + 1..]));
                 }
@@ -519,21 +582,21 @@ impl<'a> MilkRustExpressionParser<'a> {
         None
     }
 
-    fn assign_arg_tokens(
-        &mut self,
-        target_tokens: &[MilkRustToken],
-        value: f64,
-    ) -> Result<f64, String> {
-        let Some(key) = self.lvalue_key(target_tokens)? else {
-            return Err("assign() requires a variable or buffer target.".to_string());
-        };
-        self.scope.insert(key, MilkRustValue::Number(value));
-        Ok(value)
-    }
-
     fn lvalue_key(&mut self, tokens: &[MilkRustToken]) -> Result<Option<String>, String> {
+        let _depth = self.budget.enter()?;
+        self.budget.spend(tokens.len())?;
         match tokens {
             [MilkRustToken::Ident(name)] => Ok(Some(name.to_ascii_lowercase())),
+            [MilkRustToken::Ident(name), MilkRustToken::Op(open), rest @ .., MilkRustToken::Op(close)]
+                if open == "(" && close == ")" && name.eq_ignore_ascii_case("if") =>
+            {
+                let args = split_milkrust_call_tokens(rest);
+                if args.len() < 3 {
+                    return Ok(None);
+                }
+                let condition = self.evaluate_arg_tokens(args[0])?;
+                self.lvalue_key(if milkrust_truthy(condition) { args[1] } else { args[2] })
+            }
             [MilkRustToken::Ident(name), MilkRustToken::Op(open), rest @ .., MilkRustToken::Op(close)]
                 if open == "("
                     && close == ")"
@@ -543,8 +606,72 @@ impl<'a> MilkRustExpressionParser<'a> {
                 let index = self.evaluate_arg_tokens(rest)?;
                 Ok(Some(milkrust_buffer_key(name, index)))
             }
+            [MilkRustToken::Ident(name), MilkRustToken::Op(open), rest @ .., MilkRustToken::Op(close)]
+                if open == "("
+                    && close == ")"
+                    && (name.eq_ignore_ascii_case("memcpy")
+                        || name.eq_ignore_ascii_case("memset")) =>
+            {
+                let args = split_milkrust_call_tokens(rest);
+                self.memory_intrinsic_target(name, &args)
+            }
             _ => Ok(None),
         }
+    }
+
+    fn memory_intrinsic_target(
+        &mut self,
+        name: &str,
+        args: &[&[MilkRustToken]],
+    ) -> Result<Option<String>, String> {
+        if args.len() < 3 {
+            return Ok(None);
+        }
+        let destination = self.evaluate_arg_tokens(args[0])?
+            .trunc()
+            .clamp(0.0, (MILKRUST_MEMORY_LENGTH - 1) as f64) as usize;
+        if name.eq_ignore_ascii_case("memset") {
+            let value = self.evaluate_arg_tokens(args[1])?;
+            let requested = self.evaluate_arg_tokens(args[2])?
+                .trunc()
+                .clamp(0.0, RUSTYMILK_MAX_LOOP_ITERATIONS as f64) as usize;
+            let count = requested.min(MILKRUST_MEMORY_LENGTH - destination);
+            self.budget.spend(count)?;
+            for offset in 0..count {
+                self.scope.insert(
+                    milkrust_buffer_key("megabuf", (destination + offset) as f64),
+                    MilkRustValue::Number(value),
+                );
+            }
+        } else if name.eq_ignore_ascii_case("memcpy") {
+            let source = self.evaluate_arg_tokens(args[1])?
+                .trunc()
+                .clamp(0.0, (MILKRUST_MEMORY_LENGTH - 1) as f64) as usize;
+            let requested = self.evaluate_arg_tokens(args[2])?
+                .trunc()
+                .clamp(0.0, RUSTYMILK_MAX_LOOP_ITERATIONS as f64) as usize;
+            let count = requested
+                .min(MILKRUST_MEMORY_LENGTH - destination)
+                .min(MILKRUST_MEMORY_LENGTH - source);
+            self.budget.spend(count.saturating_mul(2))?;
+            let values = (0..count)
+                .map(|offset| {
+                    milkrust_number(
+                        &self.scope,
+                        &milkrust_buffer_key("megabuf", (source + offset) as f64),
+                    )
+                })
+                .collect::<Vec<_>>();
+            for (offset, value) in values.into_iter().enumerate() {
+                self.scope.insert(
+                    milkrust_buffer_key("megabuf", (destination + offset) as f64),
+                    MilkRustValue::Number(value),
+                );
+            }
+        } else {
+            return Ok(None);
+        }
+        Ok(Some(milkrust_buffer_key("megabuf", destination as f64)))
     }
 
     fn call_special_function(
@@ -558,7 +685,25 @@ impl<'a> MilkRustExpressionParser<'a> {
                     return Ok(Some(0.0));
                 }
                 let value = self.evaluate_arg_tokens(args[1])?;
-                self.assign_arg_tokens(args[0], value).map(Some)
+                if let Some(key) = self.lvalue_key(args[0])? {
+                    self.scope.insert(key, MilkRustValue::Number(value));
+                }
+                Ok(Some(value))
+            }
+            "if" => {
+                if args.len() < 3 {
+                    return Ok(Some(0.0));
+                }
+                let condition = self.evaluate_arg_tokens(args[0])?;
+                let choose_true = milkrust_truthy(condition);
+                let skipped = if choose_true { args[2] } else { args[1] };
+                let selected = if choose_true { args[1] } else { args[2] };
+                let outer_evaluate = self.evaluate;
+                self.evaluate = false;
+                let skipped_result = self.evaluate_arg_tokens(skipped);
+                self.evaluate = outer_evaluate;
+                skipped_result?;
+                self.evaluate_arg_tokens(selected).map(Some)
             }
             "exec2" | "exec3" => {
                 let mut first = 0.0;
@@ -581,6 +726,7 @@ impl<'a> MilkRustExpressionParser<'a> {
                     as usize;
                 let mut last = 0.0;
                 for _ in 0..count {
+                    self.budget.spend(1)?;
                     for arg in &args[1..] {
                         last = self.evaluate_arg_tokens(arg)?;
                     }
@@ -593,8 +739,9 @@ impl<'a> MilkRustExpressionParser<'a> {
                 }
                 let mut last = 0.0;
                 for _ in 0..RUSTYMILK_MAX_LOOP_ITERATIONS {
+                    self.budget.spend(1)?;
                     let condition = self.evaluate_milkrust_while_condition(args[0])?;
-                    if condition == 0.0 {
+                    if !milkrust_truthy(condition) {
                         break;
                     }
                     last = condition;
@@ -604,32 +751,19 @@ impl<'a> MilkRustExpressionParser<'a> {
                 }
                 Ok(Some(last))
             }
-            "memcpy" => {
-                if args.len() < 3 {
-                    return Ok(Some(0.0));
+            "freembuf" => {
+                if let Some(index) = args.first() {
+                    self.evaluate_arg_tokens(index)?;
                 }
-                let dest = self.evaluate_arg_tokens(args[0])?.trunc().max(0.0) as usize;
-                let source = self.evaluate_arg_tokens(args[1])?.trunc().max(0.0) as usize;
-                let count = self
-                    .evaluate_arg_tokens(args[2])?
-                    .trunc()
-                    .clamp(0.0, RUSTYMILK_MAX_LOOP_ITERATIONS as f64)
-                    as usize;
-                let values = (0..count)
-                    .map(|offset| {
-                        milkrust_number(
-                            &self.scope,
-                            &milkrust_buffer_key("megabuf", (source + offset) as f64),
-                        )
-                    })
-                    .collect::<Vec<_>>();
-                for (offset, value) in values.into_iter().enumerate() {
-                    self.scope.insert(
-                        milkrust_buffer_key("megabuf", (dest + offset) as f64),
-                        MilkRustValue::Number(value),
-                    );
-                }
-                Ok(Some(count as f64))
+                Ok(Some(0.0))
+            }
+            "memcpy" | "memset" => {
+                let key = self.memory_intrinsic_target(name, args)?;
+                Ok(Some(
+                    key.as_ref()
+                        .map(|key| milkrust_number(&self.scope, key))
+                        .unwrap_or(0.0),
+                ))
             }
             _ => Ok(None),
         }
@@ -652,7 +786,7 @@ impl<'a> MilkRustExpressionParser<'a> {
                     return Ok(0.0);
                 }
                 let condition = self.evaluate_arg_tokens(args[0])?;
-                if condition != 0.0 {
+                if milkrust_truthy(condition) {
                     for arg in &args[1..] {
                         self.evaluate_arg_tokens(arg)?;
                     }
@@ -681,19 +815,31 @@ impl<'a> MilkRustExpressionParser<'a> {
     }
 
     fn parse(&mut self) -> Result<f64, String> {
+        let result = self.parse_inner();
+        if let Err(error) = &result { limits::record_frame_error(error); }
+        result
+    }
+
+    fn parse_inner(&mut self) -> Result<f64, String> {
+        let _depth = self.budget.enter()?;
+        self.budget.spend(self.tokens.len())?;
         if self.index == 0 {
             if let Some((assignment_index, operator)) =
                 find_milkrust_top_level_assignment_token(self.tokens)
             {
                 let target_tokens = &self.tokens[..assignment_index];
                 let expression_tokens = &self.tokens[assignment_index + 1..];
-                let current = self
-                    .lvalue_key(target_tokens)?
-                    .map(|key| milkrust_number(&self.scope, &key))
-                    .unwrap_or(0.0);
+                if !self.evaluate {
+                    self.evaluate_arg_tokens(expression_tokens)?;
+                    self.index = self.tokens.len();
+                    return Ok(0.0);
+                }
+                let key = self.lvalue_key(target_tokens)?
+                    .ok_or_else(|| "Assignment requires a variable or buffer target.".to_string())?;
+                let current = milkrust_number(&self.scope, &key);
                 let next = self.evaluate_arg_tokens(expression_tokens)?;
                 let value = apply_milkrust_assignment_operator(current, operator, next);
-                self.assign_arg_tokens(target_tokens, value)?;
+                self.scope.insert(key, MilkRustValue::Number(value));
                 self.index = self.tokens.len();
                 return Ok(value);
             }
@@ -707,7 +853,7 @@ impl<'a> MilkRustExpressionParser<'a> {
 
     fn parse_primary(&mut self) -> Result<f64, String> {
         match self.consume() {
-            Some(MilkRustToken::Number(value)) => Ok(value),
+            Some(MilkRustToken::Number(value)) => Ok(if self.evaluate { value } else { 0.0 }),
             Some(MilkRustToken::Op(op)) if op == "(" => {
                 let value = self.parse_conditional()?;
                 if !self.match_op(")") {
@@ -718,6 +864,12 @@ impl<'a> MilkRustExpressionParser<'a> {
             Some(MilkRustToken::Ident(name)) => {
                 if self.match_op("(") {
                     let args = self.remaining_call_args(&name)?;
+                    if !self.evaluate {
+                        for arg in args {
+                            self.evaluate_arg_tokens(arg)?;
+                        }
+                        return Ok(0.0);
+                    }
                     if let Some(value) = self.call_special_function(&name, &args)? {
                         return Ok(value);
                     }
@@ -727,10 +879,14 @@ impl<'a> MilkRustExpressionParser<'a> {
                         .collect::<Result<Vec<_>, _>>()?;
                     self.call_function(&name, &values)
                 } else {
-                    Ok(match name.as_str() {
-                        "e" => std::f64::consts::E,
-                        "pi" => std::f64::consts::PI,
-                        _ => milkrust_number(&self.scope, &name),
+                    Ok(if self.evaluate {
+                        match name.as_str() {
+                            "e" => std::f64::consts::E,
+                            "pi" => std::f64::consts::PI,
+                            _ => milkrust_number(&self.scope, &name),
+                        }
+                    } else {
+                        0.0
                     })
                 }
             }
@@ -740,6 +896,9 @@ impl<'a> MilkRustExpressionParser<'a> {
     }
 
     fn call_function(&mut self, name: &str, args: &[f64]) -> Result<f64, String> {
+        if let Some(result) = butterchurn::evaluate(name, args) {
+            return result;
+        }
         let arg = |index: usize, default: f64| args.get(index).copied().unwrap_or(default);
         let out = match name {
             "abs" => arg(0, 0.0).abs(),
@@ -749,15 +908,14 @@ impl<'a> MilkRustExpressionParser<'a> {
             "atan" => arg(0, 0.0).atan(),
             "atan2" => arg(0, 0.0).atan2(arg(1, 0.0)),
             "below" => (arg(0, 0.0) < arg(1, 0.0)) as i32 as f64,
-            "band" => ((arg(0, 0.0).trunc() as i64) & (arg(1, 0.0).trunc() as i64)) as f64,
-            "bor" => ((arg(0, 0.0).trunc() as i64) | (arg(1, 0.0).trunc() as i64)) as f64,
-            "bnot" => (!(arg(0, 0.0).trunc() as i64)) as f64,
-            "bxor" => ((arg(0, 0.0).trunc() as i64) ^ (arg(1, 0.0).trunc() as i64)) as f64,
+            "band" => (milkrust_truthy(arg(0, 0.0)) && milkrust_truthy(arg(1, 0.0))) as i32 as f64,
+            "bor" => (milkrust_truthy(arg(0, 0.0)) || milkrust_truthy(arg(1, 0.0))) as i32 as f64,
+            "bnot" => (arg(0, 0.0).abs() < 0.00001) as i32 as f64,
             "ceil" => arg(0, 0.0).ceil(),
             "cos" => arg(0, 0.0).cos(),
             "div" => {
                 let right = arg(1, 0.0);
-                if right == 0.0 {
+                if right.abs() < 0.00001 {
                     0.0
                 } else {
                     arg(0, 0.0) / right
@@ -790,13 +948,13 @@ impl<'a> MilkRustExpressionParser<'a> {
                 let values = milkrust_waveform_data(&self.scope);
                 milkrust_indexed_sample(&values, arg(0, 0.0))
             }
-            "if" => {
-                if arg(0, 0.0) != 0.0 {
-                    arg(1, 0.0)
-                } else {
-                    arg(2, 0.0)
-                }
-            }
+            "invsqrt" => {
+                let value = arg(0, 0.0);
+                let estimate = f64::from_bits(
+                    0x5fe6_eb50_c7b5_37a9u64.wrapping_sub(value.to_bits() >> 1),
+                );
+                estimate * (1.5 - value * 0.5 * estimate * estimate)
+            },
             "int" => arg(0, 0.0).trunc(),
             "log" => {
                 if arg(0, 0.0) <= 0.0 {
@@ -815,15 +973,8 @@ impl<'a> MilkRustExpressionParser<'a> {
             "max" => arg(0, 0.0).max(arg(1, 0.0)),
             "megabuf" => milkrust_buffer_number(&self.scope, name, arg(0, 0.0)),
             "min" => arg(0, 0.0).min(arg(1, 0.0)),
-            "mod" => {
-                let right = arg(1, 0.0);
-                if right == 0.0 {
-                    0.0
-                } else {
-                    arg(0, 0.0) % right
-                }
-            }
-            "pow" => arg(0, 0.0).powf(arg(1, 0.0)),
+            "mod" => milkrust_remainder(arg(0, 0.0), arg(1, 0.0)),
+            "pow" => milkrust_pow(arg(0, 0.0), arg(1, 0.0)),
             "rand" => {
                 let upper = arg(0, 1.0).trunc().max(0.0);
                 if upper <= 0.0 {
@@ -836,7 +987,10 @@ impl<'a> MilkRustExpressionParser<'a> {
                         .min(upper - 1.0)
                 }
             }
-            "sign" => arg(0, 0.0).signum(),
+            "sign" => {
+                let value = arg(0, 0.0);
+                (value > 0.0) as i32 as f64 - (value < 0.0) as i32 as f64
+            },
             "sigmoid" => {
                 let constraint = if arg(1, 1.0) == 0.0 { 1.0 } else { arg(1, 1.0) };
                 1.0 / (1.0 + (-arg(0, 0.0) * constraint).exp())
@@ -856,47 +1010,69 @@ impl<'a> MilkRustExpressionParser<'a> {
         Ok(if out.is_finite() { out } else { 0.0 })
     }
 
-    fn parse_unary(&mut self) -> Result<f64, String> {
+    fn parse_unary_sign(&mut self) -> Result<f64, String> {
+        let _depth = self.budget.enter()?;
         if self.match_op("+") {
-            return self.parse_unary();
+            return self.parse_unary_sign();
         }
         if self.match_op("-") {
-            return Ok(-self.parse_unary()?);
+            return Ok(-self.parse_unary_sign()?);
         }
         if self.match_op("!") {
-            return Ok((self.parse_unary()? == 0.0) as i32 as f64);
+            let value = self.parse_power()?;
+            return Ok(if self.evaluate {
+                (value.abs() < 0.00001) as i32 as f64
+            } else {
+                0.0
+            });
         }
         if self.match_op("~") {
-            return Ok((!(self.parse_unary()?.trunc() as i64)) as f64);
+            return Ok((!(self.parse_unary_sign()?.trunc() as i64)) as f64);
         }
         self.parse_primary()
     }
 
+    fn parse_power_operand(&mut self) -> Result<f64, String> {
+        let _depth = self.budget.enter()?;
+        if self.match_op("!") {
+            let value = self.parse_power()?;
+            return Ok(if self.evaluate {
+                (value.abs() < 0.00001) as i32 as f64
+            } else {
+                0.0
+            });
+        }
+        self.parse_unary_sign()
+    }
+
+    fn parse_power(&mut self) -> Result<f64, String> {
+        let mut value = self.parse_power_operand()?;
+        while self.match_op("^") {
+            let right = self.parse_power_operand()?;
+            value = milkrust_pow(value, right);
+        }
+        Ok(value)
+    }
+
     fn parse_factor(&mut self) -> Result<f64, String> {
-        let mut value = self.parse_unary()?;
+        let mut value = self.parse_power()?;
         while let Some(op) = self
             .peek_op()
             .filter(|op| matches!(*op, "*" | "/" | "%"))
             .map(str::to_string)
         {
             self.index += 1;
-            let right = self.parse_unary()?;
+            let right = self.parse_power()?;
             value = match op.as_str() {
                 "*" => value * right,
                 "/" => {
-                    if right == 0.0 {
+                    if right.abs() < 0.00001 {
                         0.0
                     } else {
                         value / right
                     }
                 }
-                "%" => {
-                    if right == 0.0 {
-                        0.0
-                    } else {
-                        value % right
-                    }
-                }
+                "%" => milkrust_remainder(value, right),
                 _ => value,
             };
         }
@@ -931,9 +1107,9 @@ impl<'a> MilkRustExpressionParser<'a> {
             self.index += 1;
             let right = self.parse_term()?;
             value = if op == "<<" {
-                ((value.trunc() as i64) << (right.trunc() as u32)) as f64
+                (value.trunc() as i64).wrapping_shl(right.trunc() as u32) as f64
             } else {
-                ((value.trunc() as i64) >> (right.trunc() as u32)) as f64
+                (value.trunc() as i64).wrapping_shr(right.trunc() as u32) as f64
             };
         }
         Ok(value)
@@ -969,18 +1145,10 @@ impl<'a> MilkRustExpressionParser<'a> {
         Ok(value)
     }
 
-    fn parse_bitwise_xor(&mut self) -> Result<f64, String> {
-        let mut value = self.parse_bitwise_and()?;
-        while self.match_op("^") {
-            value = ((value.trunc() as i64) ^ (self.parse_bitwise_and()?.trunc() as i64)) as f64;
-        }
-        Ok(value)
-    }
-
     fn parse_bitwise_or(&mut self) -> Result<f64, String> {
-        let mut value = self.parse_bitwise_xor()?;
+        let mut value = self.parse_bitwise_and()?;
         while self.match_op("|") {
-            value = ((value.trunc() as i64) | (self.parse_bitwise_xor()?.trunc() as i64)) as f64;
+            value = ((value.trunc() as i64) | (self.parse_bitwise_and()?.trunc() as i64)) as f64;
         }
         Ok(value)
     }
@@ -988,7 +1156,16 @@ impl<'a> MilkRustExpressionParser<'a> {
     fn parse_logical_and(&mut self) -> Result<f64, String> {
         let mut value = self.parse_bitwise_or()?;
         while self.match_op("&&") {
-            value = (value != 0.0 && self.parse_bitwise_or()? != 0.0) as i32 as f64;
+            let outer_evaluate = self.evaluate;
+            self.evaluate = outer_evaluate && milkrust_truthy(value);
+            let right_result = self.parse_bitwise_or();
+            self.evaluate = outer_evaluate;
+            let right = right_result?;
+            value = if outer_evaluate {
+                (milkrust_truthy(value) && milkrust_truthy(right)) as i32 as f64
+            } else {
+                0.0
+            };
         }
         Ok(value)
     }
@@ -996,25 +1173,43 @@ impl<'a> MilkRustExpressionParser<'a> {
     fn parse_logical_or(&mut self) -> Result<f64, String> {
         let mut value = self.parse_logical_and()?;
         while self.match_op("||") {
-            value = (value != 0.0 || self.parse_logical_and()? != 0.0) as i32 as f64;
+            let outer_evaluate = self.evaluate;
+            self.evaluate = outer_evaluate && !milkrust_truthy(value);
+            let right_result = self.parse_logical_and();
+            self.evaluate = outer_evaluate;
+            let right = right_result?;
+            value = if outer_evaluate {
+                (milkrust_truthy(value) || milkrust_truthy(right)) as i32 as f64
+            } else {
+                0.0
+            };
         }
         Ok(value)
     }
 
     fn parse_conditional(&mut self) -> Result<f64, String> {
+        let _depth = self.budget.enter()?;
         let condition = self.parse_logical_or()?;
         if !self.match_op("?") {
             return Ok(condition);
         }
-        let when_true = self.parse_conditional()?;
+        let outer_evaluate = self.evaluate;
+        let choose_true = milkrust_truthy(condition);
+        self.evaluate = outer_evaluate && choose_true;
+        let when_true_result = self.parse_conditional();
+        self.evaluate = outer_evaluate;
+        let when_true = when_true_result?;
         if !self.match_op(":") {
             return Err("Unclosed MilkRust conditional expression.".to_string());
         }
-        let when_false = self.parse_conditional()?;
-        Ok(if condition != 0.0 {
-            when_true
+        self.evaluate = outer_evaluate && !choose_true;
+        let when_false_result = self.parse_conditional();
+        self.evaluate = outer_evaluate;
+        let when_false = when_false_result?;
+        Ok(if outer_evaluate {
+            if choose_true { when_true } else { when_false }
         } else {
-            when_false
+            0.0
         })
     }
 }
@@ -1070,6 +1265,10 @@ fn find_milkrust_top_level_assignment_token(
                 "-=" => return Some((index, "-=")),
                 "*=" => return Some((index, "*=")),
                 "/=" => return Some((index, "/=")),
+                "%=" => return Some((index, "%=")),
+                "^=" => return Some((index, "^=")),
+                "&=" => return Some((index, "&=")),
+                "|=" => return Some((index, "|=")),
                 "=" => return Some((index, "=")),
                 _ => {}
             },
@@ -1163,12 +1362,12 @@ fn evaluate_milkrust_expression_with_scope(
     variables: &BTreeMap<String, MilkRustValue>,
     rand_counter: usize,
 ) -> Result<(f64, BTreeMap<String, MilkRustValue>, usize), MilkRustError> {
+    let tokens = tokenize_milkrust_expression(expression)?;
     let scope = variables
         .iter()
         .map(|(key, value)| (key.to_ascii_lowercase(), value.clone()))
         .collect::<BTreeMap<_, _>>();
-    let tokens = tokenize_milkrust_expression(expression)?;
-    let mut parser = MilkRustExpressionParser::new(&tokens, scope, rand_counter, expression);
+    let mut parser = MilkRustExpressionParser::new(&tokens, scope, rand_counter, expression, true);
     let value = parser.parse().map_err(|e| MilkRustError::Parse {
         expression: expression.to_string(),
         message: e,
@@ -1177,7 +1376,7 @@ fn evaluate_milkrust_expression_with_scope(
 }
 
 /// A pre-compiled MilkRust expression that can be evaluated repeatedly
-/// without re-tokenizing or re-parsing the source string.
+/// without re-tokenizing the source string. Evaluation still parses the tokens.
 ///
 /// This is useful in real-time rendering contexts where the same expression
 /// is evaluated every frame with different variable values.
@@ -1203,7 +1402,7 @@ impl CompiledMilkRustExpression {
     /// Compile a MilkDrop expression string into a reusable expression.
     ///
     /// Tokenizes and validates the expression at compile time, so that
-    /// subsequent evaluations skip parsing entirely.
+    /// subsequent evaluations reuse tokens without executing code at compile time.
     ///
     /// # Errors
     ///
@@ -1211,7 +1410,7 @@ impl CompiledMilkRustExpression {
     pub fn compile(expression: &str) -> Result<Self, MilkRustError> {
         let tokens = tokenize_milkrust_expression(expression)?;
         // Validate by parsing with an empty scope (catches syntax errors)
-        let mut parser = MilkRustExpressionParser::new(&tokens, BTreeMap::new(), 0, expression);
+        let mut parser = MilkRustExpressionParser::new(&tokens, BTreeMap::new(), 0, expression, false);
         parser.parse().map_err(|e| MilkRustError::Parse {
             expression: expression.to_string(),
             message: e,
@@ -1254,7 +1453,7 @@ impl CompiledMilkRustExpression {
             .iter()
             .map(|(key, value)| (key.to_ascii_lowercase(), value.clone()))
             .collect::<BTreeMap<_, _>>();
-        let mut parser = MilkRustExpressionParser::new(&self.tokens, scope, rand_counter, &self.expression);
+        let mut parser = MilkRustExpressionParser::new(&self.tokens, scope, rand_counter, &self.expression, true);
         let value = parser.parse().map_err(|e| MilkRustError::Parse {
             expression: self.expression.clone(),
             message: e,
@@ -1274,7 +1473,7 @@ impl CompiledMilkRustExpression {
             scope.insert(key.to_ascii_lowercase(), value.clone());
         }
         let mut parser =
-            MilkRustExpressionParser::new(&self.tokens, std::mem::take(scope), rand_counter, &self.expression);
+            MilkRustExpressionParser::new(&self.tokens, std::mem::take(scope), rand_counter, &self.expression, true);
         let value = parser.parse().map_err(|e| MilkRustError::Parse {
             expression: self.expression.clone(),
             message: e,
@@ -1335,8 +1534,8 @@ enum CompiledEquationStatement {
 impl CompiledMilkRustEquations {
     /// Compile a block of MilkRust equation statements.
     ///
-    /// Pre-tokenizes and pre-parses each sub-expression so that subsequent
-    /// evaluations skip the parsing phase entirely.
+    /// Pre-tokenizes and checks each sub-expression without executing it.
+    /// Evaluation reuses tokens and still parses them.
     ///
     /// # Errors
     ///
@@ -1648,12 +1847,12 @@ fn apply_milkrust_assignment_operator(current: f64, operator: &str, next: f64) -
         "-=" => current - next,
         "*=" => current * next,
         "/=" => {
-            if next == 0.0 {
-                0.0
-            } else {
-                current / next
-            }
+            if next.abs() < 0.00001 { 0.0 } else { current / next }
         }
+        "%=" => milkrust_remainder(current, next),
+        "^=" => milkrust_pow(current, next),
+        "&=" => ((current.trunc() as i64) & (next.trunc() as i64)) as f64,
+        "|=" => ((current.trunc() as i64) | (next.trunc() as i64)) as f64,
         _ => next,
     }
 }
@@ -1661,7 +1860,7 @@ fn apply_milkrust_assignment_operator(current: f64, operator: &str, next: f64) -
 fn split_milkrust_buffer_assignment(
     statement: &str,
 ) -> Option<(String, &str, &'static str, &str)> {
-    for operator in ["+=", "-=", "*=", "/=", "="] {
+    for operator in ["+=", "-=", "*=", "/=", "%=", "^=", "&=", "|=", "="] {
         let Some((raw_name, expression)) = statement.split_once(operator) else {
             continue;
         };
@@ -1685,7 +1884,7 @@ fn split_milkrust_buffer_assignment(
 }
 
 fn split_milkrust_assignment(statement: &str) -> Option<(String, &'static str, &str)> {
-    for operator in ["+=", "-=", "*=", "/=", "="] {
+    for operator in ["+=", "-=", "*=", "/=", "%=", "^=", "&=", "|=", "="] {
         if let Some((raw_name, expression)) = statement.split_once(operator) {
             let name = raw_name.trim();
             if !name.is_empty()
@@ -1848,6 +2047,35 @@ mod tests {
 
 
     #[test]
+    fn evaluate_logical_operators_short_circuit() {
+        let scope = BTreeMap::new();
+        assert_eq!(evaluate_milkrust_expression("0 && 1", &scope).unwrap(), 0.0);
+        assert_eq!(evaluate_milkrust_expression("1 || 0", &scope).unwrap(), 1.0);
+        assert_eq!(
+            evaluate_milkrust_expression("0 || 2 && 1", &scope).unwrap(),
+            1.0
+        );
+        assert_eq!(
+            evaluate_milkrust_expression("0 && unsupported(1)", &scope).unwrap(),
+            0.0
+        );
+        assert_eq!(
+            evaluate_milkrust_expression("1 || unsupported(1)", &scope).unwrap(),
+            1.0
+        );
+
+        let result = evaluate_milkrust_equations(
+            "x = 0 && assign(y, 1); z = 1 || assign(w, 1)",
+            &scope,
+        )
+        .unwrap();
+        assert_eq!(result["x"], MilkRustValue::Number(0.0));
+        assert_eq!(result["z"], MilkRustValue::Number(1.0));
+        assert!(!result.contains_key("y"));
+        assert!(!result.contains_key("w"));
+    }
+
+    #[test]
     fn evaluate_equations() {
         let mut scope = BTreeMap::new();
         scope.insert("a".to_string(), MilkRustValue::Number(1.0));
@@ -1899,4 +2127,64 @@ mod tests {
         assert!(result.contains_key("x"));
         assert!(result.contains_key("__rand_counter"));
     }
+
+    #[test]
+    fn assignment_target_runs_once_and_remainder_never_overflows() {
+        let scope = BTreeMap::new();
+        let changed = evaluate_milkrust_equations(
+            "i=0; memset(assign(i,i+1),0.5,1)=0.75; x=-9223372036854775808; x%=-1",
+            &scope,
+        ).unwrap();
+        assert_eq!(changed["i"], MilkRustValue::Number(1.0));
+        assert_eq!(changed["megabuf_1"], MilkRustValue::Number(0.75));
+        assert_eq!(changed["x"], MilkRustValue::Number(0.0));
+        assert_eq!(evaluate_milkrust_expression("mod(-9223372036854775808,-1)", &scope).unwrap(), 0.0);
+        assert_eq!(evaluate_milkrust_expression("-9223372036854775808 % -1", &scope).unwrap(), 0.0);
+    }
+
+    #[test]
+    fn evaluate_eel_power_boolean_lazy_and_memory_helpers() {
+        let mut scope = BTreeMap::new();
+        scope.insert("a".to_string(), MilkRustValue::Number(1.0));
+        scope.insert("b".to_string(), MilkRustValue::Number(2.0));
+        assert_eq!(evaluate_milkrust_expression("2 ^ 3 ^ 2", &scope).unwrap(), 64.0);
+        assert_eq!(evaluate_milkrust_expression("-2 ^ 2", &scope).unwrap(), 4.0);
+        assert_eq!(evaluate_milkrust_expression("2 ^ 3 * 2", &scope).unwrap(), 16.0);
+        assert_eq!(evaluate_milkrust_expression("5 & 3", &scope).unwrap(), 1.0);
+        assert_eq!(evaluate_milkrust_expression("5 | 2", &scope).unwrap(), 7.0);
+        assert_eq!(evaluate_milkrust_expression("band(2, 4)", &scope).unwrap(), 1.0);
+        assert_eq!(evaluate_milkrust_expression("bor(0, -2)", &scope).unwrap(), 1.0);
+        assert_eq!(evaluate_milkrust_expression("bnot(0.000001)", &scope).unwrap(), 1.0);
+        assert_eq!(evaluate_milkrust_expression("mod(7.5, 2.1)", &scope).unwrap(), 1.0);
+        assert!((evaluate_milkrust_expression("invsqrt(4)", &scope).unwrap() - 0.5).abs() < 0.002);
+        assert_eq!(evaluate_milkrust_expression("if(1, 7, unsupported(1))", &scope).unwrap(), 7.0);
+        assert_eq!(evaluate_milkrust_expression("1 ? 9 : unsupported(1)", &scope).unwrap(), 9.0);
+
+        let changed = evaluate_milkrust_equations(
+            "if(1, assign(a, 3), assign(b, 4)); if(0, a, b)=10; x=2; x^=3; y=7; y&=3; z=7; z%=3; memset(8,0.25,2); memset(10,0.5,1)=0.75; memcpy(11,10,1)=1.25; freembuf(0); band(0,assign(side_effect,1))",
+            &scope,
+        )
+        .unwrap();
+        assert_eq!(changed["a"], MilkRustValue::Number(3.0));
+        assert_eq!(changed["b"], MilkRustValue::Number(10.0));
+        assert_eq!(changed["x"], MilkRustValue::Number(8.0));
+        assert_eq!(changed["y"], MilkRustValue::Number(3.0));
+        assert_eq!(changed["z"], MilkRustValue::Number(1.0));
+        assert_eq!(changed["megabuf_8"], MilkRustValue::Number(0.25));
+        assert_eq!(changed["megabuf_9"], MilkRustValue::Number(0.25));
+        assert_eq!(changed["megabuf_10"], MilkRustValue::Number(0.75));
+        assert_eq!(changed["megabuf_11"], MilkRustValue::Number(1.25));
+        assert_eq!(changed["side_effect"], MilkRustValue::Number(1.0));
+    }
+
+    #[test]
+    fn sign_zero_and_large_shift_counts_are_defined() {
+        let scope = BTreeMap::new();
+        for value in ["sign(0)", "sign(-0)"] {
+            assert_eq!(evaluate_milkrust_expression(value, &scope).unwrap(), 0.0);
+        }
+        assert_eq!(evaluate_milkrust_expression("1 << 65", &scope).unwrap(), 2.0);
+        assert_eq!(evaluate_milkrust_expression("-8 >> 66", &scope).unwrap(), -2.0);
+    }
+
 }

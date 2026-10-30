@@ -1,0 +1,13 @@
+[preset00]
+name=Tessellated Dawn 1
+decay=0.94
+wave_r=0.15
+wave_g=0.45
+wave_b=0.8
+wave_a=0.15
+wave_scale=0.6
+zoom=1.0
+rot=0.0
+per_frame_1=q1=0.2+0.3*bass_att;
+warp_shader_1=shader_body { ret=tex2D(sampler_main,uv).rgb*0.94; }
+comp_shader_1=shader_body { float2 p=frac(uv*9+float2(time*0.015,0.0))-0.5; float d=max(abs(p.x),abs(p.y)); float v=1-smoothstep(0.28,0.44,d); ret=float3(v*(0.4+uv.x*0.6),v*(0.2+uv.y*0.6),0.2+0.5*(1-v)); ret=saturate(ret*(0.75+q1)); }

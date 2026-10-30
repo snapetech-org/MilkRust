@@ -86,7 +86,7 @@ pub fn collect_headless_frames(
 
         waveform.resize(waveform_size, 0.0);
         spectrum.resize(spectrum_size, 0.0);
-        let frame_set = host.render_frame_set(
+        let frame_set = host.try_render_frame_set(
             source,
             time_seconds,
             bass,
@@ -95,6 +95,9 @@ pub fn collect_headless_frames(
             &waveform,
             &spectrum,
         );
+        let frame_set = frame_set.map_err(|_| DesktopSessionError {
+            message: "preset equation evaluation failed; no geometry report was emitted",
+        })?;
         let report = report_frame_set(&frame_set);
         output.push(DesktopSessionFrame {
             timing: DesktopSessionTiming {

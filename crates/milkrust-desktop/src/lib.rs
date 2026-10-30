@@ -1,5 +1,5 @@
 use milkrust_core::{
-    milkrust_frame_set_from_source_with_audio, MilkRustFrameSet, MilkRustFrameSetRuntime,
+    milkrust_frame_set_from_source_with_audio, MilkRustFrameSet, MilkRustFrameSetRuntime, MilkRustInputState,
 };
 use milkrust_renderer_core::MilkRustBatchRenderer;
 use milkrust_renderer_headless::{create_headless_batches, MilkRustHeadlessRenderer};
@@ -135,6 +135,21 @@ impl MilkRustFrameSetRuntimeHost {
             spectrum,
         )
     }
+
+    pub fn render_error(&self) -> Option<&str> { self.runtime.render_error() }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn try_render_frame_set(
+        &mut self, source: &str, time_seconds: f64, bass: f64, mid: f64,
+        treble: f64, waveform: &[f64], spectrum: &[f64],
+    ) -> Result<MilkRustFrameSet, String> {
+        let frame = self.runtime.try_render_source_with_audio_and_input(
+            source, time_seconds, bass, mid, treble, waveform, spectrum, MilkRustInputState::default(),
+        )?;
+        self.source = source.to_string();
+        Ok(frame)
+    }
+
 }
 
 #[cfg(test)]

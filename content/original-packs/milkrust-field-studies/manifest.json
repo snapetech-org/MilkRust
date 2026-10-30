@@ -1,0 +1,293 @@
+{
+  "schemaVersion": 1,
+  "id": "milkrust-field-studies",
+  "name": "Milkrust Field Studies",
+  "version": "0.1.0",
+  "author": "MilkRust contributors",
+  "license": "CC0-1.0",
+  "licenseFiles": [
+    "licenses/CC0-1.0.txt"
+  ],
+  "distributionStatus": "redistributable",
+  "contentNotice": "Newly authored mathematical studies. No third-party preset or texture source was copied. Source implementation is unqualified; release requires the per-target rendering evidence policy.",
+  "sourceUrls": [
+    "https://github.com/snapetech-org/MilkRust/tree/main/content/original-packs/milkrust-field-studies"
+  ],
+  "presets": [
+    {
+      "id": "chromatic-waves-1",
+      "title": "Chromatic Waves 1",
+      "file": "presets/chromatic-waves-1.milk",
+      "sourceFormat": "milk",
+      "tags": [
+        "original",
+        "study",
+        "chromatic-waves"
+      ],
+      "thumbnail": ""
+    },
+    {
+      "id": "chromatic-waves-2",
+      "title": "Chromatic Waves 2",
+      "file": "presets/chromatic-waves-2.milk",
+      "sourceFormat": "milk",
+      "tags": [
+        "original",
+        "study",
+        "chromatic-waves"
+      ],
+      "thumbnail": ""
+    },
+    {
+      "id": "chromatic-waves-3",
+      "title": "Chromatic Waves 3",
+      "file": "presets/chromatic-waves-3.milk",
+      "sourceFormat": "milk",
+      "tags": [
+        "original",
+        "study",
+        "chromatic-waves"
+      ],
+      "thumbnail": ""
+    },
+    {
+      "id": "ribbon-helix-1",
+      "title": "Ribbon Helix 1",
+      "file": "presets/ribbon-helix-1.milk",
+      "sourceFormat": "milk",
+      "tags": [
+        "original",
+        "study",
+        "ribbon-helix"
+      ],
+      "thumbnail": ""
+    },
+    {
+      "id": "ribbon-helix-2",
+      "title": "Ribbon Helix 2",
+      "file": "presets/ribbon-helix-2.milk",
+      "sourceFormat": "milk",
+      "tags": [
+        "original",
+        "study",
+        "ribbon-helix"
+      ],
+      "thumbnail": ""
+    },
+    {
+      "id": "ribbon-helix-3",
+      "title": "Ribbon Helix 3",
+      "file": "presets/ribbon-helix-3.milk",
+      "sourceFormat": "milk",
+      "tags": [
+        "original",
+        "study",
+        "ribbon-helix"
+      ],
+      "thumbnail": ""
+    },
+    {
+      "id": "night-drift-1",
+      "title": "Night Drift 1",
+      "file": "presets/night-drift-1.milk",
+      "sourceFormat": "milk",
+      "tags": [
+        "original",
+        "study",
+        "night-drift"
+      ],
+      "thumbnail": ""
+    },
+    {
+      "id": "night-drift-2",
+      "title": "Night Drift 2",
+      "file": "presets/night-drift-2.milk",
+      "sourceFormat": "milk",
+      "tags": [
+        "original",
+        "study",
+        "night-drift"
+      ],
+      "thumbnail": ""
+    },
+    {
+      "id": "night-drift-3",
+      "title": "Night Drift 3",
+      "file": "presets/night-drift-3.milk",
+      "sourceFormat": "milk",
+      "tags": [
+        "original",
+        "study",
+        "night-drift"
+      ],
+      "thumbnail": ""
+    },
+    {
+      "id": "crystal-current-1",
+      "title": "Crystal Current 1",
+      "file": "presets/crystal-current-1.milk",
+      "sourceFormat": "milk",
+      "tags": [
+        "original",
+        "study",
+        "crystal-current"
+      ],
+      "thumbnail": ""
+    },
+    {
+      "id": "crystal-current-2",
+      "title": "Crystal Current 2",
+      "file": "presets/crystal-current-2.milk",
+      "sourceFormat": "milk",
+      "tags": [
+        "original",
+        "study",
+        "crystal-current"
+      ],
+      "thumbnail": ""
+    },
+    {
+      "id": "crystal-current-3",
+      "title": "Crystal Current 3",
+      "file": "presets/crystal-current-3.milk",
+      "sourceFormat": "milk",
+      "tags": [
+        "original",
+        "study",
+        "crystal-current"
+      ],
+      "thumbnail": ""
+    }
+  ],
+  "textures": [],
+  "fragments": [],
+  "plugins": [],
+  "assets": [
+    {
+      "path": "presets/chromatic-waves-1.milk",
+      "kind": "preset",
+      "author": "MilkRust contributors",
+      "license": "CC0-1.0",
+      "licenseFile": "licenses/CC0-1.0.txt",
+      "sourceUrl": "https://github.com/snapetech-org/MilkRust/blob/main/content/original-packs/milkrust-field-studies/presets/chromatic-waves-1.milk",
+      "notice": "Original source authored for MilkRust; no third-party source or textures."
+    },
+    {
+      "path": "presets/chromatic-waves-2.milk",
+      "kind": "preset",
+      "author": "MilkRust contributors",
+      "license": "CC0-1.0",
+      "licenseFile": "licenses/CC0-1.0.txt",
+      "sourceUrl": "https://github.com/snapetech-org/MilkRust/blob/main/content/original-packs/milkrust-field-studies/presets/chromatic-waves-2.milk",
+      "notice": "Original source authored for MilkRust; no third-party source or textures."
+    },
+    {
+      "path": "presets/chromatic-waves-3.milk",
+      "kind": "preset",
+      "author": "MilkRust contributors",
+      "license": "CC0-1.0",
+      "licenseFile": "licenses/CC0-1.0.txt",
+      "sourceUrl": "https://github.com/snapetech-org/MilkRust/blob/main/content/original-packs/milkrust-field-studies/presets/chromatic-waves-3.milk",
+      "notice": "Original source authored for MilkRust; no third-party source or textures."
+    },
+    {
+      "path": "presets/ribbon-helix-1.milk",
+      "kind": "preset",
+      "author": "MilkRust contributors",
+      "license": "CC0-1.0",
+      "licenseFile": "licenses/CC0-1.0.txt",
+      "sourceUrl": "https://github.com/snapetech-org/MilkRust/blob/main/content/original-packs/milkrust-field-studies/presets/ribbon-helix-1.milk",
+      "notice": "Original source authored for MilkRust; no third-party source or textures."
+    },
+    {
+      "path": "presets/ribbon-helix-2.milk",
+      "kind": "preset",
+      "author": "MilkRust contributors",
+      "license": "CC0-1.0",
+      "licenseFile": "licenses/CC0-1.0.txt",
+      "sourceUrl": "https://github.com/snapetech-org/MilkRust/blob/main/content/original-packs/milkrust-field-studies/presets/ribbon-helix-2.milk",
+      "notice": "Original source authored for MilkRust; no third-party source or textures."
+    },
+    {
+      "path": "presets/ribbon-helix-3.milk",
+      "kind": "preset",
+      "author": "MilkRust contributors",
+      "license": "CC0-1.0",
+      "licenseFile": "licenses/CC0-1.0.txt",
+      "sourceUrl": "https://github.com/snapetech-org/MilkRust/blob/main/content/original-packs/milkrust-field-studies/presets/ribbon-helix-3.milk",
+      "notice": "Original source authored for MilkRust; no third-party source or textures."
+    },
+    {
+      "path": "presets/night-drift-1.milk",
+      "kind": "preset",
+      "author": "MilkRust contributors",
+      "license": "CC0-1.0",
+      "licenseFile": "licenses/CC0-1.0.txt",
+      "sourceUrl": "https://github.com/snapetech-org/MilkRust/blob/main/content/original-packs/milkrust-field-studies/presets/night-drift-1.milk",
+      "notice": "Original source authored for MilkRust; no third-party source or textures."
+    },
+    {
+      "path": "presets/night-drift-2.milk",
+      "kind": "preset",
+      "author": "MilkRust contributors",
+      "license": "CC0-1.0",
+      "licenseFile": "licenses/CC0-1.0.txt",
+      "sourceUrl": "https://github.com/snapetech-org/MilkRust/blob/main/content/original-packs/milkrust-field-studies/presets/night-drift-2.milk",
+      "notice": "Original source authored for MilkRust; no third-party source or textures."
+    },
+    {
+      "path": "presets/night-drift-3.milk",
+      "kind": "preset",
+      "author": "MilkRust contributors",
+      "license": "CC0-1.0",
+      "licenseFile": "licenses/CC0-1.0.txt",
+      "sourceUrl": "https://github.com/snapetech-org/MilkRust/blob/main/content/original-packs/milkrust-field-studies/presets/night-drift-3.milk",
+      "notice": "Original source authored for MilkRust; no third-party source or textures."
+    },
+    {
+      "path": "presets/crystal-current-1.milk",
+      "kind": "preset",
+      "author": "MilkRust contributors",
+      "license": "CC0-1.0",
+      "licenseFile": "licenses/CC0-1.0.txt",
+      "sourceUrl": "https://github.com/snapetech-org/MilkRust/blob/main/content/original-packs/milkrust-field-studies/presets/crystal-current-1.milk",
+      "notice": "Original source authored for MilkRust; no third-party source or textures."
+    },
+    {
+      "path": "presets/crystal-current-2.milk",
+      "kind": "preset",
+      "author": "MilkRust contributors",
+      "license": "CC0-1.0",
+      "licenseFile": "licenses/CC0-1.0.txt",
+      "sourceUrl": "https://github.com/snapetech-org/MilkRust/blob/main/content/original-packs/milkrust-field-studies/presets/crystal-current-2.milk",
+      "notice": "Original source authored for MilkRust; no third-party source or textures."
+    },
+    {
+      "path": "presets/crystal-current-3.milk",
+      "kind": "preset",
+      "author": "MilkRust contributors",
+      "license": "CC0-1.0",
+      "licenseFile": "licenses/CC0-1.0.txt",
+      "sourceUrl": "https://github.com/snapetech-org/MilkRust/blob/main/content/original-packs/milkrust-field-studies/presets/crystal-current-3.milk",
+      "notice": "Original source authored for MilkRust; no third-party source or textures."
+    }
+  ],
+  "playlist": [
+    "chromatic-waves-1",
+    "chromatic-waves-2",
+    "chromatic-waves-3",
+    "ribbon-helix-1",
+    "ribbon-helix-2",
+    "ribbon-helix-3",
+    "night-drift-1",
+    "night-drift-2",
+    "night-drift-3",
+    "crystal-current-1",
+    "crystal-current-2",
+    "crystal-current-3"
+  ],
+  "automationDefaults": {
+    "transitionSeconds": 8,
+    "randomizeOnBeat": false
+  }
+}
