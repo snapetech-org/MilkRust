@@ -13,6 +13,77 @@ struct ResourceShape {
     width: u8,
 }
 
+#[derive(Clone, Copy)]
+struct SamplerStateProfile {
+    point: bool,
+    wrap: [bool; 3],
+}
+
+impl SamplerStateProfile {
+    fn binding_name(self, resource: &str, dimension: u8) -> Result<String, String> {
+        let active_axes = &self.wrap[..usize::from(dimension)];
+        let Some(&repeat) = active_axes.first() else {
+            return Err("HLSL sampler state has an invalid texture dimension".into());
+        };
+        if active_axes.iter().any(|axis| *axis != repeat) {
+            return Err("HLSL sampler states with mixed active-axis addressing are unsupported".into());
+        }
+        let prefix = match (self.point, repeat) {
+            (true, true) => "pw",
+            (true, false) => "pc",
+            (false, true) => "fw",
+            (false, false) => "fc",
+        };
+        Ok(format!("sampler_{prefix}_{resource}"))
+    }
+}
+
+fn parse_sampler_state_profile(tokens: &[String], open: usize) -> Result<(SamplerStateProfile, usize), String> {
+    if tokens.get(open).map(String::as_str) != Some("{") {
+        return Err("Malformed HLSL SamplerState initializer".into());
+    }
+    let mut profile = SamplerStateProfile { point: false, wrap: [true; 3] };
+    let mut seen = std::collections::BTreeSet::new();
+    let mut cursor = open + 1;
+    while cursor < tokens.len() && tokens[cursor] != "}" {
+        let property = tokens[cursor].as_str();
+        if !matches!(property, "Filter" | "AddressU" | "AddressV" | "AddressW") {
+            return Err(format!("HLSL SamplerState property {property} is outside the point/linear wrap/clamp profile"));
+        }
+        if !seen.insert(property.to_string()) {
+            return Err(format!("Duplicate HLSL SamplerState property {property}"));
+        }
+        if tokens.get(cursor + 1).map(String::as_str) != Some("=")
+            || tokens.get(cursor + 3).map(String::as_str) != Some(";")
+        {
+            return Err(format!("Malformed HLSL SamplerState property {property}"));
+        }
+        let value = tokens[cursor + 2].to_ascii_uppercase();
+        match property {
+            "Filter" => match value.as_str() {
+                "MIN_MAG_MIP_POINT" | "POINT" => profile.point = true,
+                "MIN_MAG_MIP_LINEAR" | "LINEAR" => profile.point = false,
+                _ => return Err(format!("HLSL SamplerState filter {value} is unsupported; use point or linear min/mag/mip filtering")),
+            },
+            "AddressU" | "AddressV" | "AddressW" => {
+                let wrap = match value.as_str() {
+                    "WRAP" => true,
+                    "CLAMP" => false,
+                    _ => return Err(format!("HLSL SamplerState address mode {value} is unsupported; use Wrap or Clamp")),
+                };
+                let axis = match property { "AddressU" => 0, "AddressV" => 1, _ => 2 };
+                profile.wrap[axis] = wrap;
+            }
+            _ => unreachable!(),
+        }
+        cursor += 4;
+    }
+    if tokens.get(cursor).map(String::as_str) != Some("}") {
+        return Err("Unterminated HLSL SamplerState initializer".into());
+    }
+    Ok((profile, cursor))
+}
+
 fn texture_element_width(tokens: &[String]) -> Result<u8, String> {
     if tokens.len() != 1 { return Err("Unsupported HLSL texture element type".into()); }
     for prefix in ["float", "half", "min16float", "min10float"] {
@@ -195,6 +266,7 @@ fn lower_modern_resource_syntax(tokens: &mut Vec<String>) -> Result<(), String> 
     let mut resource_arrays = BTreeMap::<String, usize>::new();
     let mut resource_array_edits = Vec::<(std::ops::Range<usize>, Vec<String>)>::new();
     let mut sampler_state_names = std::collections::BTreeSet::new();
+    let mut sampler_state_profiles = BTreeMap::<String, SamplerStateProfile>::new();
     let mut sampler_state_fields = BTreeMap::<String, std::collections::BTreeSet<String>>::new();
     let mut generic_ranges = Vec::new();
     let mut index = 0;
@@ -378,19 +450,42 @@ fn lower_modern_resource_syntax(tokens: &mut Vec<String>) -> Result<(), String> 
             let Some(name) = tokens.get(index + 1).filter(|token| is_identifier(token)) else {
                 return Err("Malformed HLSL SamplerState declaration".into());
             };
-            if matches!(tokens.get(index + 2).map(String::as_str), Some("=") | Some("{") | Some("[")) {
-                return Err("HLSL SamplerState arrays and initialized/custom states are unsupported; use the preset sampler prefix".into());
-            }
             // Sampling state is selected by the MilkDrop sampler naming
-            // convention on both hosts. A dummy integer preserves parameter
-            // lists; Sample* lowering removes the state argument itself.
+            // convention on both hosts. Supported static state initializers
+            // are converted into the same explicit sampler prefixes.
             let structure = struct_ranges.iter().find(|(_, range)| range.contains(&index)).map(|(name, _)| name.clone());
+            let mut initializer = None;
+            match tokens.get(index + 2).map(String::as_str) {
+                Some("[") => return Err("HLSL SamplerState arrays are unsupported".into()),
+                Some("{") => initializer = Some((index + 2, index + 2)),
+                Some("=") => match tokens.get(index + 3).map(String::as_str) {
+                    Some("{") => initializer = Some((index + 2, index + 3)),
+                    Some("sampler_state") if tokens.get(index + 4).map(String::as_str) == Some("{") => initializer = Some((index + 2, index + 4)),
+                    _ => return Err("Dynamic or unsupported HLSL SamplerState initializers are unavailable".into()),
+                },
+                _ => {}
+            }
+            if let Some((edit_start, open)) = initializer {
+                if structure.is_some() || tokens[..index].iter().fold(0i32, |depth, token| match token.as_str() {
+                    "{" => depth + 1,
+                    "}" => depth - 1,
+                    _ => depth,
+                }) != 0 {
+                    return Err("Initialized HLSL SamplerState declarations must be global".into());
+                }
+                let (profile, close) = parse_sampler_state_profile(tokens, open)?;
+                if !matches!(tokens.get(close + 1).map(String::as_str), Some(";") | None) {
+                    return Err("Grouped HLSL SamplerState initializers are unsupported".into());
+                }
+                sampler_state_profiles.insert(name.clone(), profile);
+                resource_array_edits.push((edit_start..close + 1, Vec::new()));
+            }
             if let Some(structure) = &structure {
                 sampler_state_fields.entry(structure.clone()).or_default().insert(name.clone());
             } else {
                 sampler_state_names.insert(name.clone());
             }
-            let mut declarator = index + 2;
+            let declarator = if initializer.is_some() { tokens.len() } else { index + 2 };
             while tokens.get(declarator).map(String::as_str) == Some(",") {
                 let candidate = declarator + 1;
                 let next = tokens.get(candidate + 1).map(String::as_str);
@@ -758,22 +853,34 @@ fn lower_modern_resource_syntax(tokens: &mut Vec<String>) -> Result<(), String> 
             _ => return Err(format!("Invalid argument count for HLSL texture method {method}")),
         };
         if args.iter().any(Vec::is_empty) { return Err(format!("Empty argument to HLSL texture method {method}")); }
-        let sampler_state_argument = if args[0].len() == 1 {
-            sampler_state_names.contains(&args[0][0])
+        let sampler_state_name = if args[0].len() == 1 {
+            sampler_state_names.contains(&args[0][0]).then(|| args[0][0].clone())
         } else if args[0].len() == 3 && is_identifier(&args[0][0]) && args[0][1] == "." && is_identifier(&args[0][2]) {
             sampler_state_instances.get(&args[0][0]).and_then(Option::as_ref)
                 .and_then(|structure| sampler_state_fields.get(structure))
                 .is_some_and(|fields| fields.contains(&args[0][2]))
+                .then(|| format!("{}.{}", args[0][0], args[0][2]))
         } else {
-            false
+            None
         };
-        if method != "Load" && !sampler_state_argument {
-            return Err(format!("HLSL texture method {method} requires a declared SamplerState name or struct field; sampler-state expressions and custom state definitions are unsupported"));
+        if method != "Load" && sampler_state_name.is_none() {
+            return Err(format!("HLSL texture method {method} requires a declared SamplerState name or direct struct field"));
         }
+        let sampler_profile = sampler_state_name.as_ref().and_then(|name| sampler_state_profiles.get(name)).copied();
         rewritten.truncate(rewritten.len().saturating_sub(index - base_start));
         rewritten.push(intrinsic.into());
         rewritten.push("(".into());
-        rewritten.extend_from_slice(&tokens[base_start..index]);
+        if let Some(profile) = sampler_profile {
+            let binding_name = if index >= base_start + 3 && tokens.get(base_start + 1).map(String::as_str) == Some(".") {
+                format!("{}_{}", tokens[base_start], base_name)
+            } else {
+                base_name.clone()
+            };
+            let resource_name = crate::resources::base_name(&binding_name);
+            rewritten.push(profile.binding_name(resource_name, dimension)?);
+        } else {
+            rewritten.extend_from_slice(&tokens[base_start..index]);
+        }
         rewritten.push(",".into());
         if method == "SampleLevel" || method == "SampleBias" {
             rewritten.push("float4".into());
