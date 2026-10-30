@@ -141,12 +141,11 @@ run is recorded for this checkpoint.
   ImageBitmap upload. The web SDK packages a static worker and configures it only
   when it is same-origin with the page; a rejected static worker falls back to a
   blob worker when CSP allows it. Direct wasm-bindgen users may configure a
-  same-origin URL or use the blob-worker fallback. Animated GIF uses the shared
-  bounded Rust decoder in native and WebGL: full-canvas compositing, disposal,
-  per-frame delays and sprite-local or preset-time selection, capped at 120
-  frames and 16 Mi decoded canvas pixels per asset. Netscape/AnimExts repeat
-  metadata controls finite, single-play or infinite playback consistently across
-  both renderer hosts.
+  same-origin URL or use the blob-worker fallback. Animated GIF and APNG use the shared bounded Rust decoder in native and WebGL:
+  full-canvas compositing, disposal, per-frame delays and sprite-local or preset-time
+  selection, capped at 120 frames and 16 Mi decoded canvas pixels per asset.
+  Netscape/AnimExts and APNG play-count metadata control finite, single-play or
+  infinite playback consistently across both renderer hosts.
   Native/browser decoder, upload and recovery regressions are unrun.
 - Private JIT build entrypoints include native C++ and browser compiler delivery.
   Regression sources cover the typed compiler, resource bindings, unsafe input,
@@ -229,8 +228,8 @@ render frames, resolve external texture packs, or establish fidelity.
   encodings, other executable extensions and unsupported formats. The current
   community-tree inventory found no unhandled text encoding or equation call,
   but CLI parser/shader analysis and missing external texture-pack accounting
-  remain unrun. Animated PNG/WebP and additional unsupported historical image
-  formats remain explicit import failures.
+  remain unrun. Animated WebP and additional unsupported historical image formats remain
+  explicit import failures.
 - Desktop helper process containment is implemented in PlezyNG PR #82, with
   fault-regression sources and platform packaging; execution is unverified.
   Mobile/TV local-driver and device-wide GPU hang containment, browser-process OOM
@@ -419,3 +418,20 @@ high 3D noise expands in X, Y, then Z. The generator uses stable fixed seeds per
 instead of the reference's performance-counter reseeding, so quality semantics are
 implemented but generated pixels are not claimed bit-identical. Builds and GPU
 reference captures remain pending.
+
+
+## 2026-10-30 bounded APNG decoding
+
+Static PNG and APNG now pass the same encoded-byte limits into MilkRust's
+bounded Rust decoder on native and WebGL hosts. APNG inspection validates the
+declared frame count, canvas/subframe bounds and decoded-pixel budget before
+decode. The compositor implements full-canvas Source/Over blending, None,
+Background and Previous disposal, frame delays, poster-frame exclusion and
+finite/single-play/infinite play counts. Native hosts route PNG bytes through
+the new ABI; WebGL routes animated PNG frames through the same upload profile
+as GIF. A static-PNG check no longer scans compressed image bytes for an
+`fdAT` substring.
+
+The source path and dependency/license records are committed. Native/browser
+decoder, upload, malformed-input and reference-pixel checks remain unrun, so
+this does not establish APNG rendering qualification or pixel identity.
