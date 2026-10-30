@@ -53,7 +53,9 @@ run is recorded for this checkpoint.
   `sampler`/`sampler2D`/`sampler3D` arrays with literal bounds 1–15 expand
   into separately named bindings; grouped resource declarators and array
   fields on global resource structs are supported. Literal element accesses
-  select one binding. Side-effect-free dynamic indices dispatch modern
+  select one binding. Resource-only global struct instances accept direct brace
+  initializers with one type-compatible global resource per field; computed or
+  mixed numeric/resource initializers fail closed. Side-effect-free dynamic indices dispatch modern
   `Sample`/`SampleLevel`/`SampleBias`/`SampleGrad`/`Load` and standalone
   `GetDimensions` calls across those names; legacy sampler arrays dispatch
   supported `tex*` intrinsics when used as the first argument. Out-of-range
@@ -198,10 +200,10 @@ render frames, resolve external texture packs, or establish fidelity.
   maps to the center row of a 2D image and needs a one-row asset for 1D parity.
   It still rejects texture types outside those three dimensions, integer/non-color texture
   element types, resource arrays in function scopes or nested resource-bearing
-  structs, initialized resource instances, and resource-bearing struct
-  parameters with local/dynamic arguments. Direct resource-bearing struct helper
-  parameters specialize only when their argument is an unambiguous global
-  struct instance. Comparison methods outside the bounded Texture2D
+  structs, aggregate resource-struct initializers outside the bounded global alias
+  form, and resource-bearing struct parameters with local/dynamic arguments.
+  Direct resource-bearing struct helper parameters specialize only when their
+  argument is an unambiguous global struct instance. Comparison methods outside the bounded Texture2D
   `GatherCmp`/`GatherCmpRed`/`GatherCmpGreen`/`GatherCmpBlue`/`GatherCmpAlpha` and Texture1D/Texture2D
   `SampleCmp`/`SampleCmpLevelZero` paths remain unsupported. Static `SamplerComparisonState` declarations lower supported
   comparison filters, all eight comparison functions and U/V/W
@@ -514,3 +516,15 @@ and [milkdropfs.cpp](https://github.com/milkdrop2077/MilkDrop3/blob/6b39088f7894
 Regression source covers default 0, dynamic assignment, fractional truncation,
 and under/overflow clamping. Source changes are unbuilt; private JIT and pixel
 qualification remain outstanding.
+
+
+## 2026-10-30 global resource-struct aggregate aliases
+
+Global resource-only struct instances now accept direct brace initializers that
+bind each resource field to a type-compatible global texture resource. The
+lowering resolves each field to that original binding before sampler-state
+specialization, then removes the resource-only aggregate from emitted ESSL.
+Computed/member/local aliases, numeric members mixed into initialized structs,
+and type mismatches fail closed. Native regression source covers two aliased
+instances, helper specialization, mixed fields and dimension mismatch. This
+source change has not been built or executed.

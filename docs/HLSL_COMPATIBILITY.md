@@ -336,11 +336,16 @@ outputs). Dynamic dispatch has a 512 KiB expansion budget and rejects function
 calls, assignments and increment/decrement in index expressions. Direct assets
 use `<resource>_<index>` names (for example, `textures_0`); struct-field assets
 use `<object>_<field>_<index>`.
+Global resource-only struct instances also accept direct brace aggregates that alias
+compatible global resources before sampler-state specialization.
 `TextureCube`, `Texture*Array`, multisample resources, arrays inside function
-scopes or nested resource-bearing structs, initialized resource instances,
-resource-bearing struct parameters with local or dynamic arguments, and dynamic
-comparison-state propagation remain outside the profile. Direct resource-bearing
-struct parameters specialize only against an unambiguous global struct instance. Texture2D GatherCmp/GatherCmpRed/GatherCmpGreen/GatherCmpBlue/GatherCmpAlpha, SampleCmp and
+scopes or nested resource-bearing structs, resource-bearing struct parameters
+with local or dynamic arguments, and dynamic comparison-state propagation remain
+outside the profile. Direct resource-bearing struct parameters specialize only
+against an unambiguous global struct instance. A resource-only global struct may
+use a direct aggregate initializer with one type-compatible global resource per
+field. Numeric or mixed resource/numeric aggregates, computed values, member
+aliases and local instances remain unsupported. Texture2D GatherCmp/GatherCmpRed/GatherCmpGreen/GatherCmpBlue/GatherCmpAlpha, SampleCmp and
 SampleCmpLevelZero use the bounded static comparison profile described below;
 other comparison resource forms remain outside. The separate
 WGSL path remains limited; within its floating scalar/vector expression subset,
@@ -407,10 +412,12 @@ indices select one named binding. Side-effect-free dynamic integer indices
 dispatch supported sampling, load and dimension calls over bounded arrays;
 legacy sampler arrays dispatch when used as the first argument of a supported
 `tex*` intrinsic. Out-of-range dynamic indices yield zero. The expansion
-budget is 512 KiB. Arrays in function scopes or nested resource-bearing structs,
-initialized resource instances, resource-bearing struct parameters, non-2D/3D
-texture kinds, anisotropic filtering, border addressing and dynamic sampler-state expressions
-remain unsupported. Direct
+budget is 512 KiB. Resource-only global struct instances also accept direct
+brace aggregates with one type-compatible global resource per field. Mixed
+numeric/resource aggregates, computed or local bindings, arrays in function
+scopes or nested resource-bearing structs, resource-bearing struct parameters,
+non-2D/3D texture kinds, anisotropic filtering, border addressing and dynamic
+sampler-state expressions remain unsupported. Direct
 `Texture2D`/`Texture3D` float/half scalar and vector declarations and
 parameters lower through the same sampler model. Sampling methods support the documented static integer offsets;
 `GetDimensions` accepts the base-level and mip-level output forms, with the
