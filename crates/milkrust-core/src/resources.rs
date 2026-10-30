@@ -7,9 +7,26 @@ impl TextureKind {
     pub fn is_builtin(self) -> bool { !matches!(self, Self::Asset) }
 }
 
+fn hlsl_sampler_descriptor(name: &str) -> Option<(bool, [bool; 3], &str)> {
+    let descriptor = name.strip_prefix("hlsl_")?;
+    let bytes = descriptor.as_bytes();
+    if bytes.len() < 5 || bytes[4] != b'_' { return None; }
+    let point = match bytes[0] { b'p' => true, b'l' => false, _ => return None };
+    let mut wrap = [false; 3];
+    for axis in 0..3 {
+        wrap[axis] = match bytes[axis + 1] {
+            b'w' => true,
+            b'c' => false,
+            _ => return None,
+        };
+    }
+    Some((point, wrap, &descriptor[5..]))
+}
+
 pub fn base_name(name: &str) -> &str {
     let name = name.strip_prefix("sampler_").unwrap_or(name);
     let name = name.strip_prefix("sampler_").unwrap_or(name);
+    if let Some((_, _, resource)) = hlsl_sampler_descriptor(name) { return resource; }
     ["fc_", "fw_", "pc_", "pw_", "FC_", "FW_", "PC_", "PW_"].iter().find_map(|p| name.strip_prefix(*p)).unwrap_or(name)
 }
 pub fn texture_kind(name: &str) -> TextureKind {
@@ -26,9 +43,26 @@ pub fn texture_kind(name: &str) -> TextureKind {
 /// repeat, the MilkDrop convention; explicit fc/pc request clamp addressing.
 pub fn sampler_state(name: &str) -> (bool, bool) {
     let name = name.strip_prefix("sampler_").unwrap_or(name);
+    if let Some((point, axes, _)) = hlsl_sampler_descriptor(name) {
+        return (point, axes.iter().all(|axis| *axis));
+    }
     let nearest = ["pc_", "pw_", "PC_", "PW_"].iter().any(|p| name.starts_with(p));
     let repeat = !["fc_", "pc_", "FC_", "PC_"].iter().any(|p| name.starts_with(p));
     (nearest, repeat)
+}
+
+/// (point filtering, repeat addressing for U/V/W) for both legacy names and
+/// generated static HLSL sampler bindings.
+pub fn sampler_settings(name: &str) -> (bool, [bool; 3]) {
+    let name = name.strip_prefix("sampler_").unwrap_or(name);
+    if let Some((point, axes, _)) = hlsl_sampler_descriptor(name) { return (point, axes); }
+    let (point, repeat) = sampler_state(name);
+    (point, [repeat; 3])
+}
+
+pub fn sampler_index(name: &str) -> usize {
+    let (point, [u, v, w]) = sampler_settings(name);
+    usize::from(point) | (usize::from(u) << 1) | (usize::from(v) << 2) | (usize::from(w) << 3)
 }
 
 pub fn noise_texture(seed: u32, volume: bool) -> (u32, u32, u32, Vec<u8>) {
