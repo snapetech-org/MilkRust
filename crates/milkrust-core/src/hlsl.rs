@@ -76,6 +76,88 @@ fn parse_sampler_state_profile(tokens: &[String], open: usize) -> Result<(Sample
     Ok((profile, cursor))
 }
 
+/// Parse the bounded subset of the legacy D3D effect-file `sampler_state`
+/// initializer that can be represented by the renderer's sampler table.
+/// Unspecified filter/address fields use MilkDrop's linear/repeat convention.
+fn parse_legacy_sampler_state(
+    tokens: &[String],
+    open: usize,
+    fallback_resource: Option<&str>,
+) -> Result<(SamplerStateProfile, String, usize), String> {
+    if tokens.get(open).map(String::as_str) != Some("{") {
+        return Err("Malformed legacy HLSL sampler_state initializer".into());
+    }
+    let mut profile = SamplerStateProfile { point: false, wrap: [true; 3] };
+    let mut seen = std::collections::BTreeSet::new();
+    let mut filters = Vec::new();
+    let mut resource = None;
+    let mut cursor = open + 1;
+    while cursor < tokens.len() && tokens[cursor] != "}" {
+        let property = tokens[cursor].as_str();
+        if !matches!(property, "Texture" | "MinFilter" | "MagFilter" | "MipFilter" | "AddressU" | "AddressV" | "AddressW") {
+            return Err(format!("Legacy HLSL sampler_state property {property} is outside the texture/point/linear/wrap/clamp profile"));
+        }
+        if !seen.insert(property.to_string()) {
+            return Err(format!("Duplicate legacy HLSL sampler_state property {property}"));
+        }
+        if tokens.get(cursor + 1).map(String::as_str) != Some("=") {
+            return Err(format!("Malformed legacy HLSL sampler_state property {property}"));
+        }
+        if property == "Texture" {
+            if tokens.get(cursor + 2).map(String::as_str) != Some("<")
+                || !tokens.get(cursor + 3).is_some_and(|name| is_identifier(name))
+                || tokens.get(cursor + 4).map(String::as_str) != Some(">")
+                || tokens.get(cursor + 5).map(String::as_str) != Some(";")
+            {
+                return Err("Legacy HLSL sampler_state Texture must be a single <identifier> binding".into());
+            }
+            resource = Some(crate::resources::base_name(&tokens[cursor + 3]).to_string());
+            cursor += 6;
+            continue;
+        }
+        if tokens.get(cursor + 3).map(String::as_str) != Some(";") {
+            return Err(format!("Malformed legacy HLSL sampler_state property {property}"));
+        }
+        let value = tokens[cursor + 2].to_ascii_uppercase();
+        match property {
+            "MinFilter" | "MagFilter" | "MipFilter" => {
+                let point = match value.as_str() {
+                    "POINT" => true,
+                    "LINEAR" => false,
+                    _ => return Err(format!("Legacy HLSL sampler_state filter {value} is unsupported; use Point or Linear")),
+                };
+                filters.push((property, point));
+            }
+            "AddressU" | "AddressV" | "AddressW" => {
+                let wrap = match value.as_str() {
+                    "WRAP" => true,
+                    "CLAMP" => false,
+                    _ => return Err(format!("Legacy HLSL sampler_state address mode {value} is unsupported; use Wrap or Clamp")),
+                };
+                let axis = match property { "AddressU" => 0, "AddressV" => 1, _ => 2 };
+                profile.wrap[axis] = wrap;
+            }
+            _ => unreachable!(),
+        }
+        cursor += 4;
+    }
+    if tokens.get(cursor).map(String::as_str) != Some("}") {
+        return Err("Unterminated legacy HLSL sampler_state initializer".into());
+    }
+    if let Some((_, first)) = filters.first() {
+        if filters.iter().any(|(_, filter)| filter != first) {
+            return Err("Legacy HLSL sampler_state requires matching MinFilter, MagFilter, and MipFilter values".into());
+        }
+        profile.point = *first;
+    }
+    let resource = resource.or_else(|| fallback_resource.map(str::to_string))
+        .ok_or_else(|| "Legacy HLSL sampler_state requires Texture = <name> unless the sampler uses a sampler_* binding name".to_string())?;
+    if !is_identifier(&resource) {
+        return Err("Legacy HLSL sampler_state Texture must resolve to an identifier binding".into());
+    }
+    Ok((profile, resource, cursor))
+}
+
 fn texture_element_width(tokens: &[String]) -> Result<u8, String> {
     if tokens.len() != 1 { return Err("Unsupported HLSL texture element type".into()); }
     for prefix in ["float", "half", "min16float", "min10float"] {
@@ -250,7 +332,8 @@ fn splice_bounded_resource_expansion(
 /// represented in the typed AST. Bounded global 1D/2D/3D texture and legacy
 /// sampler arrays expand into named bindings; constant and side-effect-free
 /// dynamic indices dispatch over those names. Static global point/linear
-/// SamplerState definitions lower through bounded per-resource aliases.
+/// SamplerState definitions and bounded legacy sampler_state initializers lower
+/// through per-resource aliases.
 /// Function-local arrays, nested resource structs and advanced sampler states
 /// need different host binding models and fail explicitly.
 fn lower_modern_resource_syntax(tokens: &mut Vec<String>) -> Result<(), String> {
@@ -261,6 +344,7 @@ fn lower_modern_resource_syntax(tokens: &mut Vec<String>) -> Result<(), String> 
     let mut sampler_state_names = std::collections::BTreeSet::new();
     let mut sampler_state_profiles = BTreeMap::<String, SamplerStateProfile>::new();
     let mut sampler_state_fields = BTreeMap::<String, std::collections::BTreeSet<String>>::new();
+    let mut legacy_sampler_bindings = BTreeMap::<String, String>::new();
     let mut generic_ranges = Vec::new();
     let mut index = 0;
     while index < tokens.len() {
@@ -438,6 +522,59 @@ fn lower_modern_resource_syntax(tokens: &mut Vec<String>) -> Result<(), String> 
             resource_array_edits.push((type_index..declaration_end, declaration));
             index = declaration_end;
             continue;
+        }
+        if matches!(tokens[index].as_str(), "sampler" | "sampler2D" | "sampler3D")
+            && tokens.get(index + 1).is_some_and(|name| is_identifier(name)) {
+            let type_index = index;
+            let name_index = index + 1;
+            let sampler_name = tokens[name_index].clone();
+            let mut initializer = None;
+            let mut cursor = name_index + 1;
+            let mut parens = 0i32;
+            while cursor < tokens.len() {
+                match tokens[cursor].as_str() {
+                    "(" => parens += 1,
+                    ")" => parens -= 1,
+                    "=" if parens == 0 => { initializer = Some(cursor); break; }
+                    ";" | "," if parens == 0 => break,
+                    _ => {}
+                }
+                cursor += 1;
+            }
+            if let Some(equals) = initializer {
+                if tokens.get(equals + 1).map(String::as_str) != Some("sampler_state")
+                    || tokens.get(equals + 2).map(String::as_str) != Some("{")
+                {
+                    return Err("Initialized legacy HLSL samplers require a static sampler_state block".into());
+                }
+                let global_scope = tokens[..type_index].iter().fold(0i32, |depth, token| match token.as_str() {
+                    "{" => depth + 1,
+                    "}" => depth - 1,
+                    _ => depth,
+                }) == 0;
+                if !global_scope {
+                    return Err("Initialized legacy HLSL samplers must be global declarations".into());
+                }
+                let fallback_resource = sampler_name.starts_with("sampler_")
+                    .then(|| crate::resources::base_name(&sampler_name))
+                    .filter(|resource| is_identifier(resource));
+                let (profile, resource, close) = parse_legacy_sampler_state(tokens, equals + 2, fallback_resource)?;
+                let semicolon = close + 1;
+                if tokens.get(semicolon).map(String::as_str) != Some(";") {
+                    return Err("Grouped legacy HLSL sampler_state declarations are unsupported".into());
+                }
+                let alias = profile.binding_name(&resource, if tokens[type_index] == "sampler3D" { 3 } else { 2 })?;
+                if tokens.iter().any(|token| token == &alias) {
+                    return Err(format!("Generated HLSL sampler binding {alias} collides with a user identifier"));
+                }
+                if legacy_sampler_bindings.insert(sampler_name.clone(), alias).is_some() {
+                    return Err(format!("Duplicate initialized legacy HLSL sampler {sampler_name}"));
+                }
+                let edit_start = if type_index > 0 && tokens[type_index - 1] == "uniform" { type_index - 1 } else { type_index };
+                resource_array_edits.push((edit_start..semicolon + 1, Vec::new()));
+                index = semicolon + 1;
+                continue;
+            }
         }
         if tokens[index] == "SamplerState" {
             let Some(name) = tokens.get(index + 1).filter(|token| is_identifier(token)) else {
@@ -949,6 +1086,21 @@ fn lower_modern_resource_syntax(tokens: &mut Vec<String>) -> Result<(), String> 
             rewritten.push(match resource_shape.width { 1 => "x", 2 => "xy", _ => "xyz" }.into());
         }
         index = end;
+    }
+    // Static legacy sampler declarations bind a resource and sampler state in
+    // one effect-file block. Rewrite only direct tex* sampler arguments so an
+    // opaque state cannot escape into unsupported arithmetic or assignments.
+    for index in 0..rewritten.len() {
+        let Some(alias) = legacy_sampler_bindings.get(&rewritten[index]).cloned() else { continue; };
+        let valid_intrinsic = index >= 2
+            && rewritten[index - 1] == "("
+            && ["tex", "tex2d", "tex3d", "tex2D", "tex2Dlod", "tex2Dbias", "tex2Dgrad", "tex2Dproj", "tex2Doffset",
+                "tex3D", "tex3Dlod", "tex3Dbias", "tex3Dgrad", "tex3Dproj", "tex3Doffset", "tex2Dfetch"]
+                .contains(&rewritten[index - 2].as_str());
+        if !valid_intrinsic {
+            return Err(format!("Legacy sampler_state variable {} may only be used as the first argument to a tex* intrinsic", rewritten[index]));
+        }
+        rewritten[index] = alias;
     }
     *tokens = rewritten;
     Ok(())
