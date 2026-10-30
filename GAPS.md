@@ -97,8 +97,8 @@ run is recorded for this checkpoint.
   source-texel offsets, nested range transforms and first-level edge darkening in
   native/WebGL; safe nondegenerate bounds avoid the historical zero-span typo.
   Deterministic 2D/3D noise uses the reference texture dimensions and
-  quality-specific X/Y/Z cubic expansion order; mipmaps and per-binding
-  filtering/wrapping are also present. q registers, frame uniforms, texture sizes
+  quality-specific X/Y/Z cubic expansion order. Built-in noise remains
+  single-level as in MilkDrop; per-binding filtering/wrapping is also present. q registers, frame uniforms, texture sizes
   and random/roam vectors are bound. Blur pixel parity and generated-noise pixel
   comparison remain open because the reference seeds from its runtime clock;
   missing resources and compiler/driver errors do not become a placeholder.
@@ -415,7 +415,7 @@ separate limits. This is not a claim of tested recovery or universal completion.
 Built-in noise textures now use the compatible physical dimensions, random-value ranges,
 packed color layout, and separable cubic interpolation order from MilkDrop's
 `AddNoiseTex` and `AddNoiseVol` paths. Medium/high 2D noise expands in X then Y;
-high 3D noise expands in X, Y, then Z. The generator uses stable per-preset seeds
+high 3D noise expands in X, Y, then Z. The generator uses stable fixed seeds per texture quality
 instead of the reference's performance-counter reseeding, so quality semantics are
 implemented but generated pixels are not claimed bit-identical. Builds and GPU
 reference captures remain pending.
