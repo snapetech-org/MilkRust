@@ -7,11 +7,52 @@ impl TextureKind {
     pub fn is_builtin(self) -> bool { !matches!(self, Self::Asset) }
 }
 
-fn hlsl_sampler_descriptor(name: &str) -> Option<(bool, [bool; 3], &str)> {
+pub const SAMPLER_VARIANTS: usize = 96;
+pub const ANIMATED_SPRITE_SAMPLER: usize = SAMPLER_VARIANTS;
+pub const SAMPLER_OBJECT_COUNT: usize = SAMPLER_VARIANTS + 1;
+pub const LINEAR_CLAMP_SAMPLER: usize = 88;
+pub const LINEAR_REPEAT_SAMPLER: usize = 95;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MipFilter { None, Point, Linear }
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SamplerSettings {
+    pub min_point: bool,
+    pub mag_point: bool,
+    pub mip: MipFilter,
+    pub wrap: [bool; 3],
+}
+
+impl SamplerSettings {
+    const MILKDROP_DEFAULT: Self = Self {
+        min_point: false, mag_point: false, mip: MipFilter::Linear, wrap: [true; 3],
+    };
+
+    fn filter_code(self) -> usize {
+        usize::from(!self.min_point) * 6 + usize::from(!self.mag_point) * 3 + match self.mip {
+            MipFilter::None => 0,
+            MipFilter::Point => 1,
+            MipFilter::Linear => 2,
+        }
+    }
+
+    fn index(self) -> usize {
+        let address = usize::from(self.wrap[0]) | (usize::from(self.wrap[1]) << 1) | (usize::from(self.wrap[2]) << 2);
+        self.filter_code() * 8 + address
+    }
+}
+
+fn hlsl_sampler_descriptor(name: &str) -> Option<(u8, [bool; 3], &str)> {
     let descriptor = name.strip_prefix("hlsl_")?;
     let bytes = descriptor.as_bytes();
     if bytes.len() < 5 || bytes[4] != b'_' { return None; }
-    let point = match bytes[0] { b'p' => true, b'l' => false, _ => return None };
+    let filter = match bytes[0] {
+        b'0'..=b'9' => bytes[0] - b'0',
+        b'a'..=b'b' => bytes[0] - b'a' + 10,
+        _ => return None,
+    };
+    if filter >= 12 { return None; }
     let mut wrap = [false; 3];
     for axis in 0..3 {
         wrap[axis] = match bytes[axis + 1] {
@@ -20,7 +61,21 @@ fn hlsl_sampler_descriptor(name: &str) -> Option<(bool, [bool; 3], &str)> {
             _ => return None,
         };
     }
-    Some((point, wrap, &descriptor[5..]))
+    Some((filter, wrap, &descriptor[5..]))
+}
+
+fn settings_from_filter_code(filter: usize, wrap: [bool; 3]) -> Option<SamplerSettings> {
+    if filter >= 12 { return None; }
+    Some(SamplerSettings {
+        min_point: filter / 6 == 0,
+        mag_point: filter % 6 / 3 == 0,
+        mip: match filter % 3 {
+            0 => MipFilter::None,
+            1 => MipFilter::Point,
+            _ => MipFilter::Linear,
+        },
+        wrap,
+    })
 }
 
 pub fn base_name(name: &str) -> &str {
@@ -43,8 +98,10 @@ pub fn texture_kind(name: &str) -> TextureKind {
 /// repeat, the MilkDrop convention; explicit fc/pc request clamp addressing.
 pub fn sampler_state(name: &str) -> (bool, bool) {
     let name = name.strip_prefix("sampler_").unwrap_or(name);
-    if let Some((point, axes, _)) = hlsl_sampler_descriptor(name) {
-        return (point, axes.iter().all(|axis| *axis));
+    if let Some((filter, axes, _)) = hlsl_sampler_descriptor(name) {
+        let settings = settings_from_filter_code(usize::from(filter), axes).unwrap_or(SamplerSettings::MILKDROP_DEFAULT);
+        let nearest = settings.min_point && settings.mag_point;
+        return (nearest, axes.iter().all(|axis| *axis));
     }
     let nearest = ["pc_", "pw_", "PC_", "PW_"].iter().any(|p| name.starts_with(p));
     let repeat = !["fc_", "pc_", "FC_", "PC_"].iter().any(|p| name.starts_with(p));
@@ -55,14 +112,37 @@ pub fn sampler_state(name: &str) -> (bool, bool) {
 /// generated static HLSL sampler bindings.
 pub fn sampler_settings(name: &str) -> (bool, [bool; 3]) {
     let name = name.strip_prefix("sampler_").unwrap_or(name);
-    if let Some((point, axes, _)) = hlsl_sampler_descriptor(name) { return (point, axes); }
+    if let Some((filter, axes, _)) = hlsl_sampler_descriptor(name) {
+        let settings = settings_from_filter_code(usize::from(filter), axes).unwrap_or(SamplerSettings::MILKDROP_DEFAULT);
+        let point = settings.min_point && settings.mag_point;
+        return (point, axes);
+    }
     let (point, repeat) = sampler_state(name);
     (point, [repeat; 3])
 }
 
+pub fn sampler_profile(name: &str) -> SamplerSettings {
+    let name = name.strip_prefix("sampler_").unwrap_or(name);
+    if let Some((filter, wrap, _)) = hlsl_sampler_descriptor(name) {
+        return settings_from_filter_code(usize::from(filter), wrap).unwrap_or(SamplerSettings::MILKDROP_DEFAULT);
+    }
+    let (point, repeat) = sampler_state(name);
+    SamplerSettings {
+        min_point: point,
+        mag_point: point,
+        mip: if point { MipFilter::Point } else { MipFilter::Linear },
+        wrap: [repeat; 3],
+    }
+}
+
 pub fn sampler_index(name: &str) -> usize {
-    let (point, [u, v, w]) = sampler_settings(name);
-    usize::from(point) | (usize::from(u) << 1) | (usize::from(v) << 2) | (usize::from(w) << 3)
+    sampler_profile(name).index()
+}
+
+pub fn sampler_parameters(index: usize) -> Option<SamplerSettings> {
+    if index >= SAMPLER_VARIANTS { return None; }
+    let address = index % 8;
+    settings_from_filter_code(index / 8, [address & 1 != 0, address & 2 != 0, address & 4 != 0])
 }
 
 pub fn noise_texture(seed: u32, volume: bool) -> (u32, u32, u32, Vec<u8>) {
@@ -312,3 +392,4 @@ mod tests {
         assert_ne!(noise_texture(1, false).3, noise_texture(2, false).3);
     }
 }
+
