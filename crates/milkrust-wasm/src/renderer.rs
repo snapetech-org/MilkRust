@@ -164,7 +164,7 @@ struct MilkRustTextureAsset {
     texture: web_sys::WebGlTexture,
     additional_frames: Vec<web_sys::WebGlTexture>,
     delays_seconds: Vec<f64>,
-    repeat_count: Option<u16>,
+    repeat_count: Option<u32>,
     animated: bool,
     dimensions: Rc<Cell<(u32, u32)>>,
     // None while loading, Some(Ok) after upload, Some(Err) after decode/upload failure.
@@ -1614,11 +1614,17 @@ fn create_milkrust_texture_from_data_url(
         worker: None, worker_url: None, worker_timeout_id: None,
         _onmessage: None, _onerror: None, _timeout: None,
     };
-    if matches!(source.format, Format::Gif) {
+    let animated_png = matches!(source.format, Format::Png)
+        && source.has_animated_png().map_err(|e| JsValue::from_str(&e))?;
+    if matches!(source.format, Format::Gif) || animated_png {
         asset.animated = true;
-        let animation = source.decode_gif().map_err(|e| JsValue::from_str(&e))?;
+        let animation = if matches!(source.format, Format::Gif) {
+            source.decode_gif().map_err(|e| JsValue::from_str(&e))?
+        } else {
+            source.decode_png_animation().map_err(|e| JsValue::from_str(&e))?
+        };
         if animation.decoded_pixels() != pixels {
-            return Err(JsValue::from_str("GIF frame count changed after pixel reservation"));
+            return Err(JsValue::from_str("Animated image frame count changed after pixel reservation"));
         }
         for (index, frame) in animation.frames.iter().enumerate() {
             let texture = if index == 0 { asset.texture.clone() } else { create_milkrust_placeholder_texture(gl)? };
@@ -1641,7 +1647,7 @@ fn create_milkrust_texture_from_data_url(
             }
             if gl.get_error() != web_sys::WebGl2RenderingContext::NO_ERROR {
                 if index != 0 { gl.delete_texture(Some(&texture)); }
-                return Err(JsValue::from_str("Animated GIF texture upload failed"));
+                return Err(JsValue::from_str("Animated image texture upload failed"));
             }
             if index != 0 { asset.additional_frames.push(texture); }
         }
