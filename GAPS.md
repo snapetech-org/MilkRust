@@ -141,11 +141,12 @@ run is recorded for this checkpoint.
   ImageBitmap upload. The web SDK packages a static worker and configures it only
   when it is same-origin with the page; a rejected static worker falls back to a
   blob worker when CSP allows it. Direct wasm-bindgen users may configure a
-  same-origin URL or use the blob-worker fallback. Animated GIF and APNG use the shared bounded Rust decoder in native and WebGL:
-  full-canvas compositing, disposal, per-frame delays and sprite-local or preset-time
-  selection, capped at 120 frames and 16 Mi decoded canvas pixels per asset.
-  Netscape/AnimExts and APNG play-count metadata control finite, single-play or
-  infinite playback consistently across both renderer hosts.
+  same-origin URL or use the blob-worker fallback. Animated GIF, APNG and animated WebP use bounded shared Rust decoders
+  in native and WebGL: full-canvas compositing, disposal, per-frame delays and
+  sprite-local or preset-time selection, capped at 120 frames and 16 Mi decoded
+  canvas pixels per asset. Netscape/AnimExts, APNG play counts and WebP loop
+  counts control finite, single-play or infinite playback consistently across
+  both renderer hosts.
   Native/browser decoder, upload and recovery regressions are unrun.
 - Private JIT build entrypoints include native C++ and browser compiler delivery.
   Regression sources cover the typed compiler, resource bindings, unsafe input,
@@ -228,8 +229,7 @@ render frames, resolve external texture packs, or establish fidelity.
   encodings, other executable extensions and unsupported formats. The current
   community-tree inventory found no unhandled text encoding or equation call,
   but CLI parser/shader analysis and missing external texture-pack accounting
-  remain unrun. Animated WebP and additional unsupported historical image formats remain
-  explicit import failures.
+  remain unrun. Additional unsupported historical image formats remain explicit import failures.
 - Desktop helper process containment is implemented in PlezyNG PR #82, with
   fault-regression sources and platform packaging; execution is unverified.
   Mobile/TV local-driver and device-wide GPU hang containment, browser-process OOM
@@ -435,3 +435,18 @@ as GIF. A static-PNG check no longer scans compressed image bytes for an
 The source path and dependency/license records are committed. Native/browser
 decoder, upload, malformed-input and reference-pixel checks remain unrun, so
 this does not establish APNG rendering qualification or pixel identity.
+
+
+## 2026-10-30 bounded animated WebP decoding
+
+Animated WebP is now inspected against canvas, frame-count and aggregate
+decoded-pixel limits before the shared Rust decoder allocates frame images.
+The Rust decoder composites full-canvas frames, preserves frame durations and
+maps finite/infinite WebP loop metadata to the common animation clock. Native
+hosts route encoded WebP through the new ABI; WebGL routes animated WebP through
+the same upload and timing path as GIF and APNG. Static WebP continues through
+the bounded existing host/browser decode paths.
+
+The decoder, ABI and import paths are source-complete. Decoder, upload,
+malformed-input, disposal/loop and reference-pixel checks remain unrun; no
+platform or visual qualification is claimed.
