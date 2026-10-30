@@ -944,6 +944,8 @@ export const createMilkRustEngine = async ({
         mouseState.mouse_dx,
         mouseState.mouse_dy,
       );
+      mouseState.mouse_dx = 0;
+      mouseState.mouse_dy = 0;
       const renderStatus = typeof rustEngine.renderStatusJson === 'function'
         ? parseJson(rustEngine.renderStatusJson()) : null;
       if (renderStatus?.state === 'failed') {
