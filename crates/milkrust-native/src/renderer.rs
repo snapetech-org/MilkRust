@@ -433,7 +433,8 @@ impl Renderer {
                                     }
                                     texture
                                 } else { Texture::new(self.gl, w, h, Some(&data))? };
-                                unsafe { (self.gl.generate_mipmap)(target); }
+                                // MilkDrop's built-in noise textures have only level zero.
+                                unsafe { (self.gl.tex_parameter)(target, 0x813D, 0); } // TEXTURE_MAX_LEVEL
                                 self.noise.insert(key, (texture, target));
                             }
                         }
