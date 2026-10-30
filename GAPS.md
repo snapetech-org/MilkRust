@@ -325,3 +325,13 @@ wrapper header, consistent with the saved-header parser, and ignores sprite
 records inside either preset body. Classic .milk keeps its first-value,
 default-on behavior. Regression sources cover both branches; the private build
 and test workflow has not produced a run for these commits.
+
+
+## 2026-10-30 classic sprite disable record
+
+The classic `.milk` gate now scans ordinary preset records through `[preset00]`
+while ignoring records inside saved sprite blocks. The first standalone
+`sprite` record controls the gate; no record keeps the classic default-on
+behavior. The `.milk2` gate remains limited to the wrapper header and uses its
+last duplicate value. Extraction-level regression sources cover both rules;
+they have not run.
