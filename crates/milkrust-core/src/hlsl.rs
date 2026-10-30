@@ -19,6 +19,12 @@ struct SamplerStateProfile {
     wrap: [bool; 3],
 }
 
+const LEGACY_SAMPLER_INTRINSICS: &[&str] = &[
+    "tex", "tex2d", "tex3d", "tex2D", "tex2Dlod", "tex2Dbias", "tex2Dgrad", "tex2Dproj", "tex2Doffset",
+    "tex3D", "tex3Dlod", "tex3Dbias", "tex3Dgrad", "tex3Dproj", "tex3Doffset", "tex2Dfetch", "tex3Dfetch",
+    "tex2Dsize", "tex3Dsize",
+];
+
 impl SamplerStateProfile {
     fn binding_name(self, resource: &str, dimension: u8) -> Result<String, String> {
         if !(1..=3).contains(&dimension) {
@@ -1094,9 +1100,7 @@ fn lower_modern_resource_syntax(tokens: &mut Vec<String>) -> Result<(), String> 
         let Some(alias) = legacy_sampler_bindings.get(&rewritten[index]).cloned() else { continue; };
         let valid_intrinsic = index >= 2
             && rewritten[index - 1] == "("
-            && ["tex", "tex2d", "tex3d", "tex2D", "tex2Dlod", "tex2Dbias", "tex2Dgrad", "tex2Dproj", "tex2Doffset",
-                "tex3D", "tex3Dlod", "tex3Dbias", "tex3Dgrad", "tex3Dproj", "tex3Doffset", "tex2Dfetch"]
-                .contains(&rewritten[index - 2].as_str());
+            && LEGACY_SAMPLER_INTRINSICS.contains(&rewritten[index - 2].as_str());
         if !valid_intrinsic {
             return Err(format!("Legacy sampler_state variable {} may only be used as the first argument to a tex* intrinsic", rewritten[index]));
         }
@@ -1147,7 +1151,7 @@ pub(crate) fn sampler_names(source: &str) -> Result<Vec<String>, String> {
     // Only referenced resources are reflected, never arbitrary identifiers in
     // unknown function calls. Sampler parameters belong to their function.
     for call in tokens.windows(4) {
-        if ["tex", "tex2d", "tex3d", "tex2D", "tex2Dlod", "tex2Dbias", "tex2Dgrad", "tex2Dproj", "tex3D", "tex3Dlod", "tex3Dbias", "tex3Dgrad", "tex3Dproj", "tex2Dfetch", "tex2Dsize", "tex3Dsize"].contains(&call[0].as_str())
+        if LEGACY_SAMPLER_INTRINSICS.contains(&call[0].as_str())
             && call[1] == "(" && (call[3] == "," || (matches!(call[0].as_str(), "tex2Dsize" | "tex3Dsize") && call[3] == ")")) && !crate::is_milkrust_main_sampler(&call[2])
             && !sampler_parameters.contains(&&call[2]) && !names.contains(&call[2]) {
             names.push(call[2].clone());
