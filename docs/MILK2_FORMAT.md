@@ -77,9 +77,9 @@ direction and five saved random values. The 30 MD3 `(a,c)` blend-mask formulas
 are implemented on the documented 64x48-cell mesh (65x49 vertices), with aspect
 correction, saved progress and the random block. These formulas are a clean-room
 port of the behavioral implementation/specification in M0Rf30/lactea; its MIT
-attribution is retained in `crates/milkrust-core/THIRD_PARTY_NOTICES.md`. Hosts
-upload the 32-bit fixed-point vertex alpha values as packed RGBA8UI and
-interpolate the original triangles in the native and browser shaders. The
+attribution is retained in `crates/milkrust-core/THIRD_PARTY_NOTICES.md`. Hosts clamp each per-vertex mix and truncate it to MilkDrop's 8-bit D3D9 alpha
+byte. Native GL and WebGL upload those 65x49 values as R8 and interpolate the
+original triangles in their shaders. The
 `all_saved_pattern_meshes_match_reference_vertices` unit control checks sampled
 values for all 30 patterns against Lactea's published 4x2 reference table,
 including the direction-sensitive variants. It exercises the production
@@ -126,3 +126,13 @@ Saved sprite records are parsed and executed independently in `sprites.rs`.
 Unknown fields, malformed blocks and unsupported trailing extensions fail
 import. Source support is implemented for the documented saved fields in this
 profile; compiler, renderer and device conformance remain unrun.
+
+
+## Saved blend vertex alpha
+
+The saved-pattern result is clamped per vertex, converted with truncation to an
+8-bit D3D9 color alpha value, and then interpolated across the 64x48 mesh
+triangles. Native GL and WebGL share the same 65x49 R8 mesh upload and
+normalized shader sampling. The source regression checks the reference's byte
+count and endpoint/truncation behavior; execution and pixel comparison remain
+unverified.

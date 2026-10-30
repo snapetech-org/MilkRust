@@ -3,8 +3,8 @@
 //! The `(a,c)` pattern formulas below are a clean-room port of the published
 //! behavioral implementation in M0Rf30/lactea, `md3_blend.rs` and
 //! `blend_patterns.rs` (MIT; attribution and license text are in
-//! `crates/milkrust-core/THIRD_PARTY_NOTICES.md`). Packed vertex upload and GPU
-//! triangle interpolation preserve the documented 64x48 blend mesh.
+//! `crates/milkrust-core/THIRD_PARTY_NOTICES.md`). MilkDrop's final mix is clamped and truncated to D3D9's 8-bit vertex alpha
+//! before native GL and WebGL interpolate the documented 64x48 mesh.
 
 use crate::milk2::TransitionMaskKey;
 
@@ -328,14 +328,13 @@ pub(super) fn generate(key: TransitionMaskKey) -> Result<Vec<u8>, String> {
     let aspect = ((key.width as f32 / key.height as f32).max(1.0), (key.height as f32 / key.width as f32).max(1.0));
     let mut vertices = vec![[0.0f32; 2]; (GRID_X + 1) * (GRID_Y + 1)];
     fill_vertices(GRID_X, GRID_Y, Pattern::from_code(key.pattern).expect("validated pattern"), key.direction, random, aspect, &mut vertices);
-    let mut packed = Vec::with_capacity(vertices.len() * 4);
+    let mut alpha_bytes = Vec::with_capacity(vertices.len());
     for [a, c] in vertices {
         let alpha = (a * progress + c).clamp(0.0, 1.0);
-        let alpha = if alpha.is_nan() { 0.0 } else { alpha };
-        let encoded = (f64::from(alpha) * f64::from(u32::MAX)).round() as u32;
-        packed.extend_from_slice(&encoded.to_be_bytes());
+        // D3D9 stores the per-vertex mix in D3DCOLOR alpha: truncate, do not round.
+        alpha_bytes.push((alpha * 255.0) as u8);
     }
-    Ok(packed)
+    Ok(alpha_bytes)
 }
 
 
@@ -409,5 +408,15 @@ mod tests {
             }
         }
         assert!(seen.into_iter().all(|present| present), "every saved pattern has a reference row");
+    }
+
+    #[test]
+    fn saved_mix_truncates_to_d3d9_vertex_alpha_bytes() {
+        for (progress, expected) in [(0.0, 0), (0.5, 127), (1.0, 255)] {
+            let key = TransitionMaskKey::new(1, progress, 1, [0.0; 5], 640, 480);
+            let bytes = generate(key).unwrap();
+            assert_eq!(bytes.len(), (GRID_X + 1) * (GRID_Y + 1));
+            assert!(bytes.iter().all(|&value| value == expected));
+        }
     }
 }

@@ -279,24 +279,21 @@ impl TransitionMaskKey {
 pub const TRANSITION_GRID_WIDTH: u32 = 65;
 pub const TRANSITION_GRID_HEIGHT: u32 = 49;
 
-/// Generate the saved MD3 blend alpha at each 64x48 mesh vertex. Four bytes
-/// encode each normalized 32-bit fixed-point value in an RGBA8UI texture so
-/// both GPU hosts can apply the original triangle interpolation without first
-/// quantizing the field to an output-sized R8 image.
+/// Generate MilkDrop's normalized eight-bit alpha at each 64x48 mesh vertex.
+/// Values clamp to [0, 1], then truncate to the D3D9 `D3DCOLOR` alpha byte
+/// before either host applies the original triangle interpolation.
 pub fn generate_transition_vertex_field(key: TransitionMaskKey) -> Result<Vec<u8>, String> {
     crate::milk2_mask::generate(key)
 }
 
 /// GLSL shared by copy, translated HLSL, and generated per-pixel paths. The
-/// native and WebGL hosts bind the same packed vertex field at the reserved
-/// final texture unit and perform matching 64x48 triangle interpolation.
+/// native and WebGL hosts bind the same normalized R8 vertex-alpha field at the
+/// reserved final texture unit and perform matching 64x48 triangle interpolation.
 pub const GLSL_TRANSITION_MASK: &str = r#"
 uniform int u_transitionPattern;
-uniform usampler2D u_transitionMask;
+uniform sampler2D u_transitionMask;
 highp float milkrust_transition_vertex(ivec2 coordinate) {
-  highp uvec4 bytes = texelFetch(u_transitionMask, coordinate, 0);
-  highp uint encoded = (bytes.r << 24u) | (bytes.g << 16u) | (bytes.b << 8u) | bytes.a;
-  return float(encoded) / 4294967295.0;
+  return texelFetch(u_transitionMask, coordinate, 0).r;
 }
 float milkrust_transition_mask(vec2 uv) {
   if (u_transitionPattern == 0) return 1.0;

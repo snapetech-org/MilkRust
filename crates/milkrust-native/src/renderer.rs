@@ -147,8 +147,8 @@ impl Texture {
 
     fn new_transition_mask(gl: Gl, data: &[u8]) -> Result<Self, String> {
         let (width, height) = (milk2::TRANSITION_GRID_WIDTH, milk2::TRANSITION_GRID_HEIGHT);
-        if data.len() as u64 != u64::from(width) * u64::from(height) * 4 {
-            return Err("Invalid packed transition vertex field length".into());
+        if data.len() as u64 != u64::from(width) * u64::from(height) {
+            return Err("Invalid transition alpha field length".into());
         }
         let mut id = 0;
         unsafe { (gl.gen_textures)(1, &mut id); }
@@ -161,7 +161,7 @@ impl Texture {
             (gl.tex_parameter)(TEXTURE_2D, 0x2800, 0x2600);
             (gl.tex_parameter)(TEXTURE_2D, 0x2802, 0x812F);
             (gl.tex_parameter)(TEXTURE_2D, 0x2803, 0x812F);
-            (gl.tex_image)(TEXTURE_2D, 0, 0x8D7C, width as i32, height as i32, 0, 0x8D99, 0x1401, data.as_ptr().cast());
+            (gl.tex_image)(TEXTURE_2D, 0, 0x8229, width as i32, height as i32, 0, 0x1903, 0x1401, data.as_ptr().cast());
             if (gl.get_error)() != 0 { return Err("GL transition vertex field allocation/upload failed".into()); }
         }
         Ok(texture)

@@ -703,8 +703,8 @@ impl MilkRustWebGlRenderer {
         self.gl.tex_parameteri(web_sys::WebGl2RenderingContext::TEXTURE_2D,
             web_sys::WebGl2RenderingContext::TEXTURE_WRAP_T, web_sys::WebGl2RenderingContext::CLAMP_TO_EDGE as i32);
         let upload = self.gl.tex_image_2d_with_i32_and_i32_and_i32_and_format_and_type_and_opt_u8_array(
-            web_sys::WebGl2RenderingContext::TEXTURE_2D, 0, 0x8D7C,
-            mask_width as i32, mask_height as i32, 0, 0x8D99,
+            web_sys::WebGl2RenderingContext::TEXTURE_2D, 0, 0x8229,
+            mask_width as i32, mask_height as i32, 0, 0x1903,
             web_sys::WebGl2RenderingContext::UNSIGNED_BYTE, Some(&vertices));
         self.gl.pixel_storei(web_sys::WebGl2RenderingContext::UNPACK_ALIGNMENT, 4);
         if let Err(error) = upload {

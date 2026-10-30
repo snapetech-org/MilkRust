@@ -102,7 +102,7 @@ run is recorded for this checkpoint.
   remain open; missing resources and compiler/driver errors do not become a placeholder.
 - A bounded `.milk2` wrapper parser, round-trip metadata preservation, two
   independent states, all 30 saved-pattern formulas with per-fragment 64x48
-  triangle interpolation from a packed 32-bit vertex field, and the documented sprite
+  triangle interpolation from the reference's clamped, truncated 8-bit vertex alpha, and the documented sprite
   field/runtime paths for native and WebGL. Both equation scopes run independently;
   PRESET2 uses a temporary cosine-mixed render scope with shader-dependent boolean
   snapping, while persistent registers remain per-preset. Custom shape fills,
@@ -335,3 +335,15 @@ while ignoring records inside saved sprite blocks. The first standalone
 behavior. The `.milk2` gate remains limited to the wrapper header and uses its
 last duplicate value. Extraction-level regression sources cover both rules;
 they have not run.
+
+
+## 2026-10-30 saved-pattern vertex alpha fidelity correction
+
+MilkDrop computes `clamp(a * progress + c, 0, 1)` at each saved mesh
+vertex, truncates `mix2 * 255` to the D3D9 color alpha byte, then interpolates
+those normalized bytes across the 64x48 triangles. The previous packed 32-bit
+field retained precision the reference path discards. Core now emits a 65x49
+R8 field, and native GL and WebGL sample it through normalized `sampler2D`
+lookups before matching triangle interpolation. A source control checks the
+byte count and clamp/truncation endpoints; private build, execution and
+reference-image comparison remain pending.
