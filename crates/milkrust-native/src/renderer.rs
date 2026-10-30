@@ -35,7 +35,7 @@ impl Drop for Program { fn drop(&mut self) { unsafe { (self.gl.delete_program)(s
 struct Shader { gl: Gl, id: u32 }
 impl Drop for Shader { fn drop(&mut self) { unsafe { (self.gl.delete_shader)(self.id); } } }
 struct Texture { gl: Gl, id: u32, pixels: u64, width: u32, height: u32 }
-struct TextureAsset { frames: Vec<Texture>, delays_seconds: Vec<f64>, repeat_count: Option<u16>, pixels: u64, animated: bool }
+struct TextureAsset { frames: Vec<Texture>, delays_seconds: Vec<f64>, repeat_count: Option<u32>, pixels: u64, animated: bool }
 impl TextureAsset {
     fn frame_at(&self, seconds: f64) -> &Texture {
         let index = milkrust_core::texture::animation_frame_index(&self.delays_seconds, self.repeat_count, seconds);
@@ -266,21 +266,21 @@ impl Renderer {
     }
 
     pub fn texture_animation(&mut self, name: &str, width: u32, height: u32,
-        frames: &[&[u8]], delays_seconds: &[f64], repeat_count: Option<u16>) -> Result<(), String> {
+        frames: &[&[u8]], delays_seconds: &[f64], repeat_count: Option<u32>) -> Result<(), String> {
         self.upload_texture(name, width, height, frames, delays_seconds, repeat_count, true)
     }
 
     fn upload_texture(&mut self, name: &str, width: u32, height: u32,
-        frames: &[&[u8]], delays_seconds: &[f64], repeat_count: Option<u16>, animated: bool) -> Result<(), String> {
+        frames: &[&[u8]], delays_seconds: &[f64], repeat_count: Option<u32>, animated: bool) -> Result<(), String> {
         dimensions(width, height, self.max_texture)?;
         if name.is_empty() || name.len() > 512 || name.contains('\0') || frames.is_empty()
-            || frames.len() > milkrust_core::texture::MAX_GIF_FRAMES || delays_seconds.len() != frames.len()
+            || frames.len() > milkrust_core::texture::MAX_ANIMATION_FRAMES || delays_seconds.len() != frames.len()
             || delays_seconds.iter().any(|delay| !delay.is_finite() || *delay <= 0.0) {
             return Err("Invalid texture name, frame count or animation timing".into());
         }
         let frame_pixels = u64::from(width) * u64::from(height);
         let pixels = frame_pixels.checked_mul(frames.len() as u64).ok_or("Texture frame pixel count overflow")?;
-        if pixels > milkrust_core::texture::MAX_GIF_TOTAL_PIXELS
+        if pixels > milkrust_core::texture::MAX_ANIMATED_TOTAL_PIXELS
             || frames.iter().any(|frame| frame.len() as u64 != frame_pixels * 4) {
             return Err("Texture frames exceed their decoded pixel or RGBA byte budget".into());
         }
