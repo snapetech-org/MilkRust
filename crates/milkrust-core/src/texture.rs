@@ -280,7 +280,50 @@ fn inspect_gif(bytes: &[u8]) -> Result<GifInspection, String> {
     Ok(GifInspection { width, height, frames: images, repeat_count })
 }
 
-pub fn inspect(format: Format, bytes: &[u8]) -> Result<(u32, u32), String> {
+pub #[derive(Clone, Copy)]
+struct WebpInspection {
+    width: u32,
+    height: u32,
+    frames: usize,
+    repeat_count: Option<u32>,
+    animated: bool,
+}
+
+fn inspect_webp(bytes: &[u8]) -> Result<WebpInspection, String> {
+    if bytes.is_empty() || bytes.len() > MAX_ENCODED_BYTES {
+        return Err("WebP exceeds the 16 MiB encoded limit".into());
+    }
+    let mut decoder = image_webp::WebPDecoder::new(Cursor::new(bytes))
+        .map_err(|error| format!("WebP header decode failed: {error}"))?;
+    decoder.set_memory_limit(64 * 1024 * 1024);
+    let (width, height) = decoder.dimensions();
+    dimensions(width, height)?;
+    let animated = decoder.is_animated();
+    let frames = if animated {
+        usize::try_from(decoder.num_frames()).map_err(|_| "WebP frame count overflow")?
+    } else {
+        1
+    };
+    let pixel_limit = if animated { MAX_ANIMATED_TOTAL_PIXELS } else { MAX_PIXELS };
+    if frames == 0 || frames > MAX_ANIMATION_FRAMES
+        || u64::from(width) * u64::from(height) * frames as u64 > pixel_limit {
+        return Err("WebP exceeds its decoded frame or pixel budget".into());
+    }
+    let repeat_count = if !animated {
+        None
+    } else {
+        match decoder.loop_count() {
+            image_webp::LoopCount::Forever => Some(0),
+            image_webp::LoopCount::Times(plays) => {
+                let plays = u32::from(plays.get());
+                if plays > 1 { Some(plays - 1) } else { None }
+            }
+        }
+    };
+    Ok(WebpInspection { width, height, frames, repeat_count, animated })
+}
+
+fn inspect(format: Format, bytes: &[u8]) -> Result<(u32, u32), String> {
     if bytes.is_empty() || bytes.len() > MAX_ENCODED_BYTES { return Err("Texture exceeds 16 MiB encoded limit".into()); }
     let le = |offset, count| read(bytes, offset, count, false);
     let be = |offset, count| read(bytes, offset, count, true);
@@ -320,31 +363,8 @@ pub fn inspect(format: Format, bytes: &[u8]) -> Result<(u32, u32), String> {
             (w as u32,h.unsigned_abs())
         },
         Format::WebP => {
-            if bytes.get(0..4)!=Some(b"RIFF") || bytes.get(8..12)!=Some(b"WEBP") || u64::from(le(4,4)?)+8!=bytes.len() as u64 { return Err("Invalid WebP header".into()); }
-            let mut offset=12; let mut size=None; let mut seen_frame=false;
-            while offset<bytes.len() {
-                let kind=bytes.get(offset..offset+4).ok_or("Truncated WebP chunk")?;
-                let length=le(offset+4,4)? as usize; let data=offset+8;
-                let end=data.checked_add(length).and_then(|v| v.checked_add(length%2)).filter(|v| *v<=bytes.len()).ok_or("Truncated WebP chunk")?;
-                if kind==b"ANIM" || kind==b"ANMF" { return Err("Animated WebP is not an admitted static texture".into()); }
-                if kind==b"VP8X" {
-                    if offset!=12 || size.is_some() || length!=10 || read(bytes,data,1,false)?&2!=0 { return Err("Unsupported WebP extended layout".into()); }
-                    size=Some((le(data+4,3)?+1,le(data+7,3)?+1));
-                } else if kind==b"VP8 " {
-                    if length<10 || bytes.get(data+3..data+6)!=Some(&[0x9d,0x01,0x2a]) { return Err("Invalid WebP frame".into()); }
-                    if seen_frame { return Err("Multiple WebP frames are unavailable".into()); } seen_frame=true;
-                    let frame=dimensions(le(data+6,2)?&0x3fff,le(data+8,2)?&0x3fff)?;
-                    if size.is_some_and(|size| size!=frame) { return Err("WebP canvas/frame dimensions differ".into()); } size=Some(frame);
-                } else if kind==b"VP8L" {
-                    if length<5 || read(bytes,data,1,false)?!=0x2f { return Err("Invalid lossless WebP frame".into()); }
-                    if seen_frame { return Err("Multiple WebP frames are unavailable".into()); } seen_frame=true;
-                    let packed=le(data+1,4)?; let frame=dimensions((packed&0x3fff)+1,((packed>>14)&0x3fff)+1)?;
-                    if size.is_some_and(|size| size!=frame) { return Err("WebP canvas/frame dimensions differ".into()); } size=Some(frame);
-                }
-                offset=end;
-            }
-            if !seen_frame { return Err("WebP contains no image frame".into()); }
-            size.ok_or("WebP dimensions unavailable")?
+            let inspection = inspect_webp(bytes)?;
+            (inspection.width, inspection.height)
         },
         Format::Dds => {
             if bytes.len()<128 || !bytes.starts_with(b"DDS ") || le(4,4)?!=124 || le(76,4)?!=32 || le(24,4)?>1 || le(28,4)?>13 || le(112,4)?!=0 { return Err("Unsupported DDS header/cube/volume".into()); }
@@ -399,6 +419,7 @@ impl ImageSource {
         let frames = match self.format {
             Format::Gif => inspect_gif(&self.bytes)?.frames,
             Format::Png => inspect_png(&self.bytes)?.2.map_or(1, |animation| animation.frames),
+            Format::WebP => inspect_webp(&self.bytes)?.frames,
             _ => 1,
         };
         u64::from(width).checked_mul(u64::from(height)).and_then(|pixels| pixels.checked_mul(frames as u64))
@@ -408,6 +429,68 @@ impl ImageSource {
     pub fn has_animated_png(&self) -> Result<bool, String> {
         if self.format != Format::Png { return Ok(false); }
         Ok(inspect_png(&self.bytes)?.2.is_some())
+    }
+
+    pub fn has_animated_webp(&self) -> Result<bool, String> {
+        if self.format != Format::WebP { return Ok(false); }
+        Ok(inspect_webp(&self.bytes)?.animated)
+    }
+
+    pub fn decode_webp_animation(&self) -> Result<RgbaAnimation, String> {
+        if self.format != Format::WebP { return Err("Texture is not a WebP image".into()); }
+        let inspection = inspect_webp(&self.bytes)?;
+        let mut decoder = image_webp::WebPDecoder::new(Cursor::new(&self.bytes))
+            .map_err(|error| format!("WebP decode failed: {error}"))?;
+        decoder.set_memory_limit(64 * 1024 * 1024);
+        if decoder.dimensions() != (inspection.width, inspection.height)
+            || decoder.is_animated() != inspection.animated
+            || (inspection.animated && decoder.num_frames() as usize != inspection.frames) {
+            return Err("WebP decoder metadata disagrees with bounded inspection".into());
+        }
+        let output_capacity = decoder.output_buffer_size().ok_or("WebP frame byte count overflow")?;
+        if output_capacity > 32 * 1024 * 1024 {
+            return Err("WebP decoded frame exceeds the 32 MiB frame budget".into());
+        }
+        let has_alpha = decoder.has_alpha();
+        let bytes_per_pixel = if has_alpha { 4usize } else { 3usize };
+        let expected_capacity = usize::try_from(
+            u64::from(inspection.width) * u64::from(inspection.height) * bytes_per_pixel as u64,
+        ).map_err(|_| "WebP frame byte count overflow")?;
+        if output_capacity != expected_capacity {
+            return Err("WebP decoder returned an inconsistent frame size".into());
+        }
+        let mut decoded = vec![0u8; output_capacity];
+        let mut frames = Vec::with_capacity(inspection.frames);
+        let mut delays_seconds = Vec::with_capacity(inspection.frames);
+        for _ in 0..inspection.frames {
+            let delay = if inspection.animated {
+                decoder.read_frame(&mut decoded)
+                    .map_err(|error| format!("WebP frame decode failed: {error}"))? as f64 / 1000.0
+            } else {
+                decoder.read_image(&mut decoded)
+                    .map_err(|error| format!("WebP image decode failed: {error}"))?;
+                0.1
+            };
+            let mut rgba = Vec::with_capacity(
+                (u64::from(inspection.width) * u64::from(inspection.height) * 4) as usize,
+            );
+            if has_alpha {
+                rgba.extend_from_slice(&decoded);
+            } else {
+                for pixel in decoded.chunks_exact(3) {
+                    rgba.extend_from_slice(&[pixel[0], pixel[1], pixel[2], 255]);
+                }
+            }
+            frames.push(RgbaImage { width: inspection.width, height: inspection.height, pixels: rgba });
+            delays_seconds.push(delay.max(0.01));
+        }
+        Ok(RgbaAnimation {
+            width: inspection.width,
+            height: inspection.height,
+            frames,
+            delays_seconds,
+            repeat_count: inspection.repeat_count,
+        })
     }
 
     pub fn decode_png_animation(&self) -> Result<RgbaAnimation, String> {
