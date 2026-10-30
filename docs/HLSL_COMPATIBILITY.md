@@ -87,10 +87,12 @@ normalized to the aspect-corrected screen corner and `ang` wraps to `[0, 2pi)`.
 Shaders using these names bypass the older scalar-expression path.
 
 Blur levels normalize their encoded range and `GetBlur1..3` decode the same
-range in both hosts. Nested/reversed ranges are made finite and nondegenerate;
+range in both hosts. The blur filter now uses MilkDrop's paired-tap horizontal
+and vertical weights, source-texel offsets, nested range transforms and first-
+level edge darkening. Nested/reversed ranges are made finite and nondegenerate;
 this deliberately avoids the divide-by-zero typo in historical min/max repair.
-The current Gaussian kernel and generated noise still require reference-image
-comparisons. These changes supply missing environment behavior, not evidence
+Pixel comparison remains open, and generated noise is still an independent
+implementation requiring reference-image comparison. These changes supply missing environment behavior, not evidence
 that every legacy shader is visually conformant. New regression sources are
 unrun under the source-only instruction.
 
