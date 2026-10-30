@@ -229,7 +229,7 @@ fn lower_modern_resource_syntax(tokens: &mut Vec<String>) -> Result<(), String> 
                     return Err("Unsupported HLSL texture element type".into());
                 }
                 width = texture_element_width(&tokens[after_type + 1..end])?;
-                generic_range = Some(after_type..=end);
+                generic_range = Some(after_type..end + 1);
                 generic_end = Some(end);
             }
             let name_index = generic_end.map_or(after_type, |end| end + 1);
