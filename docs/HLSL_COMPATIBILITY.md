@@ -339,10 +339,11 @@ use `<object>_<field>_<index>`.
 Global resource-only struct instances also accept direct brace aggregates that alias
 global resources only when their original texture dimensions and scalar/vector
 component widths match, before sampler-state specialization.
-`TextureCube`, `Texture*Array`, multisample resources, arrays inside function
-scopes or nested resource-bearing structs, resource-bearing struct parameters
+`TextureCube`, `Texture*Array`, multisample resources, resource arrays inside
+function scopes, nested aggregate initializers, resource-bearing struct parameters
 with local or dynamic arguments, and dynamic comparison-state propagation remain
-outside the profile. Direct resource-bearing struct parameters specialize only
+outside the profile. Nested global resource arrays are supported through plain
+struct paths when the containing instance is global. Direct resource-bearing struct parameters specialize only
 against an unambiguous global struct instance. A resource-only global struct may
 use a direct aggregate initializer with one global resource per field whose original texture dimension and
 scalar/vector component width both match. Numeric or mixed resource/numeric aggregates, computed values, member
@@ -415,8 +416,7 @@ legacy sampler arrays dispatch when used as the first argument of a supported
 `tex*` intrinsic. Out-of-range dynamic indices yield zero. The expansion
 budget is 512 KiB. Resource-only global struct instances also accept direct
 brace aggregates with one type-compatible global resource per field. Mixed
-numeric/resource aggregates, computed or local bindings, arrays in function
-scopes or nested resource-bearing structs, resource-bearing struct parameters,
+numeric/resource aggregates, computed or local bindings, arrays in function scopes, resource-bearing struct parameters,
 non-2D/3D texture kinds, anisotropic filtering, border addressing and dynamic
 sampler-state expressions remain unsupported. Direct
 `Texture2D`/`Texture3D` float/half scalar and vector declarations and
@@ -496,7 +496,7 @@ ordinary/resource overload sets and overloads that change opaque types/positions
 still fail explicitly. Recursive helpers, output/array/default opaque parameters,
 local/dynamic opaque arguments, resource-bearing struct arguments that are not
 global instances, and substitutions that capture existing body or value-parameter
-names fail explicitly. Nested scalar texture-resource fields now flatten through plain struct members when they resolve to an unambiguous global struct instance, including helper parameters specialized to that instance. Nested resource arrays, nested aggregate initializers, nested sampler-state propagation, state assignment/arithmetic and dynamically selected state still require a separate binding model. This is a bounded pixel-shader profile, not every HLSL
+names fail explicitly. Scalar texture-resource fields and bounded resource arrays now flatten through plain struct members when they resolve to an unambiguous global struct instance, including helper parameters specialized to that instance. Literal and side-effect-free dynamic nested-array indices dispatch over named global elements. Function-local arrays, nested aggregate initializers, nested sampler-state propagation, state assignment/arithmetic and dynamically selected state still require a separate binding model. This is a bounded pixel-shader profile, not every HLSL
 resource feature.
 
 Native regression sources cover binding reflection, nested forwarding, legacy
@@ -561,3 +561,8 @@ claim; no build, compiler test, render, or device check was run for this update.
 ## 2026-10-30 nested scalar texture fields
 
 Texture1D/2D/3D fields can now be nested through plain structs. Dotted access is flattened to one reflected global binding, with the leaf's original texture dimension and element width retained for typed method lowering. Helper parameters specialize through a global instance. Nested resource arrays and nested aggregate initializers remain outside the profile; local or dynamic resource-bearing struct arguments still fail closed. Native regression cases were added for direct use, helper use, binding reflection and rejected initializers. No compiler or GPU execution was performed.
+
+
+## 2026-10-30 nested global resource arrays
+
+Bounded Texture1D/2D/3D and legacy sampler arrays declared in struct fields can now be selected through nested plain-struct paths when the containing object is global. Literal indices resolve directly; side-effect-free dynamic indices expand across separately named global bindings under the existing size and generated-source budgets. Local resource arrays and nested aggregate initializers remain unsupported. Regression sources cover static and dynamic nested Texture2D selection; no compiler, browser or GPU execution was performed.

@@ -959,7 +959,21 @@ fn lower_modern_resource_syntax(tokens: &mut Vec<String>) -> Result<(), String> 
         .map(|range| (range, Vec::new())).chain(resource_array_edits).collect();
     edits.sort_by_key(|(range, _)| std::cmp::Reverse(range.start));
     for (range, replacement) in edits { tokens.splice(range, replacement); }
-    let (_, initialized_field_bindings, resource_instances) = resource_struct_fields(tokens)?;
+    let (resource_fields_before_arrays, initialized_field_bindings, resource_instances) = resource_struct_fields(tokens)?;
+    for field in &resource_fields_before_arrays {
+        let Some((owner, element_name)) = field.resource_key.rsplit_once('.') else { continue; };
+        let Some((array_name, element_text)) = element_name.rsplit_once('_') else { continue; };
+        let Some(element) = element_text.parse::<usize>().ok() else { continue; };
+        let resource_array_name = format!("{owner}.{array_name}");
+        let Some(size) = resource_arrays.get(&resource_array_name).copied().filter(|size| element < *size) else { continue; };
+        let suffix = format!("_{element}");
+        let Some(array_field_path) = field.field.strip_suffix(&suffix) else { continue; };
+        let array_field_key = format!("{}.{}", field.structure, array_field_path);
+        resource_arrays.entry(array_field_key).or_insert(size);
+        if let Some(shape) = resource_shapes.get(&field.resource_key).copied().flatten() {
+            resource_shapes.insert(format!("{}.{}", field.structure, field.field), Some(shape));
+        }
+    }
     for (field_path, binding_name) in &initialized_field_bindings {
         let Some((object, field)) = field_path.split_once('.') else { continue; };
         let Some(structure) = resource_instances.get(object) else { continue; };
@@ -978,14 +992,22 @@ fn lower_modern_resource_syntax(tokens: &mut Vec<String>) -> Result<(), String> 
     let mut index = 0;
     let mut expanded_resource_array_bytes = 0usize;
     while index < tokens.len() {
-        let scoped = if tokens.get(index + 1).map(String::as_str) == Some(".")
-            && tokens.get(index + 3).map(String::as_str) == Some("[") {
-            resource_instances.get(&tokens[index]).map(|structure| format!("{structure}.{}", tokens[index + 2]))
-                .filter(|name| resource_arrays.contains_key(name))
-        } else { None };
-        let (array_name, bracket_index, replacement_start, scoped_structure) = if let Some(name) = scoped {
-            let structure = resource_instances.get(&tokens[index]).cloned();
-            (name, index + 3, index + 2, structure)
+        let scoped = resource_instances.get(&tokens[index]).and_then(|structure| {
+            let mut bracket = index + 1;
+            while tokens.get(bracket).map(String::as_str) == Some(".")
+                && tokens.get(bracket + 1).is_some_and(|name| is_identifier(name)) {
+                bracket += 2;
+            }
+            if tokens.get(bracket).map(String::as_str) != Some("[") { return None; }
+            let path = dotted_member_path(tokens, index, bracket)?;
+            let array_name = format!("{structure}.{path}");
+            if !resource_arrays.contains_key(&array_name) { return None; }
+            let parent = path.rsplit_once('.').map(|(parent, _)| parent);
+            let scoped_prefix = parent.map_or_else(|| structure.clone(), |parent| format!("{structure}.{parent}"));
+            Some((array_name, bracket, bracket - 1, Some(scoped_prefix)))
+        });
+        let (array_name, bracket_index, replacement_start, scoped_structure) = if let Some(scoped) = scoped {
+            scoped
         } else if resource_arrays.contains_key(&tokens[index])
             && tokens.get(index + 1).map(String::as_str) == Some("[") {
             (tokens[index].clone(), index + 1, index, None)
@@ -2618,6 +2640,32 @@ mod tests {
             shader_body { ret=primary.inner.image.Load(int3(0, 0, 0)).rgb; }
         "#;
         assert!(sampler_names(initialized).is_err(), "nested aggregate resource initializers must fail closed");
+    }
+
+    #[test]
+    fn nested_global_texture_arrays_dispatch_by_dotted_struct_path() {
+        let static_element = r#"
+            struct ImageSurface { Texture2D<float4> images[2]; };
+            struct Surface { ImageSurface inner; };
+            Surface primary;
+            SamplerState linear { Filter=MIN_MAG_MIP_LINEAR; AddressU=Clamp; };
+            shader_body { ret=primary.inner.images[1].Sample(linear, uv).rgb; }
+        "#;
+        let static_names = sampler_names(static_element).unwrap();
+        assert!(static_names.iter().any(|name| name.contains("primary_inner_images_1")), "{static_names:?}");
+        compile(static_element, false).expect("literal nested texture-array access should bind its selected element");
+
+        let dynamic = r#"
+            struct ImageSurface { Texture2D<float4> images[2]; };
+            struct Surface { ImageSurface inner; };
+            Surface primary;
+            SamplerState linear { Filter=MIN_MAG_MIP_LINEAR; AddressU=Clamp; };
+            shader_body { int selected = 0; ret=primary.inner.images[selected].Sample(linear, uv).rgb; }
+        "#;
+        let dynamic_names = sampler_names(dynamic).unwrap();
+        assert!(dynamic_names.iter().any(|name| name.contains("primary_inner_images_0")), "{dynamic_names:?}");
+        assert!(dynamic_names.iter().any(|name| name.contains("primary_inner_images_1")), "{dynamic_names:?}");
+        compile(dynamic, false).expect("side-effect-free nested texture-array access should dispatch by layer");
     }
 
     #[test]

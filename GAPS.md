@@ -203,8 +203,7 @@ render frames, resolve external texture packs, or establish fidelity.
   when accessed through an unambiguous global struct instance, including
   resource-bearing helper parameters specialized to that instance. The compiler
   still rejects texture types outside those three dimensions, integer/non-color
-  texture element types, resource arrays in function scopes or nested
-  resource-bearing structs, nested resource-struct aggregate initializers,
+  texture element types, resource arrays in function scopes, nested resource-struct aggregate initializers,
   aggregate resource-struct initializers outside the bounded global alias form,
   and resource-bearing struct parameters with local/dynamic arguments. Comparison methods outside the bounded Texture2D
   `GatherCmp`/`GatherCmpRed`/`GatherCmpGreen`/`GatherCmpBlue`/`GatherCmpAlpha` and Texture1D/Texture2D
@@ -573,4 +572,4 @@ remains a historical snapshot until the full private-runner report is regenerate
 
 ## 2026-10-30 nested resource-struct source support
 
-The typed compiler now flattens scalar Texture1D/Texture2D/Texture3D resource fields through plain nested structs, records the original leaf shape, and lowers dotted access through an unambiguous global struct instance. Resource-bearing helper parameters specialize through the same global binding. Native regression sources cover direct nested access, helper specialization, binding reflection and rejection of nested aggregate initializers. Nested resource arrays, nested sampler-state forwarding, local/dynamic struct arguments and nested aggregate initializers remain explicit failures. Compiler and render execution have not been run.
+The typed compiler now flattens scalar Texture1D/Texture2D/Texture3D resource fields through plain nested structs, records the original leaf shape, and lowers dotted access through an unambiguous global struct instance. Resource-bearing helper parameters specialize through the same global binding. Global resource arrays nested through plain structs now support literal and side-effect-free dynamic indices, with each layer bound through its flattened global field path. Native regression sources cover direct nested access, helper specialization, literal/dynamic array selection, binding reflection and rejection of nested aggregate initializers. Function-local resource arrays, nested sampler-state forwarding, local/dynamic struct arguments and nested aggregate initializers remain explicit failures. Compiler and render execution have not been run.
