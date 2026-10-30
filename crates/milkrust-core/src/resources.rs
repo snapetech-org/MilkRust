@@ -158,19 +158,119 @@ pub fn sampler_parameters(index: usize) -> Option<SamplerSettings> {
     settings_from_filter_code(index / ADDRESS_VARIANTS, std::array::from_fn(mode))
 }
 
-pub fn noise_texture(seed: u32, volume: bool) -> (u32, u32, u32, Vec<u8>) {
-    let side = if volume { 32 } else if seed == 4 { 32 } else { 256 };
-    let depth = if volume { side } else { 1 };
-    let mut bytes = vec![0u8; (side * side * depth * 4) as usize];
-    let mut state = seed.wrapping_mul(0x9e37_79b9).max(1);
-    for pixel in bytes.chunks_exact_mut(4) {
-        for channel in &mut pixel[..3] {
-            state ^= state << 13; state ^= state >> 17; state ^= state << 5;
-            *channel = (state >> 24) as u8;
-        }
-        pixel[3] = 255;
+fn noise_texel_offset(width: u32, height: u32, x: u32, y: u32, z: u32) -> usize {
+    (((z * height + y) * width + x) * 4) as usize
+}
+
+fn noise_random_texel(state: &mut u32, smooth: bool) -> [u8; 4] {
+    let range = if smooth { 216 } else { 256 };
+    let bias = range / 2;
+    let mut packed = 0u32;
+    for shift in [24, 16, 8, 0] {
+        *state ^= *state << 13;
+        *state ^= *state >> 17;
+        *state ^= *state << 5;
+        let value = (*state % range) + bias;
+        // Match the reference's packed D3DCOLOR construction, including its
+        // byte overflow for smoothed seeds, while keeping the seed reproducible.
+        packed |= value.wrapping_shl(shift);
     }
-    (side, side, depth, bytes)
+    packed.to_le_bytes()
+}
+
+fn interpolate_noise_texel(bytes: &mut [u8], destination: usize, samples: [usize; 4], t: f32) {
+    for channel in 0..4 {
+        let y0 = bytes[samples[0] + channel] as f32 / 255.0;
+        let y1 = bytes[samples[1] + channel] as f32 / 255.0;
+        let y2 = bytes[samples[2] + channel] as f32 / 255.0;
+        let y3 = bytes[samples[3] + channel] as f32 / 255.0;
+        let t2 = t * t;
+        let a0 = y3 - y2 - y0 + y1;
+        let a1 = y0 - y1 - a0;
+        let a2 = y2 - y0;
+        let value = (a0 * t * t2 + a1 * t2 + a2 * t + y1).clamp(0.0, 1.0);
+        // The legacy implementation truncates after scaling to 8-bit color.
+        bytes[destination + channel] = (value * 255.0) as u8;
+    }
+}
+
+pub fn noise_texture(seed: u32, volume: bool) -> (u32, u32, u32, Vec<u8>) {
+    let width = if volume || seed != 4 { 256 } else { 32 };
+    let height = width;
+    let depth = if volume { 32 } else { 1 };
+    let zoom = match (volume, seed) {
+        (true, 6) => 4,
+        (false, 2) => 4,
+        (false, 3) => 8,
+        _ => 1,
+    };
+    let mut bytes = vec![0u8; (width * height * depth * 4) as usize];
+    let mut state = seed.wrapping_mul(0x9e37_79b9).max(1);
+
+    for z in 0..depth {
+        for y in 0..height {
+            for x in 0..width {
+                let offset = noise_texel_offset(width, height, x, y, z);
+                bytes[offset..offset + 4].copy_from_slice(&noise_random_texel(&mut state, zoom > 1));
+            }
+        }
+    }
+
+    if zoom > 1 {
+        // Expand the low-frequency lattice in X, then Y, then Z. This is the
+        // same separable cubic interpolation order used by AddNoiseTex/Vol.
+        for z in (0..depth).step_by(zoom as usize) {
+            for y in (0..height).step_by(zoom as usize) {
+                for x in 0..width {
+                    if x % zoom == 0 { continue; }
+                    let base = (x / zoom) * zoom;
+                    let xs = [
+                        (base + width - zoom) % width, base,
+                        (base + zoom) % width, (base + 2 * zoom) % width,
+                    ];
+                    let samples = xs.map(|sx| noise_texel_offset(width, height, sx, y, z));
+                    let destination = noise_texel_offset(width, height, x, y, z);
+                    interpolate_noise_texel(&mut bytes, destination, samples, (x % zoom) as f32 / zoom as f32);
+                }
+            }
+        }
+
+        for z in (0..depth).step_by(zoom as usize) {
+            for x in 0..width {
+                for y in 0..height {
+                    if y % zoom == 0 { continue; }
+                    let base = (y / zoom) * zoom;
+                    let ys = [
+                        (base + height - zoom) % height, base,
+                        (base + zoom) % height, (base + 2 * zoom) % height,
+                    ];
+                    let samples = ys.map(|sy| noise_texel_offset(width, height, x, sy, z));
+                    let destination = noise_texel_offset(width, height, x, y, z);
+                    interpolate_noise_texel(&mut bytes, destination, samples, (y % zoom) as f32 / zoom as f32);
+                }
+            }
+        }
+
+        if volume {
+            for y in 0..height {
+                for x in 0..width {
+                    for z in 0..depth {
+                        if z % zoom == 0 { continue; }
+                        let base = (z / zoom) * zoom;
+                        let zs = [
+                            (base + depth - zoom) % depth, base,
+                            (base + zoom) % depth, (base + 2 * zoom) % depth,
+                        ];
+                        let samples = zs.map(|sz| noise_texel_offset(width, height, x, y, sz));
+                        let destination = noise_texel_offset(width, height, x, y, z);
+                        interpolate_noise_texel(&mut bytes, destination, samples, (z % zoom) as f32 / zoom as f32);
+                    }
+                }
+            }
+        }
+    }
+
+    (width, height, depth, bytes)
 }
 
 pub const BLUR_FRAGMENT: &str = "#version 300 es\nprecision highp float; uniform sampler2D previousFrame; uniform vec2 blurStep; uniform vec2 sourceTexel; uniform vec2 blurTransform; uniform vec4 blurWeights; uniform vec4 blurOffsets; uniform float blurWeightScale; uniform vec4 blurEdge; uniform float blurHorizontal; in vec2 uv; out vec4 outColor; void main(){bool horizontal=blurHorizontal>0.5;vec2 base=uv+sourceTexel*(horizontal?vec2(1.0,1.0):vec2(1.0,0.0));vec3 c;if(horizontal){c=((texture(previousFrame,base+blurStep*blurOffsets.x).rgb+texture(previousFrame,base-blurStep*blurOffsets.x).rgb)*blurWeights.x)+((texture(previousFrame,base+blurStep*blurOffsets.y).rgb+texture(previousFrame,base-blurStep*blurOffsets.y).rgb)*blurWeights.y)+((texture(previousFrame,base+blurStep*blurOffsets.z).rgb+texture(previousFrame,base-blurStep*blurOffsets.z).rgb)*blurWeights.z)+((texture(previousFrame,base+blurStep*blurOffsets.w).rgb+texture(previousFrame,base-blurStep*blurOffsets.w).rgb)*blurWeights.w);c*=blurWeightScale;c=c*blurTransform.x+blurTransform.y;}else{c=((texture(previousFrame,base+blurStep*blurOffsets.x).rgb+texture(previousFrame,base-blurStep*blurOffsets.x).rgb)*blurWeights.x)+((texture(previousFrame,base+blurStep*blurOffsets.y).rgb+texture(previousFrame,base-blurStep*blurOffsets.y).rgb)*blurWeights.y);c*=blurWeightScale;float edge=min(min(uv.x,uv.y),1.0-max(uv.x,uv.y));edge=sqrt(max(edge,0.0));edge=blurEdge.x+blurEdge.y*clamp(edge*blurEdge.z,0.0,1.0);c*=edge;}outColor=vec4(c,1.0); }";
