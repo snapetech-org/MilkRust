@@ -311,8 +311,9 @@ float milkrust_transition_mask(vec2 uv) {
 "#;
 
 pub fn has_wrapper(source: &str) -> bool {
-    source.lines().any(|line| {
-        let line = line.trim();
+    source.lines().enumerate().any(|(index, raw_line)| {
+        let line = raw_line.trim();
+        let line = if index == 0 { line.trim_start_matches('\u{feff}') } else { line };
         line.eq_ignore_ascii_case("[PRESET1_BEGIN]") || line.eq_ignore_ascii_case("[PRESET2_BEGIN]")
             || line.eq_ignore_ascii_case("[PRESET1_END]") || line.eq_ignore_ascii_case("[PRESET2_END]")
     })
