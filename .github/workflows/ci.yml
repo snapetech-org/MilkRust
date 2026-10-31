@@ -28,7 +28,7 @@ jobs:
         os: [linux-x64, macos-arm64]
     runs-on: ${{ matrix.os == 'linux-x64' && fromJSON(format('{{"group":"ng-shared-main-jit","labels":["self-hosted","linux","x64","ng-shared-main-milkrust","ng-main-run-{0}","gha-{0}-{1}-test"]}}', github.run_id, strategy.job-index)) || fromJSON(format('{{"group":"private-apple-builds","labels":["self-hosted","macOS","ARM64","ng-shared-main-milkrust","ng-main-run-{0}","gha-{0}-{1}-test","private-apple"]}}', github.run_id, strategy.job-index)) }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -88,7 +88,7 @@ jobs:
       )
     runs-on: ${{ fromJSON(format('{{"group":"ng-shared-main-jit","labels":["self-hosted","linux","x64","ng-shared-main-milkrust","ng-main-run-{0}","gha-{0}-clippy"]}}', github.run_id)) }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - name: Run clippy
         run: cargo clippy --workspace -- -D warnings
@@ -111,7 +111,7 @@ jobs:
       )
     runs-on: ${{ fromJSON(format('{{"group":"ng-shared-main-jit","labels":["self-hosted","linux","x64","ng-shared-main-milkrust","ng-main-run-{0}","gha-{0}-audit"]}}', github.run_id)) }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - name: Install cargo-audit
         run: cargo install cargo-audit
@@ -138,7 +138,7 @@ jobs:
       )
     runs-on: ${{ fromJSON(format('{{"group":"ng-shared-main-jit","labels":["self-hosted","linux","x64","ng-shared-main-milkrust","ng-main-run-{0}","gha-{0}-wasm-size"]}}', github.run_id)) }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
@@ -178,7 +178,7 @@ jobs:
       )
     runs-on: ${{ fromJSON(format('{{"group":"ng-shared-main-jit","labels":["self-hosted","linux","x64","ng-shared-main-milkrust","ng-main-run-{0}","gha-{0}-coverage"]}}', github.run_id)) }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - name: Install cargo-llvm-cov
         run: cargo install cargo-llvm-cov
@@ -209,7 +209,7 @@ jobs:
       )
     runs-on: ${{ fromJSON(format('{{"group":"ng-shared-main-jit","labels":["self-hosted","linux","x64","ng-shared-main-milkrust","ng-main-run-{0}","gha-{0}-performance"]}}', github.run_id)) }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - name: Run Rust benchmark
         run: cargo bench --workspace -- --noplot 2>&1 | tail -20 || echo "No benchmarks configured"
@@ -249,7 +249,7 @@ jobs:
       )
     runs-on: ${{ fromJSON(format('{{"group":"packer-windows","labels":["self-hosted","Windows","X64","packer-windows","ng-shared-main-milkrust","ng-main-run-{0}","gha-{0}-windows-on-demand"]}}', github.run_id)) }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - uses: dtolnay/rust-toolchain@stable
         with:
