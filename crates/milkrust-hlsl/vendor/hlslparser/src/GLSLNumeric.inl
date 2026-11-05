@@ -196,7 +196,7 @@ bool GLSLGenerator::OutputMatrixSelection(HLSLExpression* expression, HLSLExpres
                 if (r != rows - 1) component += ":";
                 component += "i==" + std::to_string(r) + "?m.r" + std::to_string(r) + "[" + std::to_string(item.second) + "]";
             }
-            component += ":" + GetTypeName(HLSLType(ScalarBaseType[matrixHlslType.baseType])) + "(0))";
+            component += ":" + std::string(GetTypeName(HLSLType(ScalarBaseType[matrixHlslType.baseType]))) + "(0))";
             target = "dynamic-row:" + std::to_string(item.second);
         } else if (columns == 1) {
             component = "m[i]";
@@ -375,14 +375,14 @@ void GLSLGenerator::OutputConversion(HLSLExpression* expression, const HLSLType&
                 body += rowType + "(";
                 for (int c = 0; c < columns; ++c) {
                     if (c) body += ",";
-                    body += GetTypeName(HLSLType(scalar)) + "(s)";
+                    body += std::string(GetTypeName(HLSLType(scalar))) + "(s)";
                 }
                 body += ")";
             }
         } else {
             for (int i = 0; i < rows * columns; ++i) {
                 if (i) body += ",";
-                body += GetTypeName(HLSLType(scalar)) + "(s)";
+                body += std::string(GetTypeName(HLSLType(scalar))) + "(s)";
             }
         }
         body += ");";
@@ -418,7 +418,7 @@ void GLSLGenerator::OutputConversion(HLSLExpression* expression, const HLSLType&
                     if (c) body += ",";
                     const int linear = r * targetColumns + c;
                     const std::string value = MatrixComponent(sourceType, "m", linear / sourceColumns, linear % sourceColumns);
-                    body += GetTypeName(HLSLType(targetScalarType)) + "(" + value + ")";
+                    body += std::string(GetTypeName(HLSLType(targetScalarType))) + "(" + value + ")";
                 }
                 body += ")";
             }
@@ -429,7 +429,7 @@ void GLSLGenerator::OutputConversion(HLSLExpression* expression, const HLSLType&
                 if (c || r) body += ",";
                 const int linear = r * targetColumns + c;
                 const std::string value = MatrixComponent(sourceType, "m", linear / sourceColumns, linear % sourceColumns);
-                body += GetTypeName(HLSLType(targetScalarType)) + "(" + value + ")";
+                body += std::string(GetTypeName(HLSLType(targetScalarType))) + "(" + value + ")";
             }
             body += ");";
         } else if (targetMatrix) {
@@ -437,11 +437,11 @@ void GLSLGenerator::OutputConversion(HLSLExpression* expression, const HLSLType&
             for (int i = 0; i < targetRows * targetColumns; ++i) {
                 if (i) body += ",";
                 const std::string value = MatrixComponent(sourceType, "m", i / sourceColumns, i % sourceColumns);
-                body += GetTypeName(HLSLType(targetScalarType)) + "(" + value + ")";
+                body += std::string(GetTypeName(HLSLType(targetScalarType))) + "(" + value + ")";
             }
             body += ");";
         } else if (targetScalar) {
-            body = "return " + targetName + "(" + GetTypeName(HLSLType(targetScalarType)) + "(" +
+            body = "return " + targetName + "(" + std::string(GetTypeName(HLSLType(targetScalarType))) + "(" +
                 MatrixComponent(sourceType, "m", 0, 0) + "));";
         } else {
             body = "return " + targetName + "(";
@@ -449,7 +449,7 @@ void GLSLGenerator::OutputConversion(HLSLExpression* expression, const HLSLType&
                 if (c) body += ",";
                 const int linear = c;
                 const std::string value = MatrixComponent(sourceType, "m", linear / sourceColumns, linear % sourceColumns);
-                body += GetTypeName(HLSLType(targetScalarType)) + "(" + value + ")";
+                body += std::string(GetTypeName(HLSLType(targetScalarType))) + "(" + value + ")";
             }
             body += ");";
         }
@@ -492,13 +492,13 @@ void GLSLGenerator::OutputMatrixConstructor(HLSLConstructorExpression* expressio
         for (int r = 0; r < rows; ++r) {
             if (r) body += ",";
             body += rowType + "(";
-            for (int c = 0; c < width; ++c) { if (c) body += ","; body += GetTypeName(HLSLType(scalar)) + "(" + values[r * width + c] + ")"; }
+            for (int c = 0; c < width; ++c) { if (c) body += ","; body += std::string(GetTypeName(HLSLType(scalar))) + "(" + values[r * width + c] + ")"; }
             body += ")";
         }
     } else {
         for (int c = 0; c < width; ++c) for (int r = 0; r < rows; ++r) {
             if (c || r) body += ",";
-            body += GetTypeName(HLSLType(scalar)) + "(" + values[r * width + c] + ")";
+            body += std::string(GetTypeName(HLSLType(scalar))) + "(" + values[r * width + c] + ")";
         }
     }
     body += ");";

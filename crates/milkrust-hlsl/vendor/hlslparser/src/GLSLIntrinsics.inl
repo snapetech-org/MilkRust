@@ -168,7 +168,7 @@ bool GLSLGenerator::OutputLegacyIntrinsic(HLSLFunctionCall* expression) {
             if (customResult) {
                 for (int r = 0; r < outRows; ++r) {
                     if (r) body += ";";
-                    body += "result.r" + std::to_string(r) + "=" + GetTypeName(HLSLType(NumericShape(ScalarBaseType[expression->expressionType.baseType], 0, outColumns))) + "(";
+                    body += "result.r" + std::to_string(r) + "=" + std::string(GetTypeName(HLSLType(NumericShape(ScalarBaseType[expression->expressionType.baseType], 0, outColumns)))) + "(";
                     for (int c = 0; c < outColumns; ++c) { if (c) body += ","; body += valueAt(r, c); }
                     body += ")";
                 }
@@ -195,7 +195,7 @@ bool GLSLGenerator::OutputLegacyIntrinsic(HLSLFunctionCall* expression) {
             const int rightColumns = rightMatrix ? columns(right) : 1;
             const bool customResult = IsCustomMatrixType(expression->expressionType.baseType);
             const int outRows = leftRows, outColumns = rightColumns;
-            const std::string zero = GetTypeName(HLSLType(ScalarBaseType[expression->expressionType.baseType])) + "(0)";
+            const std::string zero = std::string(GetTypeName(HLSLType(ScalarBaseType[expression->expressionType.baseType]))) + "(0)";
             auto sum = [&](int r, int c) {
                 std::string value = "(";
                 for (int k = 0; k < leftColumns; ++k) {
@@ -209,7 +209,7 @@ bool GLSLGenerator::OutputLegacyIntrinsic(HLSLFunctionCall* expression) {
             else body = "return " + resultType + "(";
             if (customResult) {
                 for (int r = 0; r < outRows; ++r) {
-                    body += "result.r" + std::to_string(r) + "=" + GetTypeName(HLSLType(NumericShape(ScalarBaseType[expression->expressionType.baseType], 0, outColumns))) + "(";
+                    body += "result.r" + std::to_string(r) + "=" + std::string(GetTypeName(HLSLType(NumericShape(ScalarBaseType[expression->expressionType.baseType], 0, outColumns)))) + "(";
                     for (int c = 0; c < outColumns; ++c) { if (c) body += ","; body += sum(r, c); }
                     body += ");";
                 }
@@ -238,7 +238,7 @@ bool GLSLGenerator::OutputLegacyIntrinsic(HLSLFunctionCall* expression) {
         else body = "return " + resultType + "(";
         if (customResult) {
             for (int r = 0; r < resultRows; ++r) {
-                body += "result.r" + std::to_string(r) + "=" + GetTypeName(HLSLType(NumericShape(ScalarBaseType[expression->expressionType.baseType], 0, resultColumns))) + "(";
+                body += "result.r" + std::to_string(r) + "=" + std::string(GetTypeName(HLSLType(NumericShape(ScalarBaseType[expression->expressionType.baseType], 0, resultColumns)))) + "(";
                 for (int c = 0; c < resultColumns; ++c) { if (c) body += ","; body += MatrixComponent(first->type, "a", c, r); }
                 body += ");";
             }

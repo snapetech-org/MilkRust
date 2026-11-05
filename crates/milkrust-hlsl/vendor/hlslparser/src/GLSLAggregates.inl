@@ -58,7 +58,7 @@ static std::string AggregateValue(HLSLTree& tree, const HLSLType& type,
                 std::string row = rowType + "(";
                 for (int c = 0; c < width; ++c) {
                     if (c) row += ",";
-                    row += GetTypeName(HLSLType(scalar)) + "(" + values[index + size_t(r * width + c)] + ")";
+                    row += std::string(GetTypeName(HLSLType(scalar))) + "(" + values[index + size_t(r * width + c)] + ")";
                 }
                 elements.push_back(row + ")");
             }

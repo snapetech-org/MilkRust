@@ -4,6 +4,7 @@
 #include "HLSLTree.h"
 #include <limits>
 #include <cstdint>
+#include <cstring>
 #include <cmath>
 #include "HLSLNumeric.h"
 #include "HLSLAggregates.h"

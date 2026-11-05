@@ -1035,6 +1035,13 @@ fn lower_modern_resource_syntax(tokens: &mut Vec<String>) -> Result<(), String> 
             return Err("HLSL resource-array indices must be side-effect-free integer expressions".into());
         }
 
+        let receiver_prefix = tokens[index..replacement_start].to_vec();
+        let array_base = tokens[replacement_start].clone();
+        let receiver_name = |element: usize| {
+            let mut receiver = receiver_prefix.clone();
+            receiver.push(format!("{array_base}_{element}"));
+            receiver
+        };
         let first_element = format!("{}_0", tokens[replacement_start]);
         let first_shape = scoped_structure.as_ref().map_or_else(|| first_element.clone(), |structure| format!("{structure}.{first_element}"));
         if resource_shapes.contains_key(&first_shape) {
@@ -1051,13 +1058,6 @@ fn lower_modern_resource_syntax(tokens: &mut Vec<String>) -> Result<(), String> 
             if args.iter().any(Vec::is_empty) {
                 return Err(format!("Empty argument to HLSL texture method {method}"));
             }
-            let receiver_prefix = tokens[index..replacement_start].to_vec();
-            let array_base = tokens[replacement_start].clone();
-            let receiver_name = |element: usize| {
-                let mut receiver = receiver_prefix.clone();
-                receiver.push(format!("{array_base}_{element}"));
-                receiver
-            };
             if method == "GetDimensions" {
                 let dimensions = usize::from(shape.dimension);
                 let has_mip = args.len() == dimensions + 2;

@@ -44,15 +44,15 @@ pub fn animation_frame_index(delays_seconds: &[f64], repeat_count: Option<u32>, 
     if !cycle.is_finite() || cycle <= 0.0 { return 0; }
     let elapsed = seconds.max(0.0);
     let mut elapsed = match repeat_count {
+        Some(0) => elapsed.rem_euclid(cycle),
         // A positive GIF loop count is the number of replays after the first
         // cycle. Re-enter each cycle until those finite replays are exhausted.
-        Some(repeats) if repeats > 0 => {
+        Some(repeats) => {
             if elapsed >= cycle * (f64::from(repeats) + 1.0) {
                 return delays_seconds.len() - 1;
             }
             elapsed.rem_euclid(cycle)
         }
-        Some(0) => elapsed.rem_euclid(cycle),
         None if elapsed >= cycle => return delays_seconds.len() - 1,
         None => elapsed,
     };
@@ -280,7 +280,7 @@ fn inspect_gif(bytes: &[u8]) -> Result<GifInspection, String> {
     Ok(GifInspection { width, height, frames: images, repeat_count })
 }
 
-pub #[derive(Clone, Copy)]
+#[derive(Clone, Copy)]
 struct WebpInspection {
     width: u32,
     height: u32,
@@ -323,7 +323,7 @@ fn inspect_webp(bytes: &[u8]) -> Result<WebpInspection, String> {
     Ok(WebpInspection { width, height, frames, repeat_count, animated })
 }
 
-fn inspect(format: Format, bytes: &[u8]) -> Result<(u32, u32), String> {
+pub fn inspect(format: Format, bytes: &[u8]) -> Result<(u32, u32), String> {
     if bytes.is_empty() || bytes.len() > MAX_ENCODED_BYTES { return Err("Texture exceeds 16 MiB encoded limit".into()); }
     let le = |offset, count| read(bytes, offset, count, false);
     let be = |offset, count| read(bytes, offset, count, true);

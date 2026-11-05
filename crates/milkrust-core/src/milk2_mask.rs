@@ -132,7 +132,7 @@ fn fill_vertices(gx: usize, gy: usize, pattern: Pattern, direction: i32, random:
             let inverse = 1.0 / width;
             let mut values = vec![0.0f32; (gx + 1) * (gy + 1)];
             for index in 0..4 {
-                values[[0, gx, gy * width, gy * width + gx][index]] = random[index + 1];
+                values[[0, gx, gy * (gx + 1), gy * (gx + 1) + gx][index]] = random[index + 1];
             }
             gen_plasma(&mut values, gx, (ax, ay), random,
                 Span { x0: 0, x1: gx, y0: 0, y1: gy }, dt);
